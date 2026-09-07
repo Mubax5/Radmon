@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import threading
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..grafana_bootstrap import GrafanaBootstrap
 from .alarm_page import AlarmPage
 from .chart_page import ChartPage
 from .icons import silk_icon
@@ -50,6 +52,11 @@ class MainWindow(QMainWindow):
         self.base_settings = settings
         self.settings = settings
         self.source = source
+        self._grafana_bootstrap = GrafanaBootstrap(settings)
+        self._grafana_ready_url: str | None = None
+        self._grafana_error: str | None = None
+        self._grafana_thread: threading.Thread | None = None
+        self._monitoring_open_pending = False
         self.setWindowTitle("Radiation Monitoring")
         self.resize(1400, 850)
 
@@ -93,6 +100,7 @@ class MainWindow(QMainWindow):
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_current_page)
         self.refresh_timer.start(2000)
+        self._start_grafana_bootstrap()
         self.refresh_current_page()
 
     def _build_station_sidebar(self) -> QWidget:
@@ -243,8 +251,43 @@ class MainWindow(QMainWindow):
         toolbar.addAction(self.report_action)
         toolbar.addAction(self.print_action)
 
+    def _start_grafana_bootstrap(self) -> None:
+        if self._grafana_thread is not None and self._grafana_thread.is_alive():
+            return
+        self._grafana_error = None
+        self._grafana_thread = threading.Thread(
+            target=self._prepare_grafana,
+            name="radmon-grafana-bootstrap",
+            daemon=True,
+        )
+        self._grafana_thread.start()
+
+    def _prepare_grafana(self) -> None:
+        try:
+            self._grafana_ready_url = self._grafana_bootstrap.ensure()
+            self._grafana_error = None
+        except Exception as exc:
+            self._grafana_ready_url = None
+            self._grafana_error = str(exc)
+
     def open_monitoring(self) -> None:
-        QDesktopServices.openUrl(QUrl(self.settings.grafana_url))
+        if self._grafana_ready_url:
+            QDesktopServices.openUrl(QUrl(self._grafana_ready_url))
+            return
+        self._monitoring_open_pending = True
+        if self._grafana_error:
+            self._start_grafana_bootstrap()
+        self.statusBar().showMessage("Grafana sedang disiapkan dan diverifikasi...")
+
+    def _open_monitoring_if_ready(self) -> None:
+        if not self._monitoring_open_pending:
+            return
+        if self._grafana_ready_url:
+            self._monitoring_open_pending = False
+            QDesktopServices.openUrl(QUrl(self._grafana_ready_url))
+        elif self._grafana_error:
+            self._monitoring_open_pending = False
+            self.statusBar().showMessage(f"Grafana setup error: {self._grafana_error}")
 
     def _print_current_report(self) -> None:
         self.tabs.setCurrentIndex(self.REPORT_TAB_INDEX)
@@ -271,3 +314,4 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"{mode} · {self.settings.station_label} · refresh 2s"
             )
+        self._open_monitoring_if_ready()
