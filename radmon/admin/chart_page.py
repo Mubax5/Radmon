@@ -26,13 +26,7 @@ VISUAL_STATUS = "Status Distribution"
 
 
 def chart_series_from_rows(rows):
-    """Return chart values exactly as stored in measurement.
-
-    `doserate` is the measured rate in µSv/h. `dose` is the approximate dose
-    value already calculated by the acquisition layer for that measurement.
-    The chart must not integrate dose rate again because doing so changes the
-    meaning and scale of the database values shown to operators.
-    """
+    """Return the exact operator values stored in measurement."""
     normalized = []
     for row in rows:
         measured_at = row.get("dtom")
@@ -81,7 +75,7 @@ class ChartPage(QWidget):
 
         self.visual = QComboBox()
         self.visual.addItems([VISUAL_TREND, VISUAL_DISTRIBUTION, VISUAL_STATUS])
-        self.visual.currentTextChanged.connect(self._render_current_view)
+        self.visual.currentTextChanged.connect(self._visual_changed)
 
         apply_range = QPushButton("Apply range")
         apply_range.clicked.connect(self.apply_range)
@@ -213,6 +207,10 @@ class ChartPage(QWidget):
         else:
             self.plot.enableAutoRange()
 
+    def _visual_changed(self, _label: str) -> None:
+        self._render_current_view()
+        self.reset_view()
+
     def refresh_live(self) -> None:
         if self.live.isChecked():
             now = QDateTime.currentDateTime()
@@ -286,8 +284,6 @@ class ChartPage(QWidget):
         self.dose_curve.setData(x, doses)
         self.alert_line.setValue(self.settings.warnlevel)
         self.alarm_line.setValue(self.settings.alarmlevel)
-        self.plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
-        self.dose_view.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
 
     def _render_distribution(self) -> None:
         self._set_trend_items_visible(False)
@@ -310,9 +306,13 @@ class ChartPage(QWidget):
                 index = min(bucket_count - 1, int((rate - low) / width))
                 counts[index] += 1
             centers = [low + (index + 0.5) * width for index in range(bucket_count)]
-        self.bar_item = pg.BarGraphItem(x=centers, height=counts, width=width * 0.9, brush="#607d8b")
+        self.bar_item = pg.BarGraphItem(
+            x=centers,
+            height=counts,
+            width=width * 0.9,
+            brush="#607d8b",
+        )
         self.plot.addItem(self.bar_item)
-        self.plot.enableAutoRange()
 
     def _render_status_distribution(self) -> None:
         self._set_trend_items_visible(False)
@@ -322,12 +322,18 @@ class ChartPage(QWidget):
         alarm = sum(rate >= self.settings.alarmlevel for rate in rates)
         x = [0, 1, 2]
         heights = [normal, alert, alarm]
-        self.bar_item = pg.BarGraphItem(x=x, height=heights, width=0.6, brushes=["#2e7d32", "#f9a825", "#c62828"])
+        self.bar_item = pg.BarGraphItem(
+            x=x,
+            height=heights,
+            width=0.6,
+            brushes=["#2e7d32", "#f9a825", "#c62828"],
+        )
         self.plot.addItem(self.bar_item)
         self.plot.setLabel("left", "Samples")
         self.plot.setLabel("bottom", "Status")
-        self.plot.getAxis("bottom").setTicks([[(0, "NORMAL"), (1, "ALERT"), (2, "ALARM")]])
-        self.plot.enableAutoRange()
+        self.plot.getAxis("bottom").setTicks(
+            [[(0, "NORMAL"), (1, "ALERT"), (2, "ALARM")]]
+        )
 
     def _mouse_moved(self, event) -> None:
         if self.visual.currentText() != VISUAL_TREND or not self.points:
