@@ -37,16 +37,18 @@ class Settings:
     unit: str = "µSv/h"
     sample_interval: float = 2.0
     refresh_interval: float = 2.0
+    dummy_mode: str = "normal"
     sync_enabled: bool = False
     central_url: str = ""
     central_token: str = ""
     sync_batch_size: int = 100
     sync_timeout: float = 10.0
     sync_initial_lookback_hours: int = 24
-    grafana_url: str = "http://localhost:3300/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv"
+    grafana_url: str = "http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv"
     grafana_fallback_port: int = 3300
     grafana_user: str = "admin"
     grafana_password: str = "admin"
+    report_dir: Path = Path("!REPORT!")
     runtime_dir: Path = Path("runtime")
     log_dir: Path = Path("logs")
     single_instance_port: int = 47652
@@ -56,6 +58,9 @@ class Settings:
         if load_dotenv is not None and env_file:
             load_dotenv(env_file, override=False)
         get = os.getenv
+        dummy_mode = get("RADMON_DUMMY_MODE", "normal").strip().lower()
+        if dummy_mode not in {"normal", "alert", "alarm", "mixed"}:
+            raise ValueError("RADMON_DUMMY_MODE harus normal, alert, alarm, atau mixed")
         return cls(
             serial_port=get("RADMON_SERIAL_PORT", "COM15"),
             detectors=get("RADMON_DETECTORS", ""),
@@ -76,6 +81,7 @@ class Settings:
             unit=get("RADMON_UNIT", "µSv/h").replace("μ", "µ").replace("uSv/h", "µSv/h"),
             sample_interval=float(get("RADMON_SAMPLE_INTERVAL", "2")),
             refresh_interval=float(get("RADMON_REFRESH_INTERVAL", "2")),
+            dummy_mode=dummy_mode,
             sync_enabled=_as_bool(get("RADMON_SYNC_ENABLED"), False),
             central_url=get("RADMON_CENTRAL_URL", ""),
             central_token=get("RADMON_CENTRAL_TOKEN", ""),
@@ -84,23 +90,18 @@ class Settings:
             sync_initial_lookback_hours=int(get("RADMON_SYNC_INITIAL_LOOKBACK_HOURS", "24")),
             grafana_url=get(
                 "RADMON_GRAFANA_URL",
-                "http://localhost:3300/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv",
+                "http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv",
             ),
             grafana_fallback_port=int(get("RADMON_GRAFANA_PORT", "3300")),
             grafana_user=get("RADMON_GRAFANA_USER", "admin"),
             grafana_password=get("RADMON_GRAFANA_PASSWORD", "admin"),
+            report_dir=Path(get("RADMON_REPORT_DIR", "!REPORT!")),
             runtime_dir=Path(get("RADMON_RUNTIME_DIR", "runtime")),
             log_dir=Path(get("RADMON_LOG_DIR", "logs")),
             single_instance_port=int(get("RADMON_SINGLE_INSTANCE_PORT", "47652")),
         )
 
     def detector_bindings(self) -> list[tuple[int, str]]:
-        """Return configured detector ID -> serial port bindings.
-
-        `RADMON_DETECTORS` accepts entries separated by semicolons, for example
-        `5201@COM15;5202@COM16`. If it is empty the legacy single detector
-        fields remain the source of truth.
-        """
         raw = self.detectors.strip()
         if not raw:
             return [(self.serid, self.serial_port.strip())]
@@ -110,9 +111,7 @@ class Settings:
         for entry in raw.split(";"):
             item = entry.strip()
             if not item or item.count("@") != 1:
-                raise ValueError(
-                    "RADMON_DETECTORS harus berbentuk SERID@PORT;SERID@PORT"
-                )
+                raise ValueError("RADMON_DETECTORS harus berbentuk SERID@PORT;SERID@PORT")
             serid_text, port = (part.strip() for part in item.split("@", 1))
             if not serid_text.isdigit() or int(serid_text) <= 0 or not port:
                 raise ValueError(f"Binding detector tidak valid: {item!r}")

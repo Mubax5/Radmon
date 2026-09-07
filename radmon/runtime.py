@@ -24,24 +24,21 @@ class DummyFleet:
         repository: Any,
         stations: list[StationConfig],
         *,
+        mode: str = "normal",
         generator_factory: Callable[[StationConfig], Any] | None = None,
     ) -> None:
         self.repository = repository
         self.stations = list(stations)
+        self.mode = mode
         factory = generator_factory or self._default_generator
-        self.generators = {
-            station.serid: factory(station) for station in self.stations
-        }
+        self.generators = {station.serid: factory(station) for station in self.stations}
         self.alarm_services = {
             station.serid: AlarmService(repository, station) for station in self.stations
         }
 
-    @staticmethod
-    def _default_generator(station: StationConfig) -> DummyDoseGenerator:
-        # Per-station seeds keep streams independent while making demo behavior
-        # reproducible enough for troubleshooting.
+    def _default_generator(self, station: StationConfig) -> DummyDoseGenerator:
         return DummyDoseGenerator(
-            "mixed",
+            self.mode,
             seed=station.serid,
             warnlevel=station.warnlevel,
             alarmlevel=station.alarmlevel,
@@ -111,11 +108,19 @@ class ApplicationRuntime:
 
     def _run_dummy(self) -> None:
         stations = self.repository.station_configs()
-        self._dummy_fleet = DummyFleet(self.repository, stations)
+        self._dummy_fleet = DummyFleet(
+            self.repository,
+            stations,
+            mode=self.settings.dummy_mode,
+        )
         while not self.stop_event.is_set():
             try:
                 count = self._dummy_fleet.step()
-                LOGGER.debug("dummy fleet wrote %s station measurements", count)
+                LOGGER.debug(
+                    "dummy fleet wrote %s station measurements mode=%s",
+                    count,
+                    self.settings.dummy_mode,
+                )
             except Exception as exc:
                 LOGGER.exception("dummy fleet acquisition failed: %s", exc)
             self.stop_event.wait(max(0.1, self.settings.sample_interval))
@@ -125,10 +130,7 @@ class ApplicationRuntime:
         collectors: list[SerialCollector] = []
         for serid, port in bindings:
             station = self.repository.station_config(serid)
-            collector_settings = self._settings_for_station(
-                station,
-                serial_port=port,
-            )
+            collector_settings = self._settings_for_station(station, serial_port=port)
             if (
                 self.alarm_service is not None
                 and serid == self.settings.serid
