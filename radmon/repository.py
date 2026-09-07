@@ -7,6 +7,7 @@ from typing import Any, Callable
 from .config import Settings
 from .db import connect_mariadb
 from .models import LatestReading, Measurement, StationConfig
+from .stations import station_by_id, station_catalog
 
 
 REQUIRED_SCHEMA = {
@@ -34,6 +35,18 @@ def _row_get(row: Any, key: str, index: int) -> Any:
     if isinstance(row, dict):
         return row.get(key)
     return row[index]
+
+
+def _display_unit(value: Any) -> str:
+    text = str(value or "µSv/h").strip().replace("μ", "µ")
+    if text.lower() == "usv/h":
+        return "µSv/h"
+    return text
+
+
+def _building_from_location(location: str, fallback: str) -> str:
+    digits = "".join(ch for ch in location if ch.isdigit())
+    return digits or fallback
 
 
 def upsert_recent(
@@ -145,6 +158,19 @@ WHERE TABLE_SCHEMA = ?
         if missing:
             raise RuntimeError("Schema ipradmon tidak sesuai. Missing: " + ", ".join(missing))
 
+    def _station_from_row(self, row: Any) -> StationConfig:
+        location = str(_row_get(row, "location", 2) or self.settings.location)
+        return StationConfig(
+            serid=int(_row_get(row, "serid", 0)),
+            building=_building_from_location(location, self.settings.building),
+            room=str(_row_get(row, "name", 1) or self.settings.room),
+            location=location,
+            warnlevel=float(_row_get(row, "warnlevel", 3) if _row_get(row, "warnlevel", 3) is not None else self.settings.warnlevel),
+            alarmlevel=float(_row_get(row, "alarmlevel", 4) if _row_get(row, "alarmlevel", 4) is not None else self.settings.alarmlevel),
+            maxidlemin=int(_row_get(row, "maxidlemin", 5) if _row_get(row, "maxidlemin", 5) is not None else self.settings.maxidlemin),
+            unit=_display_unit(_row_get(row, "unit", 6) or self.settings.unit),
+        )
+
     def station_config(self, serid: int | None = None) -> StationConfig:
         station_id = serid or self.settings.serid
         connection = self._connect()
@@ -159,65 +185,76 @@ WHERE serid = ?
                     (station_id,),
                 )
                 row = cursor.fetchone()
-            if row is None:
-                return StationConfig(
-                    serid=station_id,
-                    building=self.settings.building,
-                    room=self.settings.room,
-                    location=self.settings.location,
-                    warnlevel=self.settings.warnlevel,
-                    alarmlevel=self.settings.alarmlevel,
-                    maxidlemin=self.settings.maxidlemin,
-                    unit=self.settings.unit,
-                )
-            location = str(_row_get(row, "location", 2) or self.settings.location)
-            building = self.settings.building
-            digits = "".join(ch for ch in location if ch.isdigit())
-            if digits:
-                building = digits
-            return StationConfig(
-                serid=int(_row_get(row, "serid", 0)),
-                building=building,
-                room=str(_row_get(row, "name", 1) or self.settings.room),
-                location=location,
-                warnlevel=float(_row_get(row, "warnlevel", 3) if _row_get(row, "warnlevel", 3) is not None else self.settings.warnlevel),
-                alarmlevel=float(_row_get(row, "alarmlevel", 4) if _row_get(row, "alarmlevel", 4) is not None else self.settings.alarmlevel),
-                maxidlemin=int(_row_get(row, "maxidlemin", 5) if _row_get(row, "maxidlemin", 5) is not None else self.settings.maxidlemin),
-                unit=str(_row_get(row, "unit", 6) or self.settings.unit),
-            )
+            if row is not None:
+                return self._station_from_row(row)
         finally:
             connection.close()
+        catalog_station = station_by_id(station_id)
+        if catalog_station is not None:
+            return catalog_station
+        return StationConfig(
+            serid=station_id,
+            building=self.settings.building,
+            room=self.settings.room,
+            location=self.settings.location,
+            warnlevel=self.settings.warnlevel,
+            alarmlevel=self.settings.alarmlevel,
+            maxidlemin=self.settings.maxidlemin,
+            unit=_display_unit(self.settings.unit),
+        )
 
-    def ensure_dummy_station(self) -> None:
-        settings = self.settings.for_dummy()
+    def station_configs(self) -> list[StationConfig]:
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-INSERT INTO device
-  (serid, name, location, maxidlemin, warnlevel, alarmlevel, unit, audiopath, hwaddress, hwtype, description)
-VALUES (?, ?, ?, ?, ?, ?, ?, '', 'DEMO-5202', 'dummy', 'Dummy IS-1 Koridor')
-ON DUPLICATE KEY UPDATE
-  name = VALUES(name), location = VALUES(location), maxidlemin = VALUES(maxidlemin),
-  warnlevel = VALUES(warnlevel), alarmlevel = VALUES(alarmlevel), unit = VALUES(unit)
-""",
-                    (
-                        settings.serid,
-                        settings.room,
-                        settings.location,
-                        settings.maxidlemin,
-                        settings.warnlevel,
-                        settings.alarmlevel,
-                        settings.unit,
-                    ),
+SELECT serid, name, location, warnlevel, alarmlevel, maxidlemin, unit
+FROM device
+ORDER BY serid
+"""
                 )
+                rows = cursor.fetchall()
+        finally:
+            connection.close()
+        if not rows:
+            return station_catalog()
+        return [self._station_from_row(row) for row in rows]
+
+    def ensure_station_catalog(self) -> None:
+        """Insert missing detector metadata without overwriting deployed rows."""
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                for station in station_catalog():
+                    cursor.execute(
+                        """
+INSERT IGNORE INTO device
+  (serid, name, location, maxidlemin, warnlevel, alarmlevel, unit,
+   audiopath, hwaddress, hwtype, description)
+VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 'detector', ?)
+""",
+                        (
+                            station.serid,
+                            station.room,
+                            station.location,
+                            station.maxidlemin,
+                            station.warnlevel,
+                            station.alarmlevel,
+                            station.unit,
+                            f"CATALOG-{station.serid}",
+                            f"Radiation monitor {station.room}",
+                        ),
+                    )
             connection.commit()
         except Exception:
             connection.rollback()
             raise
         finally:
             connection.close()
+
+    def ensure_dummy_station(self) -> None:
+        self.ensure_station_catalog()
 
     def _previous_measurement(self, cursor: Any, serid: int, before: datetime) -> Any:
         cursor.execute(
