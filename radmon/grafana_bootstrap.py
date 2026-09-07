@@ -14,10 +14,17 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from .config import Settings
+from .grafana_tv import (
+    PAGE_UIDS,
+    PLAYLIST_UID,
+    build_dashboard_payloads,
+    build_playlist_payload,
+    playlist_url,
+)
 
 
-DASHBOARD_UID = "radmon-radiation-monitoring"
-DASHBOARD_SLUG = "radiation-monitoring"
+DASHBOARD_UID = PAGE_UIDS[0]
+DASHBOARD_SLUG = "radmon-tv-page-1-realtime"
 DATASOURCE_UID = "ipradmon-mysql"
 
 
@@ -29,14 +36,15 @@ def _base_url(value: str) -> str:
 
 
 def dashboard_url(base_url: str) -> str:
+    """Compatibility URL for the first TV page."""
     return (
         f"{base_url.rstrip('/')}/d/{DASHBOARD_UID}/{DASHBOARD_SLUG}"
-        "?orgId=1&refresh=2s&kiosk=tv"
+        "?orgId=1&refresh=2s&kiosk=1&autofitpanels"
     )
 
 
 class GrafanaBootstrap:
-    """Ensure the RadMon Grafana dashboard exists without requiring Docker."""
+    """Ensure RadMon Grafana datasource, TV dashboards, and playlist exist."""
 
     def __init__(
         self,
@@ -44,6 +52,7 @@ class GrafanaBootstrap:
         *,
         project_root: Path | None = None,
         dashboard_probe: Callable[[str], bool] | None = None,
+        playlist_probe: Callable[[str], bool] | None = None,
         grafana_health_probe: Callable[[str], bool] | None = None,
         api_provisioner: Callable[[str], bool] | None = None,
         native_runner: Callable[..., None] | None = None,
@@ -54,6 +63,7 @@ class GrafanaBootstrap:
         self.settings = settings
         self.project_root = project_root or Path(__file__).resolve().parents[1]
         self.dashboard_probe = dashboard_probe or self._probe_dashboard
+        self.playlist_probe = playlist_probe or self._probe_playlist
         self.grafana_health_probe = grafana_health_probe or self._probe_health
         self.api_provisioner = api_provisioner or self._provision_via_api
         self.native_runner = native_runner or self._run_native
@@ -73,21 +83,24 @@ class GrafanaBootstrap:
             candidates.append(local_default)
         return candidates
 
+    def _ready(self, base_url: str) -> bool:
+        return self.dashboard_probe(base_url) and self.playlist_probe(base_url)
+
     def ensure(self) -> str:
         candidates = self._candidate_base_urls()
         errors: list[str] = []
 
         for base in candidates:
-            if self.dashboard_probe(base):
-                return dashboard_url(base)
+            if self._ready(base):
+                return playlist_url(base)
 
         for base in candidates:
             if not self.grafana_health_probe(base):
                 continue
             try:
                 provisioned = self.api_provisioner(base)
-                if provisioned and self.dashboard_probe(base):
-                    return dashboard_url(base)
+                if provisioned and self._ready(base):
+                    return playlist_url(base)
             except Exception as exc:
                 errors.append(f"{base}: {exc}")
 
@@ -100,15 +113,15 @@ class GrafanaBootstrap:
             for _ in range(self.attempts):
                 if self.grafana_health_probe(native_base):
                     try:
-                        if self.api_provisioner(native_base) and self.dashboard_probe(native_base):
+                        if self.api_provisioner(native_base) and self._ready(native_base):
                             native_verified = True
-                            return dashboard_url(native_base)
+                            return playlist_url(native_base)
                     except Exception as exc:
                         errors.append(f"native {native_base}: {exc}")
                         break
                 self.sleeper(1.0)
             if not native_verified and not any(native_base in item for item in errors):
-                errors.append(f"native {native_base}: dashboard belum terverifikasi")
+                errors.append(f"native {native_base}: playlist monitoring belum terverifikasi")
         except Exception as exc:
             errors.append(f"native Grafana: {exc}")
 
@@ -118,24 +131,32 @@ class GrafanaBootstrap:
             self.compose_runner(env=docker_env)
             docker_verified = False
             for _ in range(self.attempts):
-                if self.dashboard_probe(fallback):
-                    docker_verified = True
-                    return dashboard_url(fallback)
+                if self.grafana_health_probe(fallback):
+                    try:
+                        if self.api_provisioner(fallback) and self._ready(fallback):
+                            docker_verified = True
+                            return playlist_url(fallback)
+                    except Exception as exc:
+                        errors.append(f"Docker {fallback}: {exc}")
+                        break
                 self.sleeper(1.0)
-            if not docker_verified:
-                errors.append(f"Docker {fallback}: dashboard belum terverifikasi")
+            if not docker_verified and not any(fallback in item for item in errors):
+                errors.append(f"Docker {fallback}: playlist monitoring belum terverifikasi")
         except Exception as exc:
             errors.append(f"Docker Grafana: {exc}")
 
-        detail = "; ".join(errors[-4:]) if errors else "dashboard tidak terverifikasi"
+        detail = "; ".join(errors[-4:]) if errors else "playlist monitoring tidak terverifikasi"
         raise RuntimeError(
             "Grafana RadMon tidak dapat disiapkan otomatis. "
             f"{detail}. Set RADMON_GRAFANA_BIN bila Grafana terpasang di lokasi non-standar."
         )
 
+    def _dashboard_payloads(self) -> list[dict]:
+        return build_dashboard_payloads()
+
     def _dashboard_payload(self) -> dict:
-        path = self.project_root / "grafana" / "dashboards" / "radiation-monitoring.json"
-        return json.loads(path.read_text(encoding="utf-8"))
+        """Compatibility helper returning page 1."""
+        return self._dashboard_payloads()[0]
 
     def _datasource_payload(self) -> dict:
         return {
@@ -155,30 +176,55 @@ class GrafanaBootstrap:
         }
 
     def _provision_via_api(self, base_url: str) -> bool:
-        """Install or repair datasource/dashboard in an existing Grafana."""
-        datasource_endpoint = f"{base_url.rstrip('/')}/api/datasources/uid/{DATASOURCE_UID}"
+        """Install or repair datasource, TV dashboards, and the 10-second playlist."""
+        base = base_url.rstrip("/")
+        datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
         payload = self._datasource_payload()
         try:
             self._request_json(datasource_endpoint)
         except Exception:
             self._request_json(
-                f"{base_url.rstrip('/')}/api/datasources",
+                f"{base}/api/datasources",
                 method="POST",
                 payload=payload,
             )
         else:
             self._request_json(datasource_endpoint, method="PUT", payload=payload)
 
-        self._request_json(
-            f"{base_url.rstrip('/')}/api/dashboards/db",
-            method="POST",
-            payload={
-                "dashboard": self._dashboard_payload(),
-                "folderId": 0,
-                "overwrite": True,
-                "message": "RadMon automatic setup",
-            },
+        for dashboard in self._dashboard_payloads():
+            self._request_json(
+                f"{base}/api/dashboards/db",
+                method="POST",
+                payload={
+                    "dashboard": dashboard,
+                    "folderId": 0,
+                    "overwrite": True,
+                    "message": "RadMon TV automatic setup",
+                },
+            )
+
+        playlist_endpoint = (
+            f"{base}/apis/playlist.grafana.app/v1/namespaces/default/playlists/{PLAYLIST_UID}"
         )
+        try:
+            current = self._request_json(playlist_endpoint)
+        except Exception:
+            self._request_json(
+                f"{base}/apis/playlist.grafana.app/v1/namespaces/default/playlists",
+                method="POST",
+                payload=build_playlist_payload(),
+            )
+        else:
+            metadata = current.get("metadata", {}) if isinstance(current, dict) else {}
+            self._request_json(
+                playlist_endpoint,
+                method="PUT",
+                payload=build_playlist_payload(
+                    resource_version=str(metadata.get("resourceVersion"))
+                    if metadata.get("resourceVersion") is not None
+                    else None
+                ),
+            )
         return True
 
     def _native_environment(self, port: int) -> dict[str, str]:
@@ -375,14 +421,33 @@ class GrafanaBootstrap:
             return False
 
     def _probe_dashboard(self, base_url: str) -> bool:
+        base = base_url.rstrip("/")
         try:
-            dashboard = self._request_json(
-                f"{base_url.rstrip('/')}/api/dashboards/uid/{DASHBOARD_UID}"
-            )
+            for uid in PAGE_UIDS:
+                dashboard = self._request_json(f"{base}/api/dashboards/uid/{uid}")
+                if not (
+                    isinstance(dashboard, dict)
+                    and isinstance(dashboard.get("dashboard"), dict)
+                    and dashboard["dashboard"].get("uid") == uid
+                ):
+                    return False
+            return True
+        except Exception:
+            return False
+
+    def _probe_playlist(self, base_url: str) -> bool:
+        endpoint = (
+            f"{base_url.rstrip('/')}/apis/playlist.grafana.app/v1/"
+            f"namespaces/default/playlists/{PLAYLIST_UID}"
+        )
+        try:
+            playlist = self._request_json(endpoint)
+            spec = playlist.get("spec", {}) if isinstance(playlist, dict) else {}
+            items = spec.get("items", []) if isinstance(spec, dict) else []
             return bool(
-                isinstance(dashboard, dict)
-                and isinstance(dashboard.get("dashboard"), dict)
-                and dashboard["dashboard"].get("uid") == DASHBOARD_UID
+                playlist.get("metadata", {}).get("name") == PLAYLIST_UID
+                and spec.get("interval") == "10s"
+                and [item.get("value") for item in items] == list(PAGE_UIDS)
             )
         except Exception:
             return False

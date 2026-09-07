@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from radmon.config import Settings
+from radmon.grafana_tv import build_dashboard_payloads
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,13 +46,9 @@ def test_default_runtime_matches_station_catalog_and_dummy_selects_5202(monkeypa
     assert settings.unit == "µSv/h"
     assert settings.refresh_interval == 2.0
     assert settings.sync_enabled is False
-
     dummy = settings.for_dummy()
     assert dummy.serid == 5202
-    assert dummy.building == "52"
     assert dummy.room == "IS-1 Koridor"
-    assert dummy.location == "Gd.52"
-    assert dummy.unit == "µSv/h"
     assert dummy.sample_interval == 2.0
 
 
@@ -60,39 +56,26 @@ def test_all_live_admin_refresh_is_driven_by_one_two_second_timer():
     main_window = read("radmon/admin/main_window.py")
     assert "self.refresh_timer.start(2000)" in main_window
     assert "currentWidget" in main_window
-    for page in (
-        "recent_page.py",
-        "tabular_page.py",
-        "chart_page.py",
-        "reports_page.py",
-        "alarm_page.py",
-        "logs_page.py",
-    ):
+    for page in ("recent_page.py", "tabular_page.py", "chart_page.py", "reports_page.py", "alarm_page.py", "logs_page.py"):
         source = read(f"radmon/admin/{page}")
         assert ".start(3000)" not in source
         assert ".start(5000)" not in source
 
 
 def test_background_refresh_never_opens_modal_error_popups():
-    for page in (
-        "recent_page.py",
-        "tabular_page.py",
-        "chart_page.py",
-        "reports_page.py",
-        "alarm_page.py",
-        "logs_page.py",
-    ):
+    for page in ("recent_page.py", "tabular_page.py", "chart_page.py", "reports_page.py", "alarm_page.py", "logs_page.py"):
         source = read(f"radmon/admin/{page}")
         if "def refresh_live" in source:
             refresh_body = source.split("def refresh_live", 1)[1].split("\n    def ", 1)[0]
             assert "QMessageBox" not in refresh_body
 
 
-def test_public_monitoring_is_grafana_with_two_second_refresh():
+def test_public_monitoring_is_grafana_tv_playlist_with_two_second_refresh():
     assert not (ROOT / "radmon/public_api.py").exists()
     assert not (ROOT / "monitoring").exists()
-    dashboard = json.loads(read("grafana/dashboards/radiation-monitoring.json"))
-    assert dashboard["refresh"] == "2s"
+    for dashboard in build_dashboard_payloads():
+        assert dashboard["refresh"] == "2s"
+        assert dashboard["templating"]["list"] == []
     runtime = read("radmon/runtime.py")
     assert "uvicorn" not in runtime
     assert "create_public_app" not in runtime

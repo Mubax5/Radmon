@@ -4,7 +4,7 @@ from pathlib import Path
 
 from radmon.config import Settings
 from radmon.grafana_bootstrap import GrafanaBootstrap
-
+from radmon.grafana_tv import PLAYLIST_UID
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,6 +26,7 @@ def test_grafana_uses_native_install_before_docker_when_local_api_cannot_be_prov
     bootstrap = GrafanaBootstrap(
         Settings(grafana_fallback_port=3300),
         dashboard_probe=dashboard_probe,
+        playlist_probe=dashboard_probe,
         grafana_health_probe=health_probe,
         api_provisioner=lambda base: calls.append(f"provision:{base}") or True,
         native_runner=native_runner,
@@ -37,7 +38,7 @@ def test_grafana_uses_native_install_before_docker_when_local_api_cannot_be_prov
     url = bootstrap.ensure()
     assert calls[0] == "native:3300"
     assert "provision:http://localhost:3300" in calls
-    assert url.startswith("http://localhost:3300/d/radmon-radiation-monitoring/")
+    assert url.startswith(f"http://localhost:3300/playlists/play/{PLAYLIST_UID}")
 
 
 def test_chart_metrics_make_status_pie_and_threshold_progress_meaningful() -> None:

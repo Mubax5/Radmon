@@ -6,6 +6,7 @@ from pathlib import Path
 from radmon.admin.chart_page import chart_series_from_rows
 from radmon.config import Settings
 from radmon.grafana_bootstrap import GrafanaBootstrap
+from radmon.grafana_tv import PLAYLIST_UID
 
 
 def test_chart_uses_database_values_without_reintegrating_dose() -> None:
@@ -46,11 +47,12 @@ def test_grafana_can_provision_an_existing_local_instance_before_fallbacks() -> 
     def probe(base: str) -> bool:
         probe_count["value"] += 1
         calls.append(f"probe:{base}")
-        return probe_count["value"] >= 2
+        return probe_count["value"] >= 3
 
     bootstrap = GrafanaBootstrap(
-        Settings(grafana_url="http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring"),
+        Settings(grafana_url="http://localhost:3000"),
         dashboard_probe=probe,
+        playlist_probe=probe,
         grafana_health_probe=lambda base: base == "http://localhost:3000",
         api_provisioner=lambda base: calls.append(f"provision:{base}") or True,
         native_runner=lambda **_: calls.append("native"),
@@ -60,7 +62,7 @@ def test_grafana_can_provision_an_existing_local_instance_before_fallbacks() -> 
     )
 
     url = bootstrap.ensure()
-    assert url.startswith("http://localhost:3000/d/radmon-radiation-monitoring/")
+    assert url.startswith(f"http://localhost:3000/playlists/play/{PLAYLIST_UID}")
     assert "provision:http://localhost:3000" in calls
     assert "native" not in calls
     assert "compose" not in calls
@@ -79,8 +81,9 @@ def test_stale_configured_grafana_still_discovers_local_port_3000() -> None:
         return True
 
     bootstrap = GrafanaBootstrap(
-        Settings(grafana_url="http://localhost:3300/d/radmon-radiation-monitoring/radiation-monitoring"),
+        Settings(grafana_url="http://localhost:3300"),
         dashboard_probe=dashboard_probe,
+        playlist_probe=dashboard_probe,
         grafana_health_probe=lambda base: base == "http://localhost:3000",
         api_provisioner=provision,
         native_runner=lambda **_: calls.append("native"),
@@ -90,7 +93,7 @@ def test_stale_configured_grafana_still_discovers_local_port_3000() -> None:
     )
 
     url = bootstrap.ensure()
-    assert url.startswith("http://localhost:3000/d/radmon-radiation-monitoring/")
+    assert url.startswith(f"http://localhost:3000/playlists/play/{PLAYLIST_UID}")
     assert calls == ["provision:http://localhost:3000"]
 
 

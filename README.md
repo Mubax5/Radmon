@@ -1,8 +1,8 @@
 # Radiation Monitoring
 
-Aplikasi operator Python + monitoring Grafana untuk data `ipradmon`.
+Aplikasi operator Python dan monitoring Grafana untuk data `ipradmon`.
 
-## Jalankan
+## Menjalankan sistem
 
 Detector asli:
 
@@ -16,11 +16,11 @@ Demo seluruh station/detector:
 RUN_DUMMY.bat
 ```
 
-Kedua mode memakai interval acquisition dan refresh **2 detik**. Jangan menjalankan detector dan dummy pada komputer yang sama secara bersamaan.
+Acquisition, Admin, dan Grafana membaca data live setiap **2 detik**. Mode detector dan dummy tidak boleh dijalankan bersamaan pada komputer yang sama.
 
 ## Database
 
-Aplikasi memakai schema yang sudah ada, tanpa tabel aplikasi tambahan:
+Aplikasi memakai schema yang sudah ada tanpa migration/tabel aplikasi tambahan:
 
 ```text
 device
@@ -32,96 +32,131 @@ news
 rawdata
 ```
 
-`measurement.doserate` ditampilkan sebagai laju dosis `µSv/h`. Nilai `measurement.dose` ditampilkan sebagai Approx. Dose `µSv` apa adanya; chart tidak menghitung ulang nilai dose dari histori sehingga skala yang terlihat tetap sesuai data database.
+Monitoring TV menggunakan **latest `measurement` sebagai sumber realtime tunggal** untuk nilai, waktu pengukuran, dan status. Ini mencegah kondisi ketika dose rate sudah tersedia tetapi panel lain menampilkan `No data` karena tabel cache berbeda.
 
-Station yang belum ada di tabel `device` dapat di-seed dari katalog internal tanpa menimpa row existing. Demo mencakup station/ruangan DPFK, termasuk `5202 / IS-1 Koridor`.
+`measurement.doserate` ditampilkan sebagai **µSv/h**. Admin Chart menggunakan `measurement.doserate` dan `measurement.dose` langsung dari database, tanpa integrasi ulang yang mengubah angka sumber.
+
+Demo mencakup station/ruangan DPFK, termasuk `5202 / IS-1 Koridor`, dan stream dummy tiap 2 detik untuk seluruh katalog detector.
 
 ## Admin
 
-Tab utama:
+Tab operator:
 
 ```text
 Recent | Tabular | Chart | Reports | Alarm | Logs
 ```
 
-Semua tab live membaca data setiap 2 detik. Error polling ditampilkan melalui status UI, bukan popup berulang.
+Error polling ditampilkan melalui status UI dan log, bukan popup berulang.
 
 ### Chart
 
-Pada tab Chart pilih visual melalui dropdown **View**:
+Visual yang tersedia:
 
-- **Trend** — dose rate + Approx. Dose, zoom, pan, crosshair, threshold Alert/Alarm, From/To, Live, Reset View.
-- **Dose Rate Distribution** — histogram distribusi pembacaan `doserate` pada range aktif.
-- **Status Distribution** — jumlah sample NORMAL / ALERT / ALARM berdasarkan threshold station yang dipilih.
-
-Trend memakai nilai `measurement.doserate` dan `measurement.dose` langsung dari database. Tidak ada normalisasi atau integrasi ulang yang mengubah angka sumber.
+- **Trend** — dose rate, optional Approx. Dose, zoom/pan/crosshair dan threshold.
+- **Status Pie** — komposisi NORMAL / ALERT / ALARM.
+- **Threshold Progress** — current / average / peak dibanding alarm threshold.
 
 ### Reports
 
-Workflow report:
-
 1. pilih `From` dan `To`;
 2. klik **Preview**;
-3. cek isi report di aplikasi;
-4. gunakan **Print**, **Export PDF**, atau Export CSV.
+3. cek report di aplikasi;
+4. gunakan **Print**, **Export PDF**, atau **Export CSV**.
 
-Preview tidak dibangun ulang setiap refresh 2 detik. Summary tetap menghitung seluruh range, sedangkan detail preview dibatasi agar UI responsif.
-
-Semua file hasil export otomatis disimpan di:
+Hasil export disimpan otomatis pada:
 
 ```text
 !REPORT!
 ```
 
-Folder dibuat otomatis saat export. Lokasi dapat diganti dengan `RADMON_REPORT_DIR`.
+## Grafana Monitoring TV
 
-## Grafana Monitoring
+Tombol **Monitoring** pada Admin tidak lagi membuka satu dashboard panjang. Aplikasi otomatis menyiapkan tiga dashboard Grafana dan playlist **RadMon TV**.
 
-Tombol **Monitoring** di Admin menyiapkan dan membuka dashboard Grafana RadMon secara otomatis.
+Playlist berjalan tanpa interaksi operator:
 
-Urutan setup:
+```text
+Page 1 -> 10 detik -> Page 2 -> 10 detik -> Page 3 -> 10 detik -> ulang
+```
 
-1. cek Grafana yang sudah berjalan pada URL `RADMON_GRAFANA_URL` (default `http://localhost:3000`);
-2. jika Grafana hidup tetapi dashboard RadMon belum ada, aplikasi mencoba membuat datasource MySQL `ipradmon-mysql` dan meng-import dashboard melalui Grafana HTTP API;
-3. jika Grafana lokal tidak tersedia/tidak dapat diprovision, aplikasi mencoba bundled Grafana melalui Docker pada port fallback `3300`;
-4. browser hanya dibuka setelah dashboard UID `radmon-radiation-monitoring` terverifikasi.
+Semua page:
 
-Dashboard membaca `device`, `measurement`, `recent`, dan `alarm`, refresh **2 detik**, dan menampilkan satuan **µSv/h**.
+- refresh datasource setiap **2 detik**;
+- memakai header template yang sama;
+- dirancang untuk layar sekitar 1920x1080;
+- dibuka dalam mode kiosk + auto-fit sehingga tidak perlu scroll atau menyentuh time picker/variable.
+
+### Page 1 — Realtime
+
+Menampilkan 15 station dalam grid satu layar. Setiap station mempunyai:
+
+- kartu laju dosis **µSv/h**;
+- warna threshold per detector;
+- waktu pengukuran tepat di bawah kartu tanpa title tambahan.
+
+Nilai dan waktu sama-sama diambil dari latest row tabel `measurement`.
+
+### Page 2 — Trends
+
+Menampilkan **Dose Rate Monitoring** tiga jam terakhir seluruh detector dan summary:
+
+- dose rate tertinggi saat ini;
+- rata-rata saat ini;
+- jumlah detector online;
+- jumlah detector offline.
+
+### Page 3 — Operations
+
+Menampilkan:
+
+- Status Detector dalam donut/pie;
+- kondisi operasional seluruh detector;
+- jumlah NORMAL / ALERT / ALARM / OFFLINE;
+- alarm terbaru 24 jam.
+
+Status dihitung dari latest `measurement`, threshold pada `device`, dan freshness `maxidlemin`; tidak bergantung pada tabel `recent`.
+
+## Auto setup Grafana
+
+Saat Monitoring dibuka, aplikasi:
+
+1. mencari Grafana lokal yang sudah hidup;
+2. membuat/update datasource `ipradmon-mysql`;
+3. meng-import ketiga dashboard TV;
+4. membuat/update playlist `RadMon TV` dengan interval 10 detik;
+5. memverifikasi dashboard + playlist;
+6. baru membuka URL playlist kiosk.
+
+Jika Grafana lokal tidak tersedia, aplikasi mencoba executable Grafana native, lalu Docker sebagai fallback terakhir.
 
 Konfigurasi penting:
 
 ```env
-RADMON_GRAFANA_URL=http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv
+RADMON_GRAFANA_URL=http://localhost:3000
 RADMON_GRAFANA_PORT=3300
 RADMON_GRAFANA_USER=admin
 RADMON_GRAFANA_PASSWORD=admin
 RADMON_REPORT_DIR=!REPORT!
 ```
 
-Jika Grafana lokal memakai user/password berbeda, sesuaikan `RADMON_GRAFANA_USER` dan `RADMON_GRAFANA_PASSWORD` di `.env` agar auto-import dapat dilakukan.
-
 ## Multi-detector
 
-Satu detector tetap dapat memakai:
+Satu detector:
 
 ```env
 RADMON_SERID=5201
 RADMON_SERIAL_PORT=COM15
 ```
 
-Untuk beberapa detector serial pada satu komputer:
+Beberapa detector serial pada satu komputer:
 
 ```env
 RADMON_DETECTORS=5201@COM15;5202@COM16;5701@COM18
 ```
 
-Mode dummy membuat stream independen untuk seluruh station aktif setiap 2 detik sehingga chart, alarm, report, dan Grafana dapat diuji sebagai sistem multi-detector.
-
 ## Server pusat
 
 Sync ke server pusat default OFF. Sistem lokal tetap dapat melakukan acquisition, Admin, report, alarm, dan monitoring tanpa koneksi pusat.
-
-Aktifkan hanya saat endpoint pusat tersedia:
 
 ```env
 RADMON_SYNC_ENABLED=1
@@ -137,8 +172,8 @@ RUN_DUMMY.bat
 main.py
 central_server.py
 radmon/       source Python
-grafana/      dashboard + provisioning
+grafana/      provisioning datasource + Docker fallback
 tests/        regression tests
 ```
 
-Asset icon UI yang memang digunakan aplikasi berada di `radmon/admin/icons/silk/` bersama lisensinya. Output runtime (`!REPORT!`, logs, runtime, venv, cache) tidak ditrack Git.
+Output runtime (`!REPORT!`, logs, runtime, venv, cache) tidak ditrack Git.

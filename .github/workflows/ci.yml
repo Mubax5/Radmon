@@ -25,16 +25,23 @@ jobs:
         run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
       - name: Compile Python
         run: python -m compileall -q main.py radmon
-      - name: Validate Grafana files
+      - name: Validate Grafana TV payloads
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
           import yaml
-          json.loads(Path('grafana/dashboards/radiation-monitoring.json').read_text())
+          from radmon.grafana_tv import build_dashboard_payloads, build_playlist_payload
+          dashboards = build_dashboard_payloads()
+          assert len(dashboards) == 3
+          for dashboard in dashboards:
+              json.dumps(dashboard, ensure_ascii=False)
+              assert dashboard['refresh'] == '2s'
+          playlist = build_playlist_payload()
+          assert playlist['spec']['interval'] == '10s'
           for path in Path('grafana').rglob('*.yaml'):
               yaml.safe_load(path.read_text())
           for path in Path('grafana').rglob('*.yml'):
               yaml.safe_load(path.read_text())
-          print('Grafana JSON/YAML valid')
+          print('Grafana TV payloads valid')
           PY
