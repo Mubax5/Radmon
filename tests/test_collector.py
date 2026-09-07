@@ -23,8 +23,14 @@ class Alarm:
 
 
 def test_collector_processes_existing_ascii_protocol_into_configured_measurement():
-    settings = Settings(); repo = Repo(); alarm = Alarm(); collector = SerialCollector(settings, repo, alarm); when = datetime(2026, 9, 7, 10, 0, 0)
+    settings = Settings()
+    repo = Repo()
+    alarm = Alarm()
+    collector = SerialCollector(settings, repo, alarm)
+    when = datetime(2026, 9, 7, 10, 0, 0)
+
     measurement = collector.process_raw("0.12345 some detector text", when)
+
     assert measurement.serid == 5201
     assert measurement.dose_rate == 0.12345
     assert measurement.previnterval == 2
@@ -33,7 +39,8 @@ def test_collector_processes_existing_ascii_protocol_into_configured_measurement
 
 
 def test_collector_rejects_invalid_line_without_database_write():
-    repo = Repo(); collector = SerialCollector(Settings(), repo, None)
+    repo = Repo()
+    collector = SerialCollector(Settings(), repo, None)
     try:
         collector.process_raw("not-a-number", datetime.now())
     except ValueError:

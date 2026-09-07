@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 import tempfile
+import time
 from typing import Any
 
 import httpx
@@ -39,7 +40,14 @@ class SyncCheckpointStore:
 
 
 class SyncAgent:
-    def __init__(self, repository: Any, settings: Settings, *, checkpoint: SyncCheckpointStore | None = None, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        repository: Any,
+        settings: Settings,
+        *,
+        checkpoint: SyncCheckpointStore | None = None,
+        client: Any | None = None,
+    ) -> None:
         self.repository = repository
         self.settings = settings
         self.checkpoint = checkpoint or SyncCheckpointStore(settings.runtime_dir / f"sync-{settings.serid}.json")
@@ -55,9 +63,37 @@ class SyncAgent:
         measurements = []
         for row in rows:
             dt = row["dtom"]
-            measurement = Measurement(serid=int(row["serid"]), measured_at=dt, dose_rate=float(row["doserate"]), previnterval=int(row.get("previnterval") or 2), stat=int(row.get("stat") or 0))
-            measurements.append({"sample_key": make_sample_key(measurement), "serid": measurement.serid, "dtom": dt.strftime("%Y-%m-%d %H:%M:%S"), "doserate": measurement.dose_rate, "dose": float(row.get("dose") or 0.0), "previnterval": measurement.previnterval, "stat": measurement.stat})
-        return {"source_name": f"Gd{self.settings.building}-{self.settings.room.replace(' ', '')}", "station": {"serid": self.settings.serid, "name": self.settings.room, "location": self.settings.location, "maxidlemin": self.settings.maxidlemin, "warnlevel": self.settings.warnlevel, "alarmlevel": self.settings.alarmlevel, "unit": self.settings.unit}, "measurements": measurements}
+            measurement = Measurement(
+                serid=int(row["serid"]),
+                measured_at=dt,
+                dose_rate=float(row["doserate"]),
+                previnterval=int(row.get("previnterval") or 2),
+                stat=int(row.get("stat") or 0),
+            )
+            measurements.append(
+                {
+                    "sample_key": make_sample_key(measurement),
+                    "serid": measurement.serid,
+                    "dtom": dt.strftime("%Y-%m-%d %H:%M:%S"),
+                    "doserate": measurement.dose_rate,
+                    "dose": float(row.get("dose") or 0.0),
+                    "previnterval": measurement.previnterval,
+                    "stat": measurement.stat,
+                }
+            )
+        return {
+            "source_name": f"Gd{self.settings.building}-{self.settings.room.replace(' ', '')}",
+            "station": {
+                "serid": self.settings.serid,
+                "name": self.settings.room,
+                "location": self.settings.location,
+                "maxidlemin": self.settings.maxidlemin,
+                "warnlevel": self.settings.warnlevel,
+                "alarmlevel": self.settings.alarmlevel,
+                "unit": self.settings.unit,
+            },
+            "measurements": measurements,
+        }
 
     def run_once(self) -> int:
         if not self.settings.sync_enabled:
@@ -67,7 +103,12 @@ class SyncAgent:
         if not rows:
             return 0
         try:
-            response = self.client.post(self.settings.central_url.rstrip("/") + "/api/v1/measurements/batch", json=self._payload(rows), headers={"Authorization": f"Bearer {self.settings.central_token}"}, timeout=self.settings.sync_timeout)
+            response = self.client.post(
+                self.settings.central_url.rstrip("/") + "/api/v1/measurements/batch",
+                json=self._payload(rows),
+                headers={"Authorization": f"Bearer {self.settings.central_token}"},
+                timeout=self.settings.sync_timeout,
+            )
             response.raise_for_status()
             latest = max(row["dtom"] for row in rows)
             self.checkpoint.save(latest)

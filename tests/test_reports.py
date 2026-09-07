@@ -21,19 +21,49 @@ class FakeRepo:
         ]
 
     def alarm_history(self, start=None, end=None, *, serid=None, limit=1000):
-        return [{"alarmid": 1, "serid": 5202, "dtom": start, "type": "ALERT", "msg": "Dose rate crossed warning threshold"}]
+        return [
+            {
+                "alarmid": 1,
+                "serid": 5202,
+                "dtom": start,
+                "type": "ALERT",
+                "msg": "Dose rate crossed warning threshold",
+            }
+        ]
 
 
 def test_report_summary_calculates_min_avg_max_and_trapezoid_dose():
-    start = datetime(2026, 9, 7, 8, 0, 0); end = start + timedelta(hours=2); service = ReportService(FakeRepo(), Settings()); summary = service.summary(start, end)
-    assert summary.minimum == pytest.approx(0.1); assert summary.average == pytest.approx(0.2); assert summary.maximum == pytest.approx(0.3); assert summary.sample_count == 3; assert summary.approximate_dose == pytest.approx(0.4); assert summary.first_measurement == start; assert summary.last_measurement == end
+    start = datetime(2026, 9, 7, 8, 0, 0)
+    end = start + timedelta(hours=2)
+    service = ReportService(FakeRepo(), Settings())
+
+    summary = service.summary(start, end)
+
+    assert summary.minimum == pytest.approx(0.1)
+    assert summary.average == pytest.approx(0.2)
+    assert summary.maximum == pytest.approx(0.3)
+    assert summary.sample_count == 3
+    assert summary.approximate_dose == pytest.approx(0.4)
+    assert summary.first_measurement == start
+    assert summary.last_measurement == end
 
 
 def test_csv_export_contains_measurements(tmp_path):
-    start = datetime(2026, 9, 7, 8, 0, 0); end = start + timedelta(hours=2); service = ReportService(FakeRepo(), Settings()); path = service.export_csv(start, end, tmp_path / "history.csv"); content = path.read_text(encoding="utf-8")
-    assert "serid,dtom,doserate" in content; assert "5202" in content; assert "0.3" in content
+    start = datetime(2026, 9, 7, 8, 0, 0)
+    end = start + timedelta(hours=2)
+    service = ReportService(FakeRepo(), Settings())
+    path = service.export_csv(start, end, tmp_path / "history.csv")
+    content = path.read_text(encoding="utf-8")
+    assert "serid,dtom,doserate" in content
+    assert "5202" in content
+    assert "0.3" in content
 
 
 def test_pdf_export_has_pdf_signature_and_station_identity(tmp_path):
-    start = datetime(2026, 9, 7, 8, 0, 0); end = start + timedelta(hours=2); service = ReportService(FakeRepo(), Settings()); path = service.export_pdf(start, end, tmp_path / "report.pdf"); payload = path.read_bytes()
-    assert payload.startswith(b"%PDF"); assert len(payload) > 1000
+    start = datetime(2026, 9, 7, 8, 0, 0)
+    end = start + timedelta(hours=2)
+    service = ReportService(FakeRepo(), Settings())
+    path = service.export_pdf(start, end, tmp_path / "report.pdf")
+    payload = path.read_bytes()
+    assert payload.startswith(b"%PDF")
+    assert len(payload) > 1000
