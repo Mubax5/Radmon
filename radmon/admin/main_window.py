@@ -66,24 +66,12 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_toolbar()
 
-        self.tabs.addTab(
-            RecentPage(repository, settings), silk_icon("clock"), "Recent"
-        )
-        self.tabs.addTab(
-            TabularPage(repository, settings), silk_icon("table"), "Tabular"
-        )
-        self.tabs.addTab(
-            ChartPage(repository, settings), silk_icon("chart_line"), "Chart"
-        )
-        self.tabs.addTab(
-            ReportsPage(report_service, settings), silk_icon("report"), "Reports"
-        )
-        self.tabs.addTab(
-            AlarmPage(repository, alarm_service, settings), silk_icon("lock"), "Alarm"
-        )
-        self.tabs.addTab(
-            LogsPage(log_path), silk_icon("page_white_text"), "Logs"
-        )
+        self.tabs.addTab(RecentPage(repository, settings), silk_icon("clock"), "Recent")
+        self.tabs.addTab(TabularPage(repository, settings), silk_icon("table"), "Tabular")
+        self.tabs.addTab(ChartPage(repository, settings), silk_icon("chart_line"), "Chart")
+        self.tabs.addTab(ReportsPage(report_service, settings), silk_icon("report"), "Reports")
+        self.tabs.addTab(AlarmPage(repository, alarm_service, settings), silk_icon("lock"), "Alarm")
+        self.tabs.addTab(LogsPage(log_path), silk_icon("page_white_text"), "Logs")
 
         sidebar = self._build_station_sidebar()
         splitter = QSplitter(Qt.Horizontal)
@@ -193,26 +181,18 @@ class MainWindow(QMainWindow):
         self.refresh_current_page()
 
     def _build_actions(self) -> None:
-        self.monitoring_action = QAction(
-            silk_icon("monitor"), "Monitoring", self
-        )
+        self.monitoring_action = QAction(silk_icon("monitor"), "Monitoring", self)
         self.monitoring_action.setStatusTip("Open Grafana monitoring")
         self.monitoring_action.triggered.connect(self.open_monitoring)
 
-        self.refresh_action = QAction(
-            silk_icon("arrow_refresh"), "Refresh", self
-        )
+        self.refresh_action = QAction(silk_icon("arrow_refresh"), "Refresh", self)
         self.refresh_action.setShortcut("F5")
         self.refresh_action.triggered.connect(self.refresh_current_page)
 
         self.report_action = QAction(silk_icon("report"), "Reports", self)
-        self.report_action.triggered.connect(
-            lambda: self.tabs.setCurrentIndex(self.REPORT_TAB_INDEX)
-        )
+        self.report_action.triggered.connect(lambda: self.tabs.setCurrentIndex(self.REPORT_TAB_INDEX))
 
-        self.print_action = QAction(
-            silk_icon("printer"), "Print report", self
-        )
+        self.print_action = QAction(silk_icon("printer"), "Print report", self)
         self.print_action.triggered.connect(self._print_current_report)
 
         self.exit_action = QAction(silk_icon("door_out"), "Exit", self)
@@ -284,10 +264,14 @@ class MainWindow(QMainWindow):
             return
         if self._grafana_ready_url:
             self._monitoring_open_pending = False
-            QDesktopServices.openUrl(QUrl(self._grafana_ready_url))
+            opened = QDesktopServices.openUrl(QUrl(self._grafana_ready_url))
+            if not opened:
+                QMessageBox.warning(self, "Monitoring", "Browser gagal membuka dashboard Grafana.")
         elif self._grafana_error:
             self._monitoring_open_pending = False
-            self.statusBar().showMessage(f"Grafana setup error: {self._grafana_error}")
+            message = f"Grafana setup error: {self._grafana_error}"
+            self.statusBar().showMessage(message)
+            QMessageBox.warning(self, "Monitoring", message)
 
     def _print_current_report(self) -> None:
         self.tabs.setCurrentIndex(self.REPORT_TAB_INDEX)
@@ -311,7 +295,5 @@ class MainWindow(QMainWindow):
         if error:
             self.statusBar().showMessage(f"{mode} · {error}")
         else:
-            self.statusBar().showMessage(
-                f"{mode} · {self.settings.station_label} · refresh 2s"
-            )
+            self.statusBar().showMessage(f"{mode} · {self.settings.station_label} · refresh 2s")
         self._open_monitoring_if_ready()
