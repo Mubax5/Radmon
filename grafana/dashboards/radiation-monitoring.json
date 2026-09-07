@@ -24,7 +24,7 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "[${station}] ${station:text}",
+      "title": "Laju dosis · [${station}] ${station:text}",
       "repeat": "station",
       "repeatDirection": "h",
       "maxPerRow": 3,
