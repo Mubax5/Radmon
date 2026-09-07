@@ -71,15 +71,25 @@ Hasil export disimpan otomatis pada:
 
 ## Grafana Monitoring TV
 
-Tombol **Monitoring** pada Admin tidak lagi membuka satu dashboard panjang. Aplikasi otomatis menyiapkan tiga dashboard Grafana dan playlist **RadMon TV**.
-
-Playlist berjalan tanpa interaksi operator:
+Tombol **Monitoring** pada Admin membuka playlist **RadMon TV** dengan tiga logical page:
 
 ```text
-Page 1 -> 10 detik -> Page 2 -> 10 detik -> Page 3 -> 10 detik -> ulang
+Page 1 Realtime -> 10 detik -> Page 2 Trends -> 10 detik -> Page 3 Operations -> 10 detik -> ulang
 ```
 
-Semua page:
+Yang berubah pada setiap putaran hanya panel **Kondisi Operasional Detector** di Page 3. Panel tersebut mempunyai 8 subpage detector. Urutannya:
+
+```text
+Putaran 1 -> Kondisi Operasional Detector 1/8
+Putaran 2 -> Kondisi Operasional Detector 2/8
+...
+Putaran 8 -> Kondisi Operasional Detector 8/8
+Putaran 9 -> kembali 1/8
+```
+
+Secara internal Grafana memprovision dua dashboard bersama (Realtime dan Trends) dan delapan varian Operations. Playlist menyusun ketiganya sebagai satu siklus tiga logical page sehingga operator tetap melihat urutan Page 1 -> Page 2 -> Page 3, sementara hanya isi tabel kondisi operasional yang berganti pada siklus berikutnya.
+
+Semua logical page:
 
 - refresh datasource setiap **2 detik**;
 - memakai header template yang sama;
@@ -91,14 +101,15 @@ Semua page:
 Menampilkan 15 station dalam grid satu layar. Setiap station mempunyai:
 
 - kartu laju dosis **µSv/h**;
+- mini trend terpisah di bawah angka agar tidak menutupi nilai utama;
 - warna threshold per detector;
-- waktu pengukuran tepat di bawah kartu tanpa title tambahan.
+- waktu pengukuran kecil di bawah mini trend tanpa title tambahan.
 
 Nilai dan waktu sama-sama diambil dari latest row tabel `measurement`.
 
 ### Page 2 — Trends
 
-Menampilkan **Dose Rate Monitoring** tiga jam terakhir seluruh detector dan summary:
+Menampilkan Dose Rate Monitoring tiga jam terakhir sebagai small-multiple per gedung supaya banyak seri tetap terbaca, plus summary:
 
 - dose rate tertinggi saat ini;
 - rata-rata saat ini;
@@ -107,12 +118,15 @@ Menampilkan **Dose Rate Monitoring** tiga jam terakhir seluruh detector dan summ
 
 ### Page 3 — Operations
 
-Menampilkan:
+Bagian yang tetap pada setiap putaran:
 
 - Status Detector dalam donut/pie;
-- kondisi operasional seluruh detector;
 - jumlah NORMAL / ALERT / ALARM / OFFLINE;
 - alarm terbaru 24 jam.
+
+Bagian yang berubah setiap putaran playlist:
+
+- **Kondisi Operasional Detector**, dibagi menjadi 8 subpage yang bersama-sama mencakup seluruh detector satu kali sebelum kembali ke subpage pertama.
 
 Status dihitung dari latest `measurement`, threshold pada `device`, dan freshness `maxidlemin`; tidak bergantung pada tabel `recent`.
 
@@ -122,7 +136,7 @@ Saat Monitoring dibuka, aplikasi:
 
 1. mencari Grafana lokal yang sudah hidup;
 2. membuat/update datasource `ipradmon-mysql`;
-3. meng-import ketiga dashboard TV;
+3. meng-import dashboard TV yang dibutuhkan oleh tiga logical page;
 4. membuat/update playlist `RadMon TV` dengan interval 10 detik;
 5. memverifikasi dashboard + playlist;
 6. baru membuka URL playlist kiosk.
