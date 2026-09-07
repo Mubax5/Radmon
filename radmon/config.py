@@ -36,15 +36,13 @@ class Settings:
     unit: str = "uSv/h"
     sample_interval: float = 2.0
     refresh_interval: float = 2.0
-    public_enabled: bool = True
-    public_host: str = "0.0.0.0"
-    public_port: int = 8080
     sync_enabled: bool = False
     central_url: str = ""
     central_token: str = ""
     sync_batch_size: int = 100
     sync_timeout: float = 10.0
     sync_initial_lookback_hours: int = 24
+    grafana_url: str = "http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv"
     runtime_dir: Path = Path("runtime")
     log_dir: Path = Path("logs")
     single_instance_port: int = 47652
@@ -73,15 +71,16 @@ class Settings:
             unit=get("RADMON_UNIT", "uSv/h"),
             sample_interval=float(get("RADMON_SAMPLE_INTERVAL", "2")),
             refresh_interval=float(get("RADMON_REFRESH_INTERVAL", "2")),
-            public_enabled=_as_bool(get("RADMON_PUBLIC_ENABLED"), True),
-            public_host=get("RADMON_PUBLIC_HOST", "0.0.0.0"),
-            public_port=int(get("RADMON_PUBLIC_PORT", "8080")),
             sync_enabled=_as_bool(get("RADMON_SYNC_ENABLED"), False),
             central_url=get("RADMON_CENTRAL_URL", ""),
             central_token=get("RADMON_CENTRAL_TOKEN", ""),
             sync_batch_size=int(get("RADMON_SYNC_BATCH_SIZE", "100")),
             sync_timeout=float(get("RADMON_SYNC_TIMEOUT", "10")),
             sync_initial_lookback_hours=int(get("RADMON_SYNC_INITIAL_LOOKBACK_HOURS", "24")),
+            grafana_url=get(
+                "RADMON_GRAFANA_URL",
+                "http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv",
+            ),
             runtime_dir=Path(get("RADMON_RUNTIME_DIR", "runtime")),
             log_dir=Path(get("RADMON_LOG_DIR", "logs")),
             single_instance_port=int(get("RADMON_SINGLE_INSTANCE_PORT", "47652")),

@@ -1,0 +1,16 @@
+apiVersion: 1
+datasources:
+  - name: ipradmon
+    uid: ipradmon-mysql
+    type: mysql
+    access: proxy
+    url: ${RADMON_GRAFANA_DB_HOST}:${RADMON_DB_PORT}
+    user: ${RADMON_DB_USER}
+    isDefault: true
+    jsonData:
+      database: ipradmon
+      maxOpenConns: 20
+      maxIdleConns: 10
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: ${RADMON_DB_PASSWORD}
