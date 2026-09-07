@@ -33,7 +33,7 @@ class Settings:
     warnlevel: float = 8.0
     alarmlevel: float = 10.0
     maxidlemin: int = 30
-    unit: str = "uSv/h"
+    unit: str = "µSv/h"
     sample_interval: float = 2.0
     refresh_interval: float = 2.0
     sync_enabled: bool = False
@@ -42,7 +42,10 @@ class Settings:
     sync_batch_size: int = 100
     sync_timeout: float = 10.0
     sync_initial_lookback_hours: int = 24
-    grafana_url: str = "http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv"
+    grafana_url: str = "http://localhost:3300/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv"
+    grafana_fallback_port: int = 3300
+    grafana_user: str = "admin"
+    grafana_password: str = "admin"
     runtime_dir: Path = Path("runtime")
     log_dir: Path = Path("logs")
     single_instance_port: int = 47652
@@ -68,7 +71,7 @@ class Settings:
             warnlevel=float(get("RADMON_WARNLEVEL", "8")),
             alarmlevel=float(get("RADMON_ALARMLEVEL", "10")),
             maxidlemin=int(get("RADMON_MAXIDLEMIN", "30")),
-            unit=get("RADMON_UNIT", "uSv/h"),
+            unit=get("RADMON_UNIT", "µSv/h").replace("μ", "µ").replace("uSv/h", "µSv/h"),
             sample_interval=float(get("RADMON_SAMPLE_INTERVAL", "2")),
             refresh_interval=float(get("RADMON_REFRESH_INTERVAL", "2")),
             sync_enabled=_as_bool(get("RADMON_SYNC_ENABLED"), False),
@@ -79,8 +82,11 @@ class Settings:
             sync_initial_lookback_hours=int(get("RADMON_SYNC_INITIAL_LOOKBACK_HOURS", "24")),
             grafana_url=get(
                 "RADMON_GRAFANA_URL",
-                "http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv",
+                "http://localhost:3300/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv",
             ),
+            grafana_fallback_port=int(get("RADMON_GRAFANA_PORT", "3300")),
+            grafana_user=get("RADMON_GRAFANA_USER", "admin"),
+            grafana_password=get("RADMON_GRAFANA_PASSWORD", "admin"),
             runtime_dir=Path(get("RADMON_RUNTIME_DIR", "runtime")),
             log_dir=Path(get("RADMON_LOG_DIR", "logs")),
             single_instance_port=int(get("RADMON_SINGLE_INSTANCE_PORT", "47652")),
@@ -96,6 +102,7 @@ class Settings:
             warnlevel=8.0,
             alarmlevel=10.0,
             maxidlemin=30,
+            unit="µSv/h",
             sample_interval=2.0,
             refresh_interval=2.0,
         )
