@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libmariadb-dev
+      - name: Install Python dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pip install pyyaml
+      - name: Run tests
+        run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q
+      - name: Compile Python
+        run: python -m compileall -q main.py radmon
+      - name: Validate Grafana files
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import yaml
+          json.loads(Path('grafana/dashboards/radiation-monitoring.json').read_text())
+          for path in Path('grafana').rglob('*.yaml'):
+              yaml.safe_load(path.read_text())
+          for path in Path('grafana').rglob('*.yml'):
+              yaml.safe_load(path.read_text())
+          print('Grafana JSON/YAML valid')
+          PY

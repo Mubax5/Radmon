@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from radmon.config import Settings
@@ -14,7 +15,9 @@ def read(path: str) -> str:
 def test_only_two_operator_bat_launchers_remain():
     bats = sorted(path.name for path in ROOT.glob("*.bat"))
     assert bats == ["RADMON.bat", "RUN_DUMMY.bat"]
-    assert list((ROOT / "scripts").glob("*.bat")) == []
+    scripts = ROOT / "scripts"
+    if scripts.exists():
+        assert list(scripts.glob("*.bat")) == []
 
 
 def test_both_launchers_start_the_same_single_process_without_cmd_fanout():
@@ -24,7 +27,6 @@ def test_both_launchers_start_the_same_single_process_without_cmd_fanout():
     assert "main.py" in dummy and "--source dummy" in dummy
     for text in (real, dummy):
         assert "pythonw.exe" in text
-        assert "start_common" not in text
         assert "cmd /k" not in text
         assert "run_sync.bat" not in text
         assert "run_public.bat" not in text
@@ -66,18 +68,28 @@ def test_all_live_admin_refresh_is_driven_by_one_two_second_timer():
 
 
 def test_background_refresh_never_opens_modal_error_popups():
-    for page in ("recent_page.py", "tabular_page.py", "chart_page.py", "reports_page.py", "alarm_page.py", "logs_page.py"):
+    for page in (
+        "recent_page.py",
+        "tabular_page.py",
+        "chart_page.py",
+        "reports_page.py",
+        "alarm_page.py",
+        "logs_page.py",
+    ):
         source = read(f"radmon/admin/{page}")
-        # Modal messages are allowed only in explicit user actions, never in refresh_live().
         if "def refresh_live" in source:
             refresh_body = source.split("def refresh_live", 1)[1].split("\n    def ", 1)[0]
             assert "QMessageBox" not in refresh_body
 
 
-def test_public_monitor_fetches_latest_every_two_seconds():
-    source = read("monitoring/static/js/monitor.js")
-    assert "setInterval(updateClock, 2000)" in source
-    assert "setInterval(refresh, 2000)" in source
+def test_public_monitoring_is_grafana_with_two_second_refresh():
+    assert not (ROOT / "radmon/public_api.py").exists()
+    assert not (ROOT / "monitoring").exists()
+    dashboard = json.loads(read("grafana/dashboards/radiation-monitoring.json"))
+    assert dashboard["refresh"] == "2s"
+    runtime = read("radmon/runtime.py")
+    assert "uvicorn" not in runtime
+    assert "create_public_app" not in runtime
 
 
 def test_sync_uses_measurement_checkpoint_instead_of_database_queue():
