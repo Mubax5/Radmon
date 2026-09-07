@@ -28,6 +28,8 @@ def test_chart_page_uses_pyqtgraph_crosshair_dual_axes_and_threshold_lines():
     source = (ROOT / "radmon/admin/chart_page.py").read_text(encoding="utf-8")
     assert "import pyqtgraph as pg" in source
     assert "sigMouseMoved" in source
+    assert "sigRangeChangedManually" in source
+    assert "_manual_range_changed" in source
     assert "InfiniteLine" in source
     assert "showAxis(\"right\")" in source
     assert "setXLink" in source

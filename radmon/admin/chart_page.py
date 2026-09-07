@@ -60,6 +60,9 @@ class ChartPage(QWidget):
         self.plot.setLabel("left", "Dose rate", units="µSv/h")
         self.plot.setLabel("bottom", "Time")
         self.plot.addLegend(offset=(10, 10))
+        self.plot.getPlotItem().vb.sigRangeChangedManually.connect(
+            self._manual_range_changed
+        )
 
         self.plot.showAxis("right")
         self.plot.getAxis("right").setLabel("Approx. Dose", units="µSv")
@@ -67,6 +70,7 @@ class ChartPage(QWidget):
         self.plot.scene().addItem(self.dose_view)
         self.plot.getAxis("right").linkToView(self.dose_view)
         self.dose_view.setXLink(self.plot.getPlotItem())
+        self.dose_view.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
         self.plot.getPlotItem().vb.sigResized.connect(self._sync_right_view)
 
         self.rate_curve = self.plot.plot(
@@ -78,16 +82,17 @@ class ChartPage(QWidget):
         self.dose_view.addItem(self.dose_curve)
         self.plot.getPlotItem().legend.addItem(self.dose_curve, "Approx. Dose")
 
+        dash = Qt.PenStyle.DashLine
         self.alert_line = pg.InfiniteLine(
             angle=0,
             pos=settings.warnlevel,
-            pen=pg.mkPen("#f9a825", width=1, style=Qt.DashLine),
+            pen=pg.mkPen("#f9a825", width=1, style=dash),
             label="Alert threshold",
         )
         self.alarm_line = pg.InfiniteLine(
             angle=0,
             pos=settings.alarmlevel,
-            pen=pg.mkPen("#b71c1c", width=1, style=Qt.DashLine),
+            pen=pg.mkPen("#b71c1c", width=1, style=dash),
             label="Alarm threshold",
         )
         self.plot.addItem(self.alert_line)
@@ -121,12 +126,22 @@ class ChartPage(QWidget):
     def _sync_right_view(self) -> None:
         plot_view = self.plot.getPlotItem().vb
         self.dose_view.setGeometry(plot_view.sceneBoundingRect())
-        self.dose_view.linkedViewChanged(plot_view, self.dose_view.XAxis)
+        self.dose_view.linkedViewChanged(plot_view, pg.ViewBox.XAxis)
+
+    def _manual_range_changed(self, *_args) -> None:
+        """Manual pan/zoom takes ownership of the viewport until Live is re-enabled."""
+        if self.live.isChecked():
+            self.live.setChecked(False)
+        self.viewport.capture(*self.plot.viewRange()[0])
 
     def _live_changed(self, checked: bool) -> None:
         self.viewport.live = checked
         if not checked:
             self.viewport.capture(*self.plot.viewRange()[0])
+        elif self.points:
+            target = self.viewport.range_for_refresh(self.points[-1][0])
+            if target is not None:
+                self.plot.setXRange(*target, padding=0)
 
     def range(self) -> tuple[datetime, datetime]:
         return self.start.dateTime().toPython(), self.end.dateTime().toPython()
@@ -142,10 +157,11 @@ class ChartPage(QWidget):
         self.refresh_live()
 
     def reset_view(self) -> None:
-        self.viewport.live = self.live.isChecked()
         self.viewport.start_epoch = None
         self.viewport.end_epoch = None
-        self.plot.autoRange()
+        start, end = self.range()
+        self.viewport.capture(start.timestamp(), end.timestamp())
+        self.plot.setXRange(start.timestamp(), end.timestamp(), padding=0)
 
     def refresh_live(self) -> None:
         if self.live.isChecked():
@@ -196,15 +212,13 @@ class ChartPage(QWidget):
         if not x:
             return
 
-        visible_range = self.plot.viewRange()[0]
         if self.viewport.width is None:
-            self.viewport.capture(visible_range[0], visible_range[1])
-        if self.live.isChecked():
+            self.viewport.capture(start.timestamp(), end.timestamp())
+            self.plot.setXRange(start.timestamp(), end.timestamp(), padding=0)
+        elif self.live.isChecked():
             target = self.viewport.range_for_refresh(x[-1])
             if target is not None:
                 self.plot.setXRange(*target, padding=0)
-        else:
-            self.viewport.capture(*self.plot.viewRange()[0])
 
     def _mouse_moved(self, event) -> None:
         if not self.points:

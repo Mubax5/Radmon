@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -11,6 +11,7 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 
+from PySide6.QtCore import QDateTime
 from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QApplication
 
@@ -74,8 +75,8 @@ def test_report_preview_document_can_render_pdf_without_external_viewer(tmp_path
     app()
     settings = Settings().for_dummy()
     page = ReportsPage(ReportService(FakeRepo(), settings), settings)
-    page.start.setDateTime(datetime(2026, 9, 7, 8, 0, 0))
-    page.end.setDateTime(datetime(2026, 9, 7, 9, 0, 0))
+    page.start.setDateTime(QDateTime.fromString("2026-09-07 08:00:00", "yyyy-MM-dd HH:mm:ss"))
+    page.end.setDateTime(QDateTime.fromString("2026-09-07 09:00:00", "yyyy-MM-dd HH:mm:ss"))
     page.build_preview()
     assert page.preview_ready
 
