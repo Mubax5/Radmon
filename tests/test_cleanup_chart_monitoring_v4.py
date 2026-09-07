@@ -21,11 +21,14 @@ def test_chart_uses_database_values_without_reintegrating_dose() -> None:
     assert x[1] > x[0]
 
 
-def test_chart_visual_selector_supports_multiple_views() -> None:
+def test_chart_visual_selector_supports_operator_friendly_views() -> None:
     source = Path("radmon/admin/chart_page.py").read_text(encoding="utf-8")
-    for label in ("Trend", "Dose Rate Distribution", "Status Distribution"):
+    for label in ("Trend", "Status Pie", "Threshold Progress"):
         assert label in source
     assert "QComboBox" in source
+    assert "QProgressBar" in source
+    assert "QPainter" in source
+    assert "BarGraphItem" not in source
 
 
 def test_reports_default_to_dedicated_report_directory() -> None:
@@ -36,7 +39,7 @@ def test_reports_default_to_dedicated_report_directory() -> None:
     assert "mkdir(parents=True, exist_ok=True)" in source
 
 
-def test_grafana_can_provision_an_existing_local_instance_before_docker_fallback() -> None:
+def test_grafana_can_provision_an_existing_local_instance_before_fallbacks() -> None:
     calls: list[str] = []
     probe_count = {"value": 0}
 
@@ -50,6 +53,7 @@ def test_grafana_can_provision_an_existing_local_instance_before_docker_fallback
         dashboard_probe=probe,
         grafana_health_probe=lambda base: base == "http://localhost:3000",
         api_provisioner=lambda base: calls.append(f"provision:{base}") or True,
+        native_runner=lambda **_: calls.append("native"),
         compose_runner=lambda **_: calls.append("compose"),
         sleeper=lambda _: None,
         attempts=1,
@@ -58,6 +62,7 @@ def test_grafana_can_provision_an_existing_local_instance_before_docker_fallback
     url = bootstrap.ensure()
     assert url.startswith("http://localhost:3000/d/radmon-radiation-monitoring/")
     assert "provision:http://localhost:3000" in calls
+    assert "native" not in calls
     assert "compose" not in calls
 
 
@@ -78,6 +83,7 @@ def test_stale_configured_grafana_still_discovers_local_port_3000() -> None:
         dashboard_probe=dashboard_probe,
         grafana_health_probe=lambda base: base == "http://localhost:3000",
         api_provisioner=provision,
+        native_runner=lambda **_: calls.append("native"),
         compose_runner=lambda **_: calls.append("compose"),
         sleeper=lambda _: None,
         attempts=1,
