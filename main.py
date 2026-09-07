@@ -42,8 +42,7 @@ def main() -> int:
     repository = MariaDBRepository(settings)
     try:
         repository.require_schema()
-        if args.source == "dummy":
-            repository.ensure_dummy_station()
+        repository.ensure_station_catalog()
         station = repository.station_config(settings.serid)
     except Exception as exc:
         QMessageBox.critical(None, "Database tidak siap", str(exc))
