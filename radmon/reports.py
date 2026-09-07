@@ -95,7 +95,14 @@ def _summary_from_mapping(row: dict[str, Any]) -> ReportSummary:
     )
 
 
+def _micro_unit(unit: str | None) -> str:
+    text = str(unit or "µSv/h").strip().replace("μ", "µ")
+    return "µSv/h" if text.lower() == "usv/h" else text
+
+
 class ReportService:
+    PREVIEW_ROW_LIMIT = 250
+
     def __init__(
         self,
         repository: ReportRepository,
@@ -157,7 +164,7 @@ class ReportService:
         start: datetime,
         end: datetime,
         *,
-        limit: int = 1000,
+        limit: int = PREVIEW_ROW_LIMIT,
     ) -> str:
         station = self.repository.station_config(self.settings.serid)
         rows = self.rows(start, end, limit=limit)
@@ -196,20 +203,30 @@ class ReportService:
                 "<tr><td colspan='7'>No measurement data in selected range</td></tr>"
             )
 
+        unit = _micro_unit(getattr(station, "unit", None))
         description = (
-            f"Alert {station.warnlevel:g} µSv/h, Alarm {station.alarmlevel:g} µSv/h"
+            f"Alert {station.warnlevel:g} {unit}, Alarm {station.alarmlevel:g} {unit}"
         )
+        preview_note = ""
+        if summary.sample_count > len(rows):
+            preview_note = (
+                f'<div class="note">Preview menampilkan {len(rows):,} dari '
+                f'{summary.sample_count:,} pengukuran. Summary tetap dihitung dari seluruh range.</div>'
+            )
+
         return f"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <style>
-body {{ font-family: Arial, sans-serif; color: #222; font-size: 10pt; margin: 18px; }}
-h1, h2 {{ text-align: center; margin: 4px; }}
-table {{ width: 100%; border-collapse: collapse; margin: 10px 0 18px; }}
-th, td {{ border: 1px solid #777; padding: 5px; text-align: center; }}
-th {{ background: #efefef; }}
-.range {{ text-align: center; font-weight: bold; margin: 4px 0 10px; }}
+body {{ font-family: Arial, sans-serif; color: #222; font-size: 10pt; margin: 2px; padding: 0; }}
+h1, h2 {{ text-align: center; margin: 4px 0; }}
+hr {{ margin: 8px 0 10px; }}
+table {{ border-collapse: collapse; margin: 8px 0 16px; }}
+th, td {{ border: 1px solid #777; padding: 5px 4px; text-align: center; }}
+th {{ background: #efefef; font-weight: bold; }}
+.range {{ text-align: center; font-weight: bold; margin: 4px 0 8px; }}
+.note {{ text-align: center; color: #555; font-size: 9pt; margin: 2px 0 8px; }}
 </style>
 </head>
 <body>
@@ -217,14 +234,15 @@ th {{ background: #efefef; }}
 <h2>Direktorat Pengelolaan Fasilitas Ketenaganukliran</h2>
 <hr>
 <h2>Summary</h2>
-<table>
+<table width="100%" align="center" cellspacing="0" cellpadding="0">
 <tr><th>No.</th><th>Name</th><th>Location</th><th>Description</th><th>First Measurement</th><th>Last Measurement</th><th>Dose rate (Average/Max)</th></tr>
 <tr><td>1</td><td>{escape(station.room)}</td><td>{escape(station.location)}</td><td>{escape(description)}</td><td>{self._dt(summary.first_measurement)}</td><td>{self._dt(summary.last_measurement)}</td><td>{self._fmt(summary.average)} / {self._fmt(summary.maximum)}</td></tr>
 </table>
 <h2>Dose rate and Approx. Dose</h2>
 <div class="range">From {start:%Y-%m-%d %H:%M:%S} to {end:%Y-%m-%d %H:%M:%S}</div>
-<table>
-<tr><th>No.</th><th>Tag</th><th>Name</th><th>Location</th><th>Measurement</th><th>Dose rate</th><th>Approx. Dose</th></tr>
+{preview_note}
+<table width="100%" align="center" cellspacing="0" cellpadding="0">
+<tr><th>No.</th><th>Tag</th><th>Name</th><th>Location</th><th>Measurement</th><th>Dose rate (µSv/h)</th><th>Approx. Dose (µSv)</th></tr>
 {''.join(detail_rows)}
 </table>
 </body>
@@ -307,7 +325,7 @@ th {{ background: #efefef; }}
         summary_table.setStyle(self._table_style())
         story.extend([summary_table, Spacer(1, 6 * mm)])
 
-        measurement_data = [["No", "Time", "Dose rate", "Prev interval", "Stat"]]
+        measurement_data = [["No", "Time", "Dose rate (µSv/h)", "Prev interval", "Stat"]]
         for index, row in enumerate(rows, start=1):
             measurement_data.append(
                 [
