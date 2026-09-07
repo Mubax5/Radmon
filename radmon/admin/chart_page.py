@@ -34,6 +34,9 @@ class ChartPage(QWidget):
         for widget in (self.start, self.end):
             widget.setCalendarPopup(True)
             widget.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.live_window_seconds = max(
+            2, self.start.dateTime().secsTo(self.end.dateTime())
+        )
 
         self.live = QCheckBox("Live")
         self.live.setChecked(True)
@@ -138,7 +141,11 @@ class ChartPage(QWidget):
         self.viewport.live = checked
         if not checked:
             self.viewport.capture(*self.plot.viewRange()[0])
-        elif self.points:
+            return
+        self.live_window_seconds = max(
+            2, self.start.dateTime().secsTo(self.end.dateTime())
+        )
+        if self.points:
             target = self.viewport.range_for_refresh(self.points[-1][0])
             if target is not None:
                 self.plot.setXRange(*target, padding=0)
@@ -165,7 +172,9 @@ class ChartPage(QWidget):
 
     def refresh_live(self) -> None:
         if self.live.isChecked():
-            self.end.setDateTime(QDateTime.currentDateTime())
+            now = QDateTime.currentDateTime()
+            self.end.setDateTime(now)
+            self.start.setDateTime(now.addSecs(-self.live_window_seconds))
         start, end = self.range()
         try:
             rows = self.repository.measurement_history(

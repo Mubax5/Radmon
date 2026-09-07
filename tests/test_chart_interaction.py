@@ -35,4 +35,6 @@ def test_chart_page_uses_pyqtgraph_crosshair_dual_axes_and_threshold_lines():
     assert "setXLink" in source
     assert "Alert threshold" in source
     assert "Alarm threshold" in source
+    assert "live_window_seconds" in source
+    assert "self.start.setDateTime(now.addSecs(-self.live_window_seconds))" in source
     assert "enableAutoRange" not in source.split("def refresh_live", 1)[1]
