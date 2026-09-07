@@ -61,5 +61,39 @@ def test_grafana_can_provision_an_existing_local_instance_before_docker_fallback
     assert "compose" not in calls
 
 
+def test_stale_configured_grafana_still_discovers_local_port_3000() -> None:
+    calls: list[str] = []
+    available = {"provisioned": False}
+
+    def dashboard_probe(base: str) -> bool:
+        return base == "http://localhost:3000" and available["provisioned"]
+
+    def provision(base: str) -> bool:
+        calls.append(f"provision:{base}")
+        available["provisioned"] = True
+        return True
+
+    bootstrap = GrafanaBootstrap(
+        Settings(grafana_url="http://localhost:3300/d/radmon-radiation-monitoring/radiation-monitoring"),
+        dashboard_probe=dashboard_probe,
+        grafana_health_probe=lambda base: base == "http://localhost:3000",
+        api_provisioner=provision,
+        compose_runner=lambda **_: calls.append("compose"),
+        sleeper=lambda _: None,
+        attempts=1,
+    )
+
+    url = bootstrap.ensure()
+    assert url.startswith("http://localhost:3000/d/radmon-radiation-monitoring/")
+    assert calls == ["provision:http://localhost:3000"]
+
+
+def test_dummy_defaults_to_normal_readings_but_keeps_mode_configurable() -> None:
+    settings = Settings()
+    assert settings.dummy_mode == "normal"
+    source = Path("radmon/runtime.py").read_text(encoding="utf-8")
+    assert "self.settings.dummy_mode" in source
+
+
 def test_internal_planning_artifacts_are_not_kept_in_repo() -> None:
     assert not Path("docs/superpowers").exists()
