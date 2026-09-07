@@ -2,7 +2,7 @@ from pathlib import Path
 
 from radmon.config import Settings
 from radmon.grafana_bootstrap import GrafanaBootstrap
-from radmon.grafana_tv import PAGE_UIDS, PLAYLIST_UID
+from radmon.grafana_tv import DASHBOARD_UIDS, OPERATIONS_PAGE_UIDS, PAGE_UIDS, PLAYLIST_UID
 
 
 def test_bootstrap_requires_playlist_and_returns_playlist_kiosk_url(tmp_path):
@@ -40,7 +40,7 @@ def test_bootstrap_requires_playlist_and_returns_playlist_kiosk_url(tmp_path):
     assert "kiosk=1" in url and "autofitpanels" in url
 
 
-def test_api_provisioner_upserts_eight_dashboards_and_playlist(tmp_path):
+def test_api_provisioner_upserts_shared_pages_and_eight_operations_variants(tmp_path):
     bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
     calls = []
 
@@ -55,13 +55,18 @@ def test_api_provisioner_upserts_eight_dashboards_and_playlist(tmp_path):
     bootstrap._request_json = request
     assert bootstrap._provision_via_api("http://localhost:3000") is True
     dashboard_posts = [call for call in calls if call[0] == "POST" and call[1].endswith("/api/dashboards/db")]
-    assert len(dashboard_posts) == 8
-    assert [call[2]["dashboard"]["uid"] for call in dashboard_posts] == list(PAGE_UIDS)
+    assert len(dashboard_posts) == 10
+    assert [call[2]["dashboard"]["uid"] for call in dashboard_posts] == list(DASHBOARD_UIDS)
+
     playlist_posts = [call for call in calls if call[0] == "POST" and "/apis/playlist.grafana.app/" in call[1]]
     assert len(playlist_posts) == 1
-    assert playlist_posts[0][2]["metadata"]["name"] == PLAYLIST_UID
-    assert playlist_posts[0][2]["spec"]["interval"] == "10s"
-    assert len(playlist_posts[0][2]["spec"]["items"]) == 8
+    playlist = playlist_posts[0][2]
+    assert playlist["metadata"]["name"] == PLAYLIST_UID
+    assert playlist["spec"]["interval"] == "10s"
+    values = [item["value"] for item in playlist["spec"]["items"]]
+    assert len(values) == 24
+    for cycle, operations_uid in enumerate(OPERATIONS_PAGE_UIDS):
+        assert values[cycle * 3 : cycle * 3 + 3] == [PAGE_UIDS[0], PAGE_UIDS[1], operations_uid]
 
 
 def test_api_provisioner_updates_existing_playlist_with_resource_version(tmp_path):
