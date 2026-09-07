@@ -43,10 +43,11 @@ class Settings:
     sync_batch_size: int = 100
     sync_timeout: float = 10.0
     sync_initial_lookback_hours: int = 24
-    grafana_url: str = "http://localhost:3300/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv"
+    grafana_url: str = "http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv"
     grafana_fallback_port: int = 3300
     grafana_user: str = "admin"
     grafana_password: str = "admin"
+    report_dir: Path = Path("!REPORT!")
     runtime_dir: Path = Path("runtime")
     log_dir: Path = Path("logs")
     single_instance_port: int = 47652
@@ -84,23 +85,18 @@ class Settings:
             sync_initial_lookback_hours=int(get("RADMON_SYNC_INITIAL_LOOKBACK_HOURS", "24")),
             grafana_url=get(
                 "RADMON_GRAFANA_URL",
-                "http://localhost:3300/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv",
+                "http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv",
             ),
             grafana_fallback_port=int(get("RADMON_GRAFANA_PORT", "3300")),
             grafana_user=get("RADMON_GRAFANA_USER", "admin"),
             grafana_password=get("RADMON_GRAFANA_PASSWORD", "admin"),
+            report_dir=Path(get("RADMON_REPORT_DIR", "!REPORT!")),
             runtime_dir=Path(get("RADMON_RUNTIME_DIR", "runtime")),
             log_dir=Path(get("RADMON_LOG_DIR", "logs")),
             single_instance_port=int(get("RADMON_SINGLE_INSTANCE_PORT", "47652")),
         )
 
     def detector_bindings(self) -> list[tuple[int, str]]:
-        """Return configured detector ID -> serial port bindings.
-
-        `RADMON_DETECTORS` accepts entries separated by semicolons, for example
-        `5201@COM15;5202@COM16`. If it is empty the legacy single detector
-        fields remain the source of truth.
-        """
         raw = self.detectors.strip()
         if not raw:
             return [(self.serid, self.serial_port.strip())]
@@ -110,9 +106,7 @@ class Settings:
         for entry in raw.split(";"):
             item = entry.strip()
             if not item or item.count("@") != 1:
-                raise ValueError(
-                    "RADMON_DETECTORS harus berbentuk SERID@PORT;SERID@PORT"
-                )
+                raise ValueError("RADMON_DETECTORS harus berbentuk SERID@PORT;SERID@PORT")
             serid_text, port = (part.strip() for part in item.split("@", 1))
             if not serid_text.isdigit() or int(serid_text) <= 0 or not port:
                 raise ValueError(f"Binding detector tidak valid: {item!r}")
