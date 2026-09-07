@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 
 from .config import Settings
 from .grafana_tv import (
+    DASHBOARD_UIDS,
     PAGE_UIDS,
     PLAYLIST_UID,
     build_dashboard_payloads,
@@ -81,6 +82,16 @@ class GrafanaBootstrap:
         local_default = "http://localhost:3000"
         if local_default not in candidates:
             candidates.append(local_default)
+
+        # Previous RadMon launches can leave a correctly configured native Grafana
+        # running on the fallback range. Reuse it before spawning another server.
+        for port in range(
+            self.settings.grafana_fallback_port,
+            self.settings.grafana_fallback_port + 20,
+        ):
+            candidate = f"http://localhost:{port}"
+            if candidate not in candidates:
+                candidates.append(candidate)
         return candidates
 
     def _ready(self, base_url: str) -> bool:
@@ -426,7 +437,7 @@ class GrafanaBootstrap:
     def _probe_dashboard(self, base_url: str) -> bool:
         base = base_url.rstrip("/")
         try:
-            for uid in PAGE_UIDS:
+            for uid in DASHBOARD_UIDS:
                 dashboard = self._request_json(f"{base}/api/dashboards/uid/{uid}")
                 if not (
                     isinstance(dashboard, dict)
@@ -447,10 +458,12 @@ class GrafanaBootstrap:
             playlist = self._request_json(endpoint)
             spec = playlist.get("spec", {}) if isinstance(playlist, dict) else {}
             items = spec.get("items", []) if isinstance(spec, dict) else []
+            expected_items = build_playlist_payload()["spec"]["items"]
             return bool(
                 playlist.get("metadata", {}).get("name") == PLAYLIST_UID
                 and spec.get("interval") == "10s"
-                and [item.get("value") for item in items] == list(PAGE_UIDS)
+                and [item.get("value") for item in items]
+                == [item.get("value") for item in expected_items]
             )
         except Exception:
             return False
