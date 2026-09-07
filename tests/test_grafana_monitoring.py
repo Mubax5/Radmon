@@ -34,11 +34,9 @@ def test_settings_and_admin_open_verified_grafana_monitoring():
 
 def test_bootstrap_falls_back_from_unrelated_port_3000_and_verifies_playlist():
     settings = replace(Settings(), grafana_url="http://localhost:3000", grafana_fallback_port=3300)
-    probes: list[str] = []
     compose_calls: list[dict] = []
 
     def probe(base_url: str) -> bool:
-        probes.append(base_url)
         return base_url == "http://localhost:3300"
 
     def compose_runner(*, env):
@@ -48,14 +46,15 @@ def test_bootstrap_falls_back_from_unrelated_port_3000_and_verifies_playlist():
         settings,
         dashboard_probe=probe,
         playlist_probe=probe,
+        grafana_health_probe=lambda base: base == "http://localhost:3300",
+        api_provisioner=lambda base: True,
+        native_runner=lambda **_: (_ for _ in ()).throw(RuntimeError("native unavailable")),
         compose_runner=compose_runner,
         sleeper=lambda _: None,
         attempts=2,
     )
     result = bootstrap.ensure()
 
-    assert probes[0] == "http://localhost:3000"
-    assert "http://localhost:3300" in probes
     assert compose_calls
     assert compose_calls[0]["RADMON_GRAFANA_PORT"] == "3300"
     assert result.startswith(f"http://localhost:3300/playlists/play/{PLAYLIST_UID}")

@@ -42,19 +42,23 @@ def test_reports_default_to_dedicated_report_directory() -> None:
 
 def test_grafana_can_provision_an_existing_local_instance_before_fallbacks() -> None:
     calls: list[str] = []
-    probe_count = {"value": 0}
+    ready = {"value": False}
 
     def probe(base: str) -> bool:
-        probe_count["value"] += 1
         calls.append(f"probe:{base}")
-        return probe_count["value"] >= 3
+        return base == "http://localhost:3000" and ready["value"]
+
+    def provision(base: str) -> bool:
+        calls.append(f"provision:{base}")
+        ready["value"] = True
+        return True
 
     bootstrap = GrafanaBootstrap(
         Settings(grafana_url="http://localhost:3000"),
         dashboard_probe=probe,
         playlist_probe=probe,
         grafana_health_probe=lambda base: base == "http://localhost:3000",
-        api_provisioner=lambda base: calls.append(f"provision:{base}") or True,
+        api_provisioner=provision,
         native_runner=lambda **_: calls.append("native"),
         compose_runner=lambda **_: calls.append("compose"),
         sleeper=lambda _: None,
