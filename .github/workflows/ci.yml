@@ -33,12 +33,14 @@ jobs:
           import yaml
           from radmon.grafana_tv import build_dashboard_payloads, build_playlist_payload
           dashboards = build_dashboard_payloads()
-          assert len(dashboards) == 3
+          assert len(dashboards) == 8
           for dashboard in dashboards:
               json.dumps(dashboard, ensure_ascii=False)
               assert dashboard['refresh'] == '2s'
+              assert max(panel['gridPos']['y'] + panel['gridPos']['h'] for panel in dashboard['panels']) <= 24
           playlist = build_playlist_payload()
           assert playlist['spec']['interval'] == '10s'
+          assert len(playlist['spec']['items']) == 8
           for path in Path('grafana').rglob('*.yaml'):
               yaml.safe_load(path.read_text())
           for path in Path('grafana').rglob('*.yml'):
