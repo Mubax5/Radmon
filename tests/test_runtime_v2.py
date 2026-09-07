@@ -33,13 +33,17 @@ def test_both_launchers_start_the_same_single_process_without_cmd_fanout():
         assert "run_admin.bat" not in text
 
 
-def test_default_runtime_matches_user_database_but_dummy_overrides_to_5202(monkeypatch):
+def test_default_runtime_matches_station_catalog_and_dummy_selects_5202(monkeypatch):
     for key in list(__import__("os").environ):
         if key.startswith("RADMON_"):
             monkeypatch.delenv(key, raising=False)
     settings = Settings.from_env()
     assert settings.serid == 5201
-    assert settings.room == "R. Lab Iradiasi"
+    assert settings.room == "IS-1"
+    assert settings.location == "Gd.52"
+    assert settings.warnlevel == 23.0
+    assert settings.alarmlevel == 25.0
+    assert settings.unit == "µSv/h"
     assert settings.refresh_interval == 2.0
     assert settings.sync_enabled is False
 
@@ -47,6 +51,8 @@ def test_default_runtime_matches_user_database_but_dummy_overrides_to_5202(monke
     assert dummy.serid == 5202
     assert dummy.building == "52"
     assert dummy.room == "IS-1 Koridor"
+    assert dummy.location == "Gd.52"
+    assert dummy.unit == "µSv/h"
     assert dummy.sample_interval == 2.0
 
 

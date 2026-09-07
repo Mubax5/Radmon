@@ -39,7 +39,15 @@ if not exist ".env" copy /Y ".env.example" ".env" >nul
 exit /b 0
 
 :grafana
-where docker >nul 2>&1 || exit /b 0
-docker info >nul 2>&1 || exit /b 0
-docker compose --env-file ".env" -f "grafana\docker-compose.yml" up -d >nul 2>&1
+where docker >nul 2>&1 || (
+  echo [RadMon] Docker belum tersedia. Admin akan mencoba Grafana auto-setup lagi saat Monitoring dibuka.
+  exit /b 0
+)
+docker info >nul 2>&1 || (
+  echo [RadMon] Docker Desktop belum aktif. Admin tetap dijalankan.
+  exit /b 0
+)
+if not defined RADMON_GRAFANA_PORT set RADMON_GRAFANA_PORT=3300
+docker compose --env-file ".env" -f "grafana\docker-compose.yml" up -d
+if errorlevel 1 echo [RadMon] Grafana belum berhasil start; Admin akan menampilkan status setup.
 exit /b 0

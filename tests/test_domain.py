@@ -27,20 +27,27 @@ def test_status_alarm_alert_normal_offline():
     assert classify_status(None, None, now, 8, 10, 5) is MonitorStatus.OFFLINE
 
 
-def test_settings_defaults_match_user_database_and_dummy_profile(monkeypatch):
+def test_settings_defaults_match_current_is1_station_and_dummy_profile(monkeypatch):
     for key in list(__import__("os").environ):
         if key.startswith("RADMON_"):
             monkeypatch.delenv(key, raising=False)
     settings = Settings.from_env()
     assert settings.serial_port == "COM15"
+    assert settings.detectors == ""
     assert settings.baudrate == 2400
     assert settings.serid == 5201
     assert settings.building == "52"
-    assert settings.room == "R. Lab Iradiasi"
+    assert settings.room == "IS-1"
+    assert settings.location == "Gd.52"
     assert settings.sample_interval == 2.0
     assert settings.refresh_interval == 2.0
-    assert settings.warnlevel == 8.0
-    assert settings.alarmlevel == 10.0
+    assert settings.warnlevel == 23.0
+    assert settings.alarmlevel == 25.0
+    assert settings.unit == "µSv/h"
     dummy = settings.for_dummy()
     assert dummy.serid == 5202
     assert dummy.room == "IS-1 Koridor"
+    assert dummy.location == "Gd.52"
+    assert dummy.warnlevel == 8.0
+    assert dummy.alarmlevel == 10.0
+    assert dummy.unit == "µSv/h"

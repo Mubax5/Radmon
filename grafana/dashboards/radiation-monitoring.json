@@ -5,10 +5,17 @@
   "id": null,
   "panels": [
     {
+      "id": 10,
+      "type": "text",
+      "title": "",
+      "gridPos": {"h": 2, "w": 24, "x": 0, "y": 0},
+      "options": {"mode": "html", "content": "<div style='text-align:center;font-size:26px;font-weight:700'>REAL TIME DOSE RATE MONITORING SYSTEM</div>"}
+    },
+    {
       "id": 1,
       "type": "stat",
-      "title": "Notifikasi Laju Dosis",
-      "gridPos": {"h": 3, "w": 24, "x": 0, "y": 0},
+      "title": "Status Monitoring",
+      "gridPos": {"h": 3, "w": 24, "x": 0, "y": 2},
       "datasource": {"type": "mysql", "uid": "ipradmon-mysql"},
       "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT CASE WHEN COUNT(r.serid)=0 THEN 'NO DATA' WHEN SUM(CASE WHEN r.doserate >= d.alarmlevel THEN 1 ELSE 0 END)>0 THEN 'ALARM' WHEN SUM(CASE WHEN r.doserate >= d.warnlevel THEN 1 ELSE 0 END)>0 THEN 'ALERT' ELSE 'OK' END AS `Current Status`, COALESCE((SELECT CONCAT(a.`type`, ' · ', COALESCE(a.msg, '')) FROM alarm a WHERE CAST(a.serid AS CHAR) REGEXP '^(${station:regex})$' ORDER BY a.dtom DESC, a.alarmid DESC LIMIT 1), 'No alarm history') AS `Last Alarm Event` FROM recent r JOIN device d ON d.serid=r.serid WHERE CAST(r.serid AS CHAR) REGEXP '^(${station:regex})$'"}],
       "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"OK": {"text": "OK", "color": "green"}, "ALERT": {"text": "ALERT", "color": "orange"}, "ALARM": {"text": "ALARM", "color": "red"}, "NO DATA": {"text": "NO DATA", "color": "purple"}}}]}, "overrides": []},
@@ -17,15 +24,15 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Laju dosis · ${station:text}",
+      "title": "Laju dosis · [${station}] ${station:text}",
       "repeat": "station",
       "repeatDirection": "h",
-      "maxPerRow": 5,
-      "gridPos": {"h": 4, "w": 5, "x": 0, "y": 3},
+      "maxPerRow": 3,
+      "gridPos": {"h": 5, "w": 8, "x": 0, "y": 5},
       "datasource": {"type": "mysql", "uid": "ipradmon-mysql"},
       "targets": [{"refId": "A", "format": "time_series", "rawSql": "SELECT UNIX_TIMESTAMP(m.dtom) AS time, m.doserate AS value FROM measurement m WHERE m.serid=$station AND $__timeFilter(m.dtom) ORDER BY m.dtom"}],
-      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}},
-      "fieldConfig": {"defaults": {"unit": "suffix: µSv/h", "decimals": 3}, "overrides": []}
+      "options": {"colorMode": "value", "graphMode": "area", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}},
+      "fieldConfig": {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 8}, {"color": "red", "value": 10}]}}, "overrides": []}
     },
     {
       "id": 3,
@@ -33,31 +40,38 @@
       "title": "Waktu pengukuran · ${station:text}",
       "repeat": "station",
       "repeatDirection": "h",
-      "maxPerRow": 5,
-      "gridPos": {"h": 3, "w": 5, "x": 0, "y": 7},
+      "maxPerRow": 3,
+      "gridPos": {"h": 2, "w": 8, "x": 0, "y": 10},
       "datasource": {"type": "mysql", "uid": "ipradmon-mysql"},
-      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT DATE_FORMAT(MAX(dtom),'%H:%i:%s') AS value FROM measurement WHERE serid=$station"}],
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT DATE_FORMAT(MAX(dtom),'%Y-%m-%d %H:%i:%s') AS value FROM measurement WHERE serid=$station"}],
       "options": {"colorMode": "none", "graphMode": "none", "textMode": "value", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
     },
     {
       "id": 4,
       "type": "timeseries",
       "title": "Dose Rate Monitoring",
-      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 10},
+      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 12},
       "datasource": {"type": "mysql", "uid": "ipradmon-mysql"},
       "targets": [{"refId": "A", "format": "time_series", "rawSql": "SELECT UNIX_TIMESTAMP(m.dtom) AS time, CONCAT(d.name,' (',d.location,')') AS metric, m.doserate AS value FROM measurement m JOIN device d ON d.serid=m.serid WHERE CAST(m.serid AS CHAR) REGEXP '^(${station:regex})$' AND $__timeFilter(m.dtom) ORDER BY m.dtom"}],
       "fieldConfig": {"defaults": {"unit": "suffix: µSv/h", "decimals": 3}, "overrides": []},
       "options": {"legend": {"displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "id": 11,
+      "type": "text",
+      "title": "",
+      "gridPos": {"h": 2, "w": 24, "x": 0, "y": 22},
+      "options": {"mode": "html", "content": "<div style='text-align:center;font-size:16px;font-weight:600'>Instalasi Pengelolaan Limbah Radioaktif<br>Direktorat Pengelolaan Fasilitas Ketenaganukliran</div>"}
     }
   ],
   "refresh": "2s",
   "schemaVersion": 42,
-  "tags": ["radiation", "monitoring"],
+  "tags": ["radiation", "monitoring", "dpfk"],
   "templating": {"list": [{"name": "station", "label": "Station", "type": "query", "datasource": {"type": "mysql", "uid": "ipradmon-mysql"}, "query": "SELECT CAST(serid AS CHAR) AS __value, CONCAT(name,' (',location,')') AS __text FROM device ORDER BY serid", "multi": true, "includeAll": true, "refresh": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}}]},
   "time": {"from": "now-3h", "to": "now"},
   "timepicker": {"refresh_intervals": ["2s", "5s", "10s", "30s", "1m", "5m"]},
   "timezone": "browser",
   "title": "Radiation Monitoring",
   "uid": "radmon-radiation-monitoring",
-  "version": 1
+  "version": 2
 }

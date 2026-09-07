@@ -35,6 +35,45 @@ def test_preview_html_matches_dpfk_report_sections():
     assert "0.150000" in html
 
 
+def test_preview_layout_is_centered_full_width_and_uses_micro_sievert():
+    start = datetime(2026, 9, 7, 8, 0, 0)
+    end = start + timedelta(hours=1)
+    html = ReportService(FakeRepo(), Settings().for_dummy()).preview_html(start, end)
+    assert html.count('width="100%"') >= 2
+    assert html.count('align="center"') >= 2
+    assert "Dose rate (µSv/h)" in html
+    assert "Approx. Dose (µSv)" in html
+    assert "Alert 8 µSv/h, Alarm 10 µSv/h" in html
+
+
+def test_preview_detail_query_is_bounded_for_ui_responsiveness():
+    class LimitRepo(FakeRepo):
+        def __init__(self):
+            self.last_limit = None
+
+        def measurement_history(self, start, end, *, serid=None, limit=5000):
+            self.last_limit = limit
+            return super().measurement_history(start, end, serid=serid, limit=limit)
+
+    start = datetime(2026, 9, 7, 8, 0, 0)
+    repo = LimitRepo()
+    ReportService(repo, Settings().for_dummy()).preview_html(start, start + timedelta(days=1))
+    assert repo.last_limit == 250
+
+
+def test_report_live_refresh_does_not_rebuild_preview_every_two_seconds():
+    source = (ROOT / "radmon/admin/reports_page.py").read_text(encoding="utf-8")
+    refresh_body = source.split("def refresh_live", 1)[1].split("\n    def ", 1)[0]
+    assert "setDateTime" in refresh_body
+    assert "build_preview()" not in refresh_body
+
+
+def test_report_preview_minimizes_document_margin_for_edge_to_edge_layout():
+    source = (ROOT / "radmon/admin/reports_page.py").read_text(encoding="utf-8")
+    assert "setDocumentMargin" in source
+    assert "setContentsMargins(0, 0, 0, 0)" in source
+
+
 def test_reports_page_is_preview_first_and_prints_same_document():
     source = (ROOT / "radmon/admin/reports_page.py").read_text(encoding="utf-8")
     assert "QTextBrowser" in source
