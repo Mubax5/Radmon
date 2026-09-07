@@ -4,7 +4,14 @@ from pathlib import Path
 
 from radmon.config import Settings
 from radmon.grafana_bootstrap import GrafanaBootstrap
-from radmon.grafana_tv import PAGE_UIDS, PLAYLIST_UID, build_dashboard_payloads
+from radmon.grafana_tv import (
+    DASHBOARD_UIDS,
+    OPERATIONS_PAGE_UIDS,
+    PAGE_UIDS,
+    PLAYLIST_UID,
+    build_dashboard_payloads,
+    build_playlist_payload,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -78,14 +85,24 @@ def test_bootstrap_refuses_to_return_unverified_playlist():
         raise AssertionError("unverified Grafana playlist must not be returned")
 
 
-def test_grafana_tv_pages_refresh_every_two_seconds_and_use_existing_schema_only():
+def test_grafana_tv_uses_three_logical_pages_with_eight_operations_variants():
     dashboards = build_dashboard_payloads()
-    assert len(dashboards) == 8
-    assert [dashboard["uid"] for dashboard in dashboards] == list(PAGE_UIDS)
+    assert len(PAGE_UIDS) == 3
+    assert len(OPERATIONS_PAGE_UIDS) == 8
+    assert len(dashboards) == 10
+    assert [dashboard["uid"] for dashboard in dashboards] == list(DASHBOARD_UIDS)
     for dashboard in dashboards:
         assert dashboard["refresh"] == "2s"
         assert dashboard["timezone"] == "browser"
         assert dashboard["templating"]["list"] == []
+
+    playlist_values = [item["value"] for item in build_playlist_payload()["spec"]["items"]]
+    assert len(playlist_values) == 24
+    for cycle in range(8):
+        assert playlist_values[cycle * 3] == PAGE_UIDS[0]
+        assert playlist_values[cycle * 3 + 1] == PAGE_UIDS[1]
+        assert playlist_values[cycle * 3 + 2] == OPERATIONS_PAGE_UIDS[cycle]
+
     payload = json.dumps(dashboards, ensure_ascii=False)
     for table in ("device", "measurement", "alarm"):
         assert table in payload
