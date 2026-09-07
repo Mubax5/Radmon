@@ -26,19 +26,13 @@ class SerialCollector:
             serid=self.settings.serid,
             measured_at=when,
             dose_rate=dose_rate,
-            previnterval=max(1, int(round(self.settings.sample_interval))),
+            previnterval=2,
             stat=0,
         )
-        self.repository.insert_measurement(measurement, raw=raw, queue_sync=True)
+        self.repository.insert_measurement(measurement, raw=raw)
         if self.alarm_service is not None:
             self.alarm_service.evaluate(measurement)
-        LOGGER.info(
-            "measurement serid=%s time=%s dose=%.4f %s",
-            measurement.serid,
-            measurement.measured_at.isoformat(sep=" "),
-            measurement.dose_rate,
-            self.settings.unit,
-        )
+        LOGGER.info("measurement serid=%s time=%s dose=%.4f %s", measurement.serid, measurement.measured_at.isoformat(sep=" "), measurement.dose_rate, self.settings.unit)
         return measurement
 
     def _open_serial(self):
@@ -49,22 +43,18 @@ class SerialCollector:
             bytesize=8,
             parity="N",
             stopbits=1,
-            timeout=self.settings.serial_timeout,
+            timeout=min(self.settings.serial_timeout, 2.0),
         )
 
-    def run_forever(self) -> None:
-        LOGGER.info(
-            "starting detector collector port=%s baud=%s station=%s",
-            self.settings.serial_port,
-            self.settings.baudrate,
-            self.settings.station_label,
-        )
-        while True:
+    def run_forever(self, stop_event: Any | None = None) -> None:
+        stop = stop_event
+        LOGGER.info("starting detector collector port=%s baud=%s station=%s", self.settings.serial_port, self.settings.baudrate, self.settings.station_label)
+        while stop is None or not stop.is_set():
             serial_port = None
             try:
                 serial_port = self._open_serial()
                 LOGGER.info("serial connected: %s", self.settings.serial_port)
-                while True:
+                while stop is None or not stop.is_set():
                     raw_bytes = serial_port.readline()
                     if not raw_bytes:
                         continue
@@ -76,11 +66,13 @@ class SerialCollector:
                     except ValueError:
                         LOGGER.warning("invalid detector raw line: %r", raw)
             except KeyboardInterrupt:
-                LOGGER.info("collector stopped by operator")
                 return
             except Exception as exc:
                 LOGGER.exception("collector connection/acquisition error: %s", exc)
-                time.sleep(3.0)
+                if stop is not None:
+                    stop.wait(2.0)
+                else:
+                    time.sleep(2.0)
             finally:
                 if serial_port is not None:
                     try:

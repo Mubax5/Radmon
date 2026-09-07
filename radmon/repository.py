@@ -2,11 +2,22 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 from .config import Settings
 from .db import connect_mariadb
 from .models import LatestReading, Measurement, StationConfig
+
+
+REQUIRED_SCHEMA = {
+    "device": {"serid", "name", "location", "maxidlemin", "warnlevel", "alarmlevel", "unit", "audiopath", "hwaddress", "hwtype", "description"},
+    "measurement": {"serid", "dtom", "doserate", "dose", "previnterval", "stat"},
+    "recent": {"serid", "dtom", "doserate", "dose", "lastrate", "minrate", "maxrate", "avgrate", "lastdose", "mindose", "maxdose", "avgdose", "firstmea", "lastmea", "lastmeasec", "meacount"},
+    "alarm": {"alarmid", "serid", "dtom", "type", "msg"},
+    "applog": {"logid", "dtom", "msg"},
+    "news": {"newsid", "dtom", "title", "content"},
+    "rawdata": {"rawid", "serid", "dtom", "raw"},
+}
 
 
 def make_sample_key(measurement: Measurement) -> str:
@@ -23,6 +34,59 @@ def _row_get(row: Any, key: str, index: int) -> Any:
     if isinstance(row, dict):
         return row.get(key)
     return row[index]
+
+
+def upsert_recent(
+    cursor: Any,
+    measurement: Measurement,
+    *,
+    dose: float,
+    previous_time: datetime | None,
+    previous_rate: float | None,
+    previous_dose: float | None,
+    interval: int,
+) -> None:
+    cursor.execute(
+        """
+INSERT INTO recent
+  (serid, dtom, doserate, dose, lastrate, minrate, maxrate, avgrate,
+   lastdose, mindose, maxdose, avgdose, firstmea, lastmea, lastmeasec, meacount)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+ON DUPLICATE KEY UPDATE
+  lastrate = doserate,
+  lastdose = dose,
+  dtom = VALUES(dtom),
+  doserate = VALUES(doserate),
+  dose = VALUES(dose),
+  minrate = LEAST(COALESCE(minrate, VALUES(doserate)), VALUES(doserate)),
+  maxrate = GREATEST(COALESCE(maxrate, VALUES(doserate)), VALUES(doserate)),
+  avgrate = ((COALESCE(avgrate, 0) * COALESCE(meacount, 0)) + VALUES(doserate)) / (COALESCE(meacount, 0) + 1),
+  mindose = LEAST(COALESCE(mindose, VALUES(dose)), VALUES(dose)),
+  maxdose = GREATEST(COALESCE(maxdose, VALUES(dose)), VALUES(dose)),
+  avgdose = ((COALESCE(avgdose, 0) * COALESCE(meacount, 0)) + VALUES(dose)) / (COALESCE(meacount, 0) + 1),
+  firstmea = COALESCE(firstmea, VALUES(firstmea)),
+  lastmea = VALUES(lastmea),
+  lastmeasec = VALUES(lastmeasec),
+  meacount = COALESCE(meacount, 0) + 1
+""",
+        (
+            measurement.serid,
+            measurement.measured_at,
+            measurement.dose_rate,
+            dose,
+            float(previous_rate) if previous_rate is not None else measurement.dose_rate,
+            measurement.dose_rate,
+            measurement.dose_rate,
+            measurement.dose_rate,
+            float(previous_dose) if previous_dose is not None else 0.0,
+            dose,
+            dose,
+            dose,
+            previous_time if isinstance(previous_time, datetime) else measurement.measured_at,
+            measurement.measured_at,
+            interval,
+        ),
+    )
 
 
 class MariaDBRepository:
@@ -46,43 +110,175 @@ class MariaDBRepository:
         except Exception:
             return False
 
+    def validate_schema(self) -> list[str]:
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+SELECT TABLE_NAME, COLUMN_NAME
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = ?
+  AND TABLE_NAME IN ('device','measurement','recent','alarm','applog','news','rawdata')
+""",
+                    (self.settings.db_name,),
+                )
+                rows = cursor.fetchall()
+        finally:
+            connection.close()
+        actual: dict[str, set[str]] = {}
+        for row in rows:
+            table = str(_row_get(row, "TABLE_NAME", 0)).lower()
+            column = str(_row_get(row, "COLUMN_NAME", 1)).lower()
+            actual.setdefault(table, set()).add(column)
+        missing: list[str] = []
+        for table, expected in REQUIRED_SCHEMA.items():
+            if table not in actual:
+                missing.append(f"table {table}")
+                continue
+            for column in sorted(expected - actual[table]):
+                missing.append(f"{table}.{column}")
+        return missing
+
+    def require_schema(self) -> None:
+        missing = self.validate_schema()
+        if missing:
+            raise RuntimeError("Schema ipradmon tidak sesuai. Missing: " + ", ".join(missing))
+
     def station_config(self, serid: int | None = None) -> StationConfig:
         station_id = serid or self.settings.serid
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(
+                    """
 SELECT serid, name, location, warnlevel, alarmlevel, maxidlemin, unit
 FROM device
 WHERE serid = ?
-""", (station_id,))
+""",
+                    (station_id,),
+                )
                 row = cursor.fetchone()
             if row is None:
-                return StationConfig(serid=station_id, building=self.settings.building, room=self.settings.room, location=self.settings.location, warnlevel=self.settings.warnlevel, alarmlevel=self.settings.alarmlevel, maxidlemin=self.settings.maxidlemin, unit=self.settings.unit)
+                return StationConfig(
+                    serid=station_id,
+                    building=self.settings.building,
+                    room=self.settings.room,
+                    location=self.settings.location,
+                    warnlevel=self.settings.warnlevel,
+                    alarmlevel=self.settings.alarmlevel,
+                    maxidlemin=self.settings.maxidlemin,
+                    unit=self.settings.unit,
+                )
             location = str(_row_get(row, "location", 2) or self.settings.location)
-            return StationConfig(serid=int(_row_get(row, "serid", 0)), building=self.settings.building, room=str(_row_get(row, "name", 1) or self.settings.room), location=location, warnlevel=float(_row_get(row, "warnlevel", 3) or self.settings.warnlevel), alarmlevel=float(_row_get(row, "alarmlevel", 4) or self.settings.alarmlevel), maxidlemin=int(_row_get(row, "maxidlemin", 5) or self.settings.maxidlemin), unit=str(_row_get(row, "unit", 6) or self.settings.unit))
+            building = self.settings.building
+            digits = "".join(ch for ch in location if ch.isdigit())
+            if digits:
+                building = digits
+            return StationConfig(
+                serid=int(_row_get(row, "serid", 0)),
+                building=building,
+                room=str(_row_get(row, "name", 1) or self.settings.room),
+                location=location,
+                warnlevel=float(_row_get(row, "warnlevel", 3) if _row_get(row, "warnlevel", 3) is not None else self.settings.warnlevel),
+                alarmlevel=float(_row_get(row, "alarmlevel", 4) if _row_get(row, "alarmlevel", 4) is not None else self.settings.alarmlevel),
+                maxidlemin=int(_row_get(row, "maxidlemin", 5) if _row_get(row, "maxidlemin", 5) is not None else self.settings.maxidlemin),
+                unit=str(_row_get(row, "unit", 6) or self.settings.unit),
+            )
         finally:
             connection.close()
 
-    def insert_measurement(self, measurement: Measurement, *, raw: str | None = None, queue_sync: bool = True) -> str:
+    def ensure_dummy_station(self) -> None:
+        settings = self.settings.for_dummy()
         connection = self._connect()
-        sample_key = make_sample_key(measurement)
         try:
             with connection.cursor() as cursor:
-                if raw is not None:
-                    cursor.execute("INSERT INTO rawdata (serid, dtom, raw) VALUES (?, ?, ?)", (measurement.serid, measurement.measured_at, raw))
-                cursor.execute("""
-INSERT INTO measurement (serid, dtom, doserate, previnterval, stat)
-VALUES (?, ?, ?, ?, ?)
-""", (measurement.serid, measurement.measured_at, measurement.dose_rate, measurement.previnterval, measurement.stat))
-                if queue_sync:
-                    cursor.execute("""
-INSERT IGNORE INTO radmon_sync_queue
-  (sample_key, serid, dtom, doserate, previnterval, stat, attempts, created_at)
-VALUES (?, ?, ?, ?, ?, ?, 0, ?)
-""", (sample_key, measurement.serid, measurement.measured_at, measurement.dose_rate, measurement.previnterval, measurement.stat, datetime.now()))
+                cursor.execute(
+                    """
+INSERT INTO device
+  (serid, name, location, maxidlemin, warnlevel, alarmlevel, unit, audiopath, hwaddress, hwtype, description)
+VALUES (?, ?, ?, ?, ?, ?, ?, '', 'DEMO-5202', 'dummy', 'Dummy IS-1 Koridor')
+ON DUPLICATE KEY UPDATE
+  name = VALUES(name), location = VALUES(location), maxidlemin = VALUES(maxidlemin),
+  warnlevel = VALUES(warnlevel), alarmlevel = VALUES(alarmlevel), unit = VALUES(unit)
+""",
+                    (
+                        settings.serid,
+                        settings.room,
+                        settings.location,
+                        settings.maxidlemin,
+                        settings.warnlevel,
+                        settings.alarmlevel,
+                        settings.unit,
+                    ),
+                )
             connection.commit()
-            return sample_key
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def _previous_measurement(self, cursor: Any, serid: int, before: datetime) -> Any:
+        cursor.execute(
+            """
+SELECT dtom, doserate, dose
+FROM measurement
+WHERE serid = ? AND dtom < ?
+ORDER BY dtom DESC
+LIMIT 1
+""",
+            (serid, before),
+        )
+        return cursor.fetchone()
+
+    def insert_measurement(self, measurement: Measurement, *, raw: str | None = None) -> float:
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                previous = self._previous_measurement(cursor, measurement.serid, measurement.measured_at)
+                previous_time = _row_get(previous, "dtom", 0)
+                previous_rate = _row_get(previous, "doserate", 1)
+                previous_dose = _row_get(previous, "dose", 2)
+                interval = measurement.previnterval
+                if isinstance(previous_time, datetime):
+                    measured = int(round((measurement.measured_at - previous_time).total_seconds()))
+                    if measured > 0:
+                        interval = measured
+                dose = 0.0
+                if previous_rate is not None and interval > 0:
+                    dose = ((float(previous_rate) + float(measurement.dose_rate)) / 2.0) * (interval / 3600.0)
+
+                if raw is not None:
+                    cursor.execute(
+                        "INSERT INTO rawdata (serid, dtom, raw) VALUES (?, ?, ?)",
+                        (measurement.serid, measurement.measured_at, raw),
+                    )
+                cursor.execute(
+                    """
+INSERT INTO measurement (serid, dtom, doserate, dose, previnterval, stat)
+VALUES (?, ?, ?, ?, ?, ?)
+""",
+                    (
+                        measurement.serid,
+                        measurement.measured_at,
+                        measurement.dose_rate,
+                        dose,
+                        interval,
+                        measurement.stat,
+                    ),
+                )
+                upsert_recent(
+                    cursor,
+                    measurement,
+                    dose=dose,
+                    previous_time=previous_time if isinstance(previous_time, datetime) else None,
+                    previous_rate=float(previous_rate) if previous_rate is not None else None,
+                    previous_dose=float(previous_dose) if previous_dose is not None else None,
+                    interval=interval,
+                )
+            connection.commit()
+            return dose
         except Exception:
             connection.rollback()
             raise
@@ -94,7 +290,8 @@ VALUES (?, ?, ?, ?, ?, ?, 0, ?)
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(
+                    """
 SELECT m.dtom, m.doserate,
        (SELECT p.doserate FROM measurement p
         WHERE p.serid = m.serid AND p.dtom < m.dtom
@@ -103,11 +300,18 @@ FROM measurement m
 WHERE m.serid = ?
 ORDER BY m.dtom DESC
 LIMIT 1
-""", (station.serid,))
+""",
+                    (station.serid,),
+                )
                 row = cursor.fetchone()
             if row is None:
                 return LatestReading(station=station, measured_at=None, dose_rate=None)
-            return LatestReading(station=station, measured_at=_row_get(row, "dtom", 0), dose_rate=float(_row_get(row, "doserate", 1)) if _row_get(row, "doserate", 1) is not None else None, previous_dose_rate=float(_row_get(row, "previous_doserate", 2)) if _row_get(row, "previous_doserate", 2) is not None else None)
+            return LatestReading(
+                station=station,
+                measured_at=_row_get(row, "dtom", 0),
+                dose_rate=float(_row_get(row, "doserate", 1)) if _row_get(row, "doserate", 1) is not None else None,
+                previous_dose_rate=float(_row_get(row, "previous_doserate", 2)) if _row_get(row, "previous_doserate", 2) is not None else None,
+            )
         finally:
             connection.close()
 
@@ -116,13 +320,37 @@ LIMIT 1
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute("""
+                cursor.execute(
+                    """
 SELECT serid, dtom, doserate, dose, previnterval, stat
 FROM measurement
 WHERE serid = ? AND dtom >= ? AND dtom <= ?
 ORDER BY dtom ASC
 LIMIT ?
-""", (station_id, start, end, max(1, int(limit))))
+""",
+                    (station_id, start, end, max(1, int(limit))),
+                )
+                rows = cursor.fetchall()
+            keys = ("serid", "dtom", "doserate", "dose", "previnterval", "stat")
+            return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
+        finally:
+            connection.close()
+
+    def measurements_after(self, after: datetime, *, serid: int | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        station_id = serid or self.settings.serid
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+SELECT serid, dtom, doserate, dose, previnterval, stat
+FROM measurement
+WHERE serid = ? AND dtom > ?
+ORDER BY dtom ASC
+LIMIT ?
+""",
+                    (station_id, after, max(1, int(limit))),
+                )
                 rows = cursor.fetchall()
             keys = ("serid", "dtom", "doserate", "dose", "previnterval", "stat")
             return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
@@ -134,166 +362,72 @@ LIMIT ?
         clauses = ["serid = ?"]
         params: list[Any] = [station_id]
         if start is not None:
-            clauses.append("started_at >= ?")
+            clauses.append("dtom >= ?")
             params.append(start)
         if end is not None:
-            clauses.append("started_at <= ?")
+            clauses.append("dtom <= ?")
             params.append(end)
         params.append(max(1, int(limit)))
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute(f"""
-SELECT eventid, serid, state, severity, started_at, ended_at,
-       last_value, threshold_value, acknowledged_at, acknowledged_by,
-       acknowledgement_note, updated_at
-FROM radmon_alarm_event
+                cursor.execute(
+                    f"""
+SELECT alarmid, serid, dtom, `type`, msg
+FROM alarm
 WHERE {' AND '.join(clauses)}
-ORDER BY started_at DESC
+ORDER BY dtom DESC, alarmid DESC
 LIMIT ?
-""", tuple(params))
+""",
+                    tuple(params),
+                )
                 rows = cursor.fetchall()
-            keys = ("eventid", "serid", "state", "severity", "started_at", "ended_at", "last_value", "threshold_value", "acknowledged_at", "acknowledged_by", "acknowledgement_note", "updated_at")
+            keys = ("alarmid", "serid", "dtom", "type", "msg")
             return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
         finally:
             connection.close()
 
-    def active_alarm(self, serid: int | None = None) -> dict[str, Any] | None:
+    def last_alarm(self, serid: int | None = None) -> dict[str, Any] | None:
         station_id = serid or self.settings.serid
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute("""
-SELECT eventid, serid, state, severity, started_at, ended_at,
-       last_value, threshold_value, acknowledged_at, acknowledged_by,
-       acknowledgement_note, updated_at
-FROM radmon_alarm_event
-WHERE serid = ? AND ended_at IS NULL
-ORDER BY started_at DESC
-LIMIT 1
-""", (station_id,))
+                cursor.execute(
+                    "SELECT alarmid, serid, dtom, `type`, msg FROM alarm WHERE serid = ? ORDER BY dtom DESC, alarmid DESC LIMIT 1",
+                    (station_id,),
+                )
                 row = cursor.fetchone()
             if row is None:
                 return None
-            keys = ("eventid", "serid", "state", "severity", "started_at", "ended_at", "last_value", "threshold_value", "acknowledged_at", "acknowledged_by", "acknowledgement_note", "updated_at")
+            keys = ("alarmid", "serid", "dtom", "type", "msg")
             return dict(row) if isinstance(row, dict) else dict(zip(keys, row))
         finally:
             connection.close()
 
-    def open_alarm(self, serid: int, state: str, severity: str, started_at: datetime, last_value: float | None, threshold_value: float | None) -> int:
-        connection = self._connect()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("""
-INSERT INTO radmon_alarm_event
-  (serid, state, severity, started_at, last_value, threshold_value, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)
-""", (serid, state, severity, started_at, last_value, threshold_value, started_at))
-                event_id = int(cursor.lastrowid)
-            connection.commit()
-            return event_id
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
-    def update_alarm(self, event_id: int, state: str, severity: str, value: float | None, threshold: float | None, at: datetime) -> None:
-        connection = self._connect()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("""
-UPDATE radmon_alarm_event
-SET state = ?, severity = ?, last_value = ?, threshold_value = ?, updated_at = ?
-WHERE eventid = ? AND ended_at IS NULL
-""", (state, severity, value, threshold, at, event_id))
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
-    def close_alarm(self, event_id: int, ended_at: datetime, last_value: float | None = None) -> None:
-        connection = self._connect()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("""
-UPDATE radmon_alarm_event
-SET ended_at = ?, last_value = COALESCE(?, last_value), updated_at = ?
-WHERE eventid = ? AND ended_at IS NULL
-""", (ended_at, last_value, ended_at, event_id))
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
-    def acknowledge_alarm(self, event_id: int, operator: str, note: str, at: datetime | None = None) -> None:
+    def record_alarm(self, serid: int, alarm_type: str, message: str, *, at: datetime | None = None) -> int:
         when = at or datetime.now()
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute("""
-UPDATE radmon_alarm_event
-SET acknowledged_at = ?, acknowledged_by = ?, acknowledgement_note = ?, updated_at = ?
-WHERE eventid = ?
-""", (when, operator.strip(), note.strip(), when, event_id))
+                cursor.execute(
+                    "INSERT INTO alarm (serid, dtom, `type`, msg) VALUES (?, ?, ?, ?)",
+                    (serid, when, alarm_type[:50], message[:255]),
+                )
+                alarm_id = int(cursor.lastrowid)
             connection.commit()
+            return alarm_id
         except Exception:
             connection.rollback()
             raise
         finally:
             connection.close()
 
-    def pending_sync(self, limit: int = 100) -> list[dict[str, Any]]:
-        connection = self._connect()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("""
-SELECT queueid, sample_key, serid, dtom, doserate, previnterval, stat, attempts
-FROM radmon_sync_queue
-WHERE sent_at IS NULL
-ORDER BY queueid ASC
-LIMIT ?
-""", (max(1, int(limit)),))
-                rows = cursor.fetchall()
-            keys = ("queueid", "sample_key", "serid", "dtom", "doserate", "previnterval", "stat", "attempts")
-            return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
-        finally:
-            connection.close()
-
-    def mark_sync_sent(self, queue_ids: Iterable[int], at: datetime | None = None) -> None:
-        ids = tuple(int(value) for value in queue_ids)
-        if not ids:
-            return
+    def append_log(self, message: str, *, at: datetime | None = None) -> None:
         when = at or datetime.now()
-        placeholders = ",".join("?" for _ in ids)
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute(f"UPDATE radmon_sync_queue SET sent_at = ?, last_error = NULL WHERE queueid IN ({placeholders})", (when, *ids))
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
-
-    def mark_sync_failed(self, queue_ids: Iterable[int], error: str) -> None:
-        ids = tuple(int(value) for value in queue_ids)
-        if not ids:
-            return
-        placeholders = ",".join("?" for _ in ids)
-        connection = self._connect()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(f"""
-UPDATE radmon_sync_queue
-SET attempts = attempts + 1, last_error = ?
-WHERE queueid IN ({placeholders})
-""", (error[:1000], *ids))
+                cursor.execute("INSERT INTO applog (dtom, msg) VALUES (?, ?)", (when, message))
             connection.commit()
         except Exception:
             connection.rollback()

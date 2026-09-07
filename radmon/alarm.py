@@ -1,72 +1,45 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Protocol
+from typing import Any
 
 from .models import Measurement, StationConfig
-from .status import MonitorStatus, classify_status
-
-
-class AlarmRepository(Protocol):
-    def active_alarm(self, serid: int | None = None): ...
-    def open_alarm(self, serid: int, state: str, severity: str, started_at: datetime, last_value: float | None, threshold_value: float | None) -> int: ...
-    def update_alarm(self, event_id: int, state: str, severity: str, value: float | None, threshold: float | None, at: datetime) -> None: ...
-    def close_alarm(self, event_id: int, ended_at: datetime, last_value: float | None = None) -> None: ...
-    def acknowledge_alarm(self, event_id: int, operator: str, note: str, at: datetime | None = None) -> None: ...
+from .status import classify_status
 
 
 class AlarmService:
-    def __init__(self, repository: AlarmRepository, station: StationConfig) -> None:
+    """Persist threshold transitions using the legacy ipradmon.alarm table."""
+
+    def __init__(self, repository: Any, station: StationConfig) -> None:
         self.repository = repository
         self.station = station
 
-    def evaluate(self, measurement: Measurement, now: datetime | None = None) -> str:
-        current_time = now or measurement.measured_at
+    def evaluate(self, measurement: Measurement) -> str:
         state = classify_status(
             measurement.dose_rate,
             measurement.measured_at,
-            current_time,
+            measurement.measured_at,
             self.station.warnlevel,
             self.station.alarmlevel,
             self.station.maxidlemin,
         ).value
-        active = self.repository.active_alarm(self.station.serid)
-        if state == MonitorStatus.NORMAL.value:
-            if active is not None:
-                self.repository.close_alarm(int(active["eventid"]), current_time, measurement.dose_rate)
-            return state
+        previous = self.repository.last_alarm(self.station.serid)
+        previous_type = str(previous.get("type", "")) if previous else ""
+        active_type = previous_type if previous_type in {"ALERT", "ALARM"} else "NORMAL"
 
-        severity = {
-            MonitorStatus.ALERT.value: "warning",
-            MonitorStatus.ALARM.value: "critical",
-            MonitorStatus.OFFLINE.value: "offline",
-        }[state]
-        threshold = (
-            self.station.alarmlevel if state == MonitorStatus.ALARM.value
-            else self.station.warnlevel if state == MonitorStatus.ALERT.value
-            else float(self.station.maxidlemin)
-        )
-        if active is None:
-            self.repository.open_alarm(
+        if state in {"ALERT", "ALARM"} and active_type != state:
+            threshold = self.station.alarmlevel if state == "ALARM" else self.station.warnlevel
+            self.repository.record_alarm(
                 self.station.serid,
                 state,
-                severity,
-                current_time,
-                measurement.dose_rate,
-                threshold,
+                f"Dose rate {measurement.dose_rate:.3f} {self.station.unit}; threshold {threshold:g} {self.station.unit}",
+                at=measurement.measured_at,
             )
-        elif active.get("state") != state or active.get("severity") != severity:
-            self.repository.update_alarm(
-                int(active["eventid"]),
-                state,
-                severity,
-                measurement.dose_rate,
-                threshold,
-                current_time,
+        elif state == "NORMAL" and active_type in {"ALERT", "ALARM"}:
+            self.repository.record_alarm(
+                self.station.serid,
+                "RECOVERY",
+                f"Dose rate kembali normal: {measurement.dose_rate:.3f} {self.station.unit}",
+                at=measurement.measured_at,
             )
         return state
-
-    def acknowledge(self, event_id: int, operator: str, note: str = "") -> None:
-        if not operator.strip():
-            raise ValueError("operator name is required")
-        self.repository.acknowledge_alarm(event_id, operator, note)

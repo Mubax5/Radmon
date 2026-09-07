@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 
 try:
     from dotenv import load_dotenv
-except ImportError:  # optional during lightweight tests
+except ImportError:  # pragma: no cover
     load_dotenv = None
+
+
+def _as_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,24 +26,28 @@ class Settings:
     db_user: str = "root"
     db_password: str = ""
     db_name: str = "ipradmon"
-    serid: int = 5202
+    serid: int = 5201
     building: str = "52"
-    room: str = "IS-1 Koridor"
-    location: str = "Gd.52"
+    room: str = "R. Lab Iradiasi"
+    location: str = "Gedung 52"
     warnlevel: float = 8.0
     alarmlevel: float = 10.0
-    maxidlemin: int = 5
+    maxidlemin: int = 30
     unit: str = "uSv/h"
     sample_interval: float = 2.0
+    refresh_interval: float = 2.0
+    public_enabled: bool = True
     public_host: str = "0.0.0.0"
     public_port: int = 8080
-    central_host: str = "0.0.0.0"
-    central_port: int = 8090
-    central_url: str = "http://127.0.0.1:8090"
-    central_token: str = "CHANGE-ME"
+    sync_enabled: bool = False
+    central_url: str = ""
+    central_token: str = ""
     sync_batch_size: int = 100
     sync_timeout: float = 10.0
+    sync_initial_lookback_hours: int = 24
+    runtime_dir: Path = Path("runtime")
     log_dir: Path = Path("logs")
+    single_instance_port: int = 47652
 
     @classmethod
     def from_env(cls, env_file: str | None = ".env") -> "Settings":
@@ -53,26 +63,44 @@ class Settings:
             db_user=get("RADMON_DB_USER", "root"),
             db_password=get("RADMON_DB_PASSWORD", ""),
             db_name=get("RADMON_DB_NAME", "ipradmon"),
-            serid=int(get("RADMON_SERID", "5202")),
+            serid=int(get("RADMON_SERID", "5201")),
             building=get("RADMON_BUILDING", "52"),
-            room=get("RADMON_ROOM", "IS-1 Koridor"),
-            location=get("RADMON_LOCATION", "Gd.52"),
+            room=get("RADMON_ROOM", "R. Lab Iradiasi"),
+            location=get("RADMON_LOCATION", "Gedung 52"),
             warnlevel=float(get("RADMON_WARNLEVEL", "8")),
             alarmlevel=float(get("RADMON_ALARMLEVEL", "10")),
-            maxidlemin=int(get("RADMON_MAXIDLEMIN", "5")),
+            maxidlemin=int(get("RADMON_MAXIDLEMIN", "30")),
             unit=get("RADMON_UNIT", "uSv/h"),
             sample_interval=float(get("RADMON_SAMPLE_INTERVAL", "2")),
+            refresh_interval=float(get("RADMON_REFRESH_INTERVAL", "2")),
+            public_enabled=_as_bool(get("RADMON_PUBLIC_ENABLED"), True),
             public_host=get("RADMON_PUBLIC_HOST", "0.0.0.0"),
             public_port=int(get("RADMON_PUBLIC_PORT", "8080")),
-            central_host=get("RADMON_CENTRAL_HOST", "0.0.0.0"),
-            central_port=int(get("RADMON_CENTRAL_PORT", "8090")),
-            central_url=get("RADMON_CENTRAL_URL", "http://127.0.0.1:8090"),
-            central_token=get("RADMON_CENTRAL_TOKEN", "CHANGE-ME"),
+            sync_enabled=_as_bool(get("RADMON_SYNC_ENABLED"), False),
+            central_url=get("RADMON_CENTRAL_URL", ""),
+            central_token=get("RADMON_CENTRAL_TOKEN", ""),
             sync_batch_size=int(get("RADMON_SYNC_BATCH_SIZE", "100")),
             sync_timeout=float(get("RADMON_SYNC_TIMEOUT", "10")),
+            sync_initial_lookback_hours=int(get("RADMON_SYNC_INITIAL_LOOKBACK_HOURS", "24")),
+            runtime_dir=Path(get("RADMON_RUNTIME_DIR", "runtime")),
             log_dir=Path(get("RADMON_LOG_DIR", "logs")),
+            single_instance_port=int(get("RADMON_SINGLE_INSTANCE_PORT", "47652")),
+        )
+
+    def for_dummy(self) -> "Settings":
+        return replace(
+            self,
+            serid=5202,
+            building="52",
+            room="IS-1 Koridor",
+            location="Gd.52",
+            warnlevel=8.0,
+            alarmlevel=10.0,
+            maxidlemin=30,
+            sample_interval=2.0,
+            refresh_interval=2.0,
         )
 
     @property
     def station_label(self) -> str:
-        return f"[{self.serid}] {self.room} (Gd. {self.building})"
+        return f"[{self.serid}] {self.room} ({self.location})"

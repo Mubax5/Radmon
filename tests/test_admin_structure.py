@@ -12,8 +12,10 @@ def test_admin_pages_are_split_by_responsibility():
         assert Path(f"radmon/admin/{name}.py").is_file()
 
 
-def test_admin_entrypoint_uses_pyside6_and_report_service():
-    source = Path("admin_app.py").read_text(encoding="utf-8")
-    assert "PySide6" in source
+def test_single_main_entrypoint_owns_admin_and_runtime():
+    source = Path("main.py").read_text(encoding="utf-8")
+    assert "QApplication" in source
     assert "ReportService" in source
     assert "MainWindow" in source
+    assert "ApplicationRuntime" in source
+    assert "--source" in source
