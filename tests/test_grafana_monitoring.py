@@ -127,9 +127,10 @@ def test_docker_compose_timeout_becomes_actionable_runtime_error(tmp_path, monke
         bootstrap._run_compose(env={})
 
 
-def test_bootstrap_falls_back_from_unrelated_port_3000_and_verifies_playlist():
+def test_bootstrap_reuses_ready_fallback_before_starting_services():
     settings = replace(Settings(), grafana_url="http://localhost:3000", grafana_fallback_port=3300)
     compose_calls: list[dict] = []
+    native_calls: list[dict] = []
 
     def probe(base_url: str) -> bool:
         return base_url == "http://localhost:3300"
@@ -137,21 +138,24 @@ def test_bootstrap_falls_back_from_unrelated_port_3000_and_verifies_playlist():
     def compose_runner(*, env):
         compose_calls.append(dict(env))
 
+    def native_runner(**kwargs):
+        native_calls.append(dict(kwargs))
+
     bootstrap = GrafanaBootstrap(
         settings,
         dashboard_probe=probe,
         playlist_probe=probe,
         grafana_health_probe=lambda base: base == "http://localhost:3300",
         api_provisioner=lambda base: True,
-        native_runner=lambda **_: (_ for _ in ()).throw(RuntimeError("native unavailable")),
+        native_runner=native_runner,
         compose_runner=compose_runner,
         sleeper=lambda _: None,
         attempts=2,
     )
     result = bootstrap.ensure()
 
-    assert compose_calls
-    assert compose_calls[0]["RADMON_GRAFANA_PORT"] == "3300"
+    assert compose_calls == []
+    assert native_calls == []
     assert result.startswith(f"http://localhost:3300/playlists/play/{PLAYLIST_UID}")
     assert "kiosk=1" in result and "autofitpanels" in result
 
