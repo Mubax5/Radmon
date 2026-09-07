@@ -1,60 +1,226 @@
 from __future__ import annotations
 
-from PySide6.QtCharts import QChart, QChartView, QDateTimeAxis, QLineSeries, QValueAxis
+from bisect import bisect_left
+from datetime import datetime
+
+import pyqtgraph as pg
 from PySide6.QtCore import QDateTime, Qt
-from PySide6.QtGui import QPainter, QPen
-from PySide6.QtWidgets import QCheckBox, QDateTimeEdit, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QDateTimeEdit,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .chart_state import ChartViewport
 
 
 class ChartPage(QWidget):
-    def __init__(self, repository, settings, parent=None):
+    """Interactive dose-rate chart with pan, zoom, crosshair, and live follow."""
+
+    def __init__(self, repository, settings, parent=None) -> None:
         super().__init__(parent)
         self.repository = repository
         self.settings = settings
         self.last_error: str | None = None
+        self.viewport = ChartViewport(live=True)
+        self.points: list[tuple[float, float, float]] = []
+
         self.start = QDateTimeEdit(QDateTime.currentDateTime().addSecs(-3 * 3600))
         self.end = QDateTimeEdit(QDateTime.currentDateTime())
         for widget in (self.start, self.end):
-            widget.setCalendarPopup(True); widget.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+            widget.setCalendarPopup(True)
+            widget.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+
         self.live = QCheckBox("Live")
         self.live.setChecked(True)
-        controls = QHBoxLayout(); controls.addWidget(QLabel("From")); controls.addWidget(self.start); controls.addWidget(QLabel("To")); controls.addWidget(self.end); controls.addWidget(self.live); controls.addStretch(1)
-        self.chart = QChart(); self.chart.setTitle("Dose rate and Approx. Dose")
-        self.view = QChartView(self.chart); self.view.setRenderHint(QPainter.Antialiasing)
-        layout = QVBoxLayout(self); layout.addLayout(controls); layout.addWidget(self.view, 1)
+        self.live.toggled.connect(self._live_changed)
+
+        apply_range = QPushButton("Apply range")
+        apply_range.clicked.connect(self.apply_range)
+        reset = QPushButton("Reset view")
+        reset.clicked.connect(self.reset_view)
+
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel("From"))
+        controls.addWidget(self.start)
+        controls.addWidget(QLabel("To"))
+        controls.addWidget(self.end)
+        controls.addWidget(self.live)
+        controls.addWidget(apply_range)
+        controls.addWidget(reset)
+        controls.addStretch(1)
+
+        self.plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
+        self.plot.setBackground("w")
+        self.plot.showGrid(x=True, y=True, alpha=0.2)
+        self.plot.setLabel("left", "Dose rate", units="µSv/h")
+        self.plot.setLabel("bottom", "Time")
+        self.plot.addLegend(offset=(10, 10))
+
+        self.plot.showAxis("right")
+        self.plot.getAxis("right").setLabel("Approx. Dose", units="µSv")
+        self.dose_view = pg.ViewBox()
+        self.plot.scene().addItem(self.dose_view)
+        self.plot.getAxis("right").linkToView(self.dose_view)
+        self.dose_view.setXLink(self.plot.getPlotItem())
+        self.plot.getPlotItem().vb.sigResized.connect(self._sync_right_view)
+
+        self.rate_curve = self.plot.plot(
+            [], [], pen=pg.mkPen("#c62828", width=2), name="Dose rate"
+        )
+        self.dose_curve = pg.PlotCurveItem(
+            [], [], pen=pg.mkPen("#1565c0", width=2), name="Approx. Dose"
+        )
+        self.dose_view.addItem(self.dose_curve)
+        self.plot.getPlotItem().legend.addItem(self.dose_curve, "Approx. Dose")
+
+        self.alert_line = pg.InfiniteLine(
+            angle=0,
+            pos=settings.warnlevel,
+            pen=pg.mkPen("#f9a825", width=1, style=Qt.DashLine),
+            label="Alert threshold",
+        )
+        self.alarm_line = pg.InfiniteLine(
+            angle=0,
+            pos=settings.alarmlevel,
+            pen=pg.mkPen("#b71c1c", width=1, style=Qt.DashLine),
+            label="Alarm threshold",
+        )
+        self.plot.addItem(self.alert_line)
+        self.plot.addItem(self.alarm_line)
+
+        self.cross_x = pg.InfiniteLine(
+            angle=90, movable=False, pen=pg.mkPen("#666", width=1)
+        )
+        self.cross_y = pg.InfiniteLine(
+            angle=0, movable=False, pen=pg.mkPen("#666", width=1)
+        )
+        self.plot.addItem(self.cross_x, ignoreBounds=True)
+        self.plot.addItem(self.cross_y, ignoreBounds=True)
+        self.hover = pg.TextItem(
+            anchor=(0, 1),
+            fill=pg.mkBrush(255, 255, 255, 230),
+            border=pg.mkPen("#777"),
+        )
+        self.plot.addItem(self.hover)
+        self.mouse_proxy = pg.SignalProxy(
+            self.plot.scene().sigMouseMoved,
+            rateLimit=30,
+            slot=self._mouse_moved,
+        )
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(controls)
+        layout.addWidget(self.plot, 1)
         self.refresh_live()
+
+    def _sync_right_view(self) -> None:
+        plot_view = self.plot.getPlotItem().vb
+        self.dose_view.setGeometry(plot_view.sceneBoundingRect())
+        self.dose_view.linkedViewChanged(plot_view, self.dose_view.XAxis)
+
+    def _live_changed(self, checked: bool) -> None:
+        self.viewport.live = checked
+        if not checked:
+            self.viewport.capture(*self.plot.viewRange()[0])
+
+    def range(self) -> tuple[datetime, datetime]:
+        return self.start.dateTime().toPython(), self.end.dateTime().toPython()
+
+    def apply_range(self) -> None:
+        start, end = self.range()
+        if end <= start:
+            self.last_error = "Chart range error: To must be after From"
+            return
+        self.live.setChecked(False)
+        self.viewport.capture(start.timestamp(), end.timestamp())
+        self.plot.setXRange(start.timestamp(), end.timestamp(), padding=0)
+        self.refresh_live()
+
+    def reset_view(self) -> None:
+        self.viewport.live = self.live.isChecked()
+        self.viewport.start_epoch = None
+        self.viewport.end_epoch = None
+        self.plot.autoRange()
 
     def refresh_live(self) -> None:
         if self.live.isChecked():
             self.end.setDateTime(QDateTime.currentDateTime())
-        start = self.start.dateTime().toPython(); end = self.end.dateTime().toPython()
+        start, end = self.range()
         try:
-            rows = self.repository.measurement_history(start, end, serid=self.settings.serid, limit=100000)
+            rows = self.repository.measurement_history(
+                start,
+                end,
+                serid=self.settings.serid,
+                limit=100_000,
+            )
             self.last_error = None
         except Exception as exc:
             rows = []
             self.last_error = f"Chart read error: {exc}"
-        self.chart.removeAllSeries()
-        for axis in list(self.chart.axes()): self.chart.removeAxis(axis)
-        dose_series = QLineSeries(); dose_series.setName("Dose rate"); dose_series.setPen(QPen(Qt.red, 2))
-        cumulative_series = QLineSeries(); cumulative_series.setName("Approx. Dose"); cumulative_series.setPen(QPen(Qt.blue, 2))
-        cumulative = 0.0; previous = None; max_y = self.settings.alarmlevel * 1.15
+
+        x: list[float] = []
+        rates: list[float] = []
+        doses: list[float] = []
+        cumulative = 0.0
+        previous: tuple[datetime, float] | None = None
         for row in rows:
-            dt = row.get("dtom"); value = row.get("doserate")
-            if dt is None or value is None: continue
-            timestamp = int(dt.timestamp() * 1000); value = float(value)
-            dose_series.append(timestamp, value); max_y = max(max_y, value * 1.1)
+            measured_at = row.get("dtom")
+            raw_rate = row.get("doserate")
+            if not isinstance(measured_at, datetime) or raw_rate is None:
+                continue
+            rate = float(raw_rate)
+            epoch = measured_at.timestamp()
+            x.append(epoch)
+            rates.append(rate)
             if previous is not None:
-                pdt, pvalue = previous; hours = max(0, (dt - pdt).total_seconds() / 3600); cumulative += ((pvalue + value) / 2) * hours
-            cumulative_series.append(timestamp, cumulative); previous = (dt, value)
-        self.chart.addSeries(dose_series); self.chart.addSeries(cumulative_series)
-        axis_x = QDateTimeAxis(); axis_x.setFormat("HH:mm:ss"); axis_x.setTitleText("Time")
-        axis_y = QValueAxis(); axis_y.setTitleText("Dose rate [µSv/h]"); axis_y.setRange(0, max(1.0, max_y))
-        axis_dose = QValueAxis(); axis_dose.setTitleText("Approx. Dose [µSv]"); axis_dose.setRange(0, max(0.1, cumulative * 1.2))
-        self.chart.addAxis(axis_x, Qt.AlignBottom); self.chart.addAxis(axis_y, Qt.AlignLeft); self.chart.addAxis(axis_dose, Qt.AlignRight)
-        dose_series.attachAxis(axis_x); dose_series.attachAxis(axis_y); cumulative_series.attachAxis(axis_x); cumulative_series.attachAxis(axis_dose)
-        if rows:
-            x1 = int(rows[0]["dtom"].timestamp() * 1000); x2 = int(rows[-1]["dtom"].timestamp() * 1000)
-            for name, level, color in (("Alert threshold", self.settings.warnlevel, Qt.darkYellow), ("Alarm threshold", self.settings.alarmlevel, Qt.darkRed)):
-                series = QLineSeries(); series.setName(name); series.append(x1, level); series.append(x2, level); series.setPen(QPen(color, 1, Qt.DashLine)); self.chart.addSeries(series); series.attachAxis(axis_x); series.attachAxis(axis_y)
-        self.chart.legend().setVisible(True)
+                previous_time, previous_rate = previous
+                hours = max(
+                    0.0,
+                    (measured_at - previous_time).total_seconds() / 3600.0,
+                )
+                cumulative += ((previous_rate + rate) / 2.0) * hours
+            doses.append(cumulative)
+            previous = (measured_at, rate)
+
+        self.points = list(zip(x, rates, doses))
+        self.rate_curve.setData(x, rates)
+        self.dose_curve.setData(x, doses)
+        self.alert_line.setValue(self.settings.warnlevel)
+        self.alarm_line.setValue(self.settings.alarmlevel)
+
+        if not x:
+            return
+
+        visible_range = self.plot.viewRange()[0]
+        if self.viewport.width is None:
+            self.viewport.capture(visible_range[0], visible_range[1])
+        if self.live.isChecked():
+            target = self.viewport.range_for_refresh(x[-1])
+            if target is not None:
+                self.plot.setXRange(*target, padding=0)
+        else:
+            self.viewport.capture(*self.plot.viewRange()[0])
+
+    def _mouse_moved(self, event) -> None:
+        if not self.points:
+            return
+        position = event[0]
+        if not self.plot.sceneBoundingRect().contains(position):
+            return
+        mapped = self.plot.getPlotItem().vb.mapSceneToView(position)
+        xs = [point[0] for point in self.points]
+        index = min(max(bisect_left(xs, mapped.x()), 0), len(xs) - 1)
+        x, rate, dose = self.points[index]
+        self.cross_x.setPos(x)
+        self.cross_y.setPos(rate)
+        self.hover.setPos(x, rate)
+        self.hover.setText(
+            f"{datetime.fromtimestamp(x):%Y-%m-%d %H:%M:%S}\n"
+            f"Dose rate: {rate:.4f} µSv/h\n"
+            f"Approx. Dose: {dose:.6f} µSv"
+        )
