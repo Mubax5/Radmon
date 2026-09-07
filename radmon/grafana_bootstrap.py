@@ -399,6 +399,7 @@ class GrafanaBootstrap:
             "check": True,
             "capture_output": True,
             "text": True,
+            "timeout": 30,
         }
         if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -409,6 +410,8 @@ class GrafanaBootstrap:
             )
         except FileNotFoundError as exc:
             raise RuntimeError("Docker tidak ditemukan") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("docker compose timeout setelah 30 detik") from exc
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or exc.stdout or str(exc)).strip()
             raise RuntimeError(f"docker compose gagal: {detail}") from exc
