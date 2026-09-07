@@ -7,7 +7,6 @@ from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QCheckBox,
     QDateTimeEdit,
-    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -78,6 +77,16 @@ class ReportsPage(QWidget):
     def range(self):
         return self.start.dateTime().toPython(), self.end.dateTime().toPython()
 
+    def _report_directory(self) -> Path:
+        directory = Path(self.settings.report_dir).resolve()
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+
+    def _output_path(self, suffix: str) -> Path:
+        start, end = self.range()
+        stamp = f"{start:%Y%m%d-%H%M%S}_to_{end:%Y%m%d-%H%M%S}"
+        return self._report_directory() / f"radmon-{self.settings.serid}-{stamp}.{suffix}"
+
     def build_preview(self) -> None:
         try:
             start, end = self.range()
@@ -99,9 +108,6 @@ class ReportsPage(QWidget):
             self.last_error = f"Report preview error: {exc}"
 
     def refresh_live(self) -> None:
-        # The global Admin timer calls this every two seconds. Updating the end
-        # timestamp is cheap; rebuilding the report here made the GUI repeatedly
-        # query MariaDB and relayout rich text on the UI thread.
         if self.live.isChecked():
             self.end.setDateTime(QDateTime.currentDateTime())
 
@@ -116,33 +122,19 @@ class ReportsPage(QWidget):
     def export_pdf(self) -> None:
         if not self.preview_ready:
             return
-        filename, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export PDF",
-            f"radmon-{self.settings.serid}.pdf",
-            "PDF (*.pdf)",
-        )
-        if not filename:
-            return
+        path = self._output_path("pdf")
         printer = QPrinter(QPrinter.HighResolution)
         printer.setOutputFormat(QPrinter.PdfFormat)
-        printer.setOutputFileName(filename)
+        printer.setOutputFileName(str(path))
         self.preview.document().print_(printer)
-        QMessageBox.information(self, "PDF exported", filename)
+        QMessageBox.information(self, "PDF exported", str(path))
 
     def export_csv(self) -> None:
         start, end = self.range()
-        filename, _ = QFileDialog.getSaveFileName(
-            self,
-            "Export CSV",
-            f"measurement-{self.settings.serid}.csv",
-            "CSV (*.csv)",
-        )
-        if not filename:
-            return
+        path = self._output_path("csv")
         try:
             self.report_service.settings = self.settings
-            self.report_service.export_csv(start, end, Path(filename))
-            QMessageBox.information(self, "CSV exported", filename)
+            self.report_service.export_csv(start, end, path)
+            QMessageBox.information(self, "CSV exported", str(path))
         except Exception as exc:
             QMessageBox.critical(self, "Export error", str(exc))
