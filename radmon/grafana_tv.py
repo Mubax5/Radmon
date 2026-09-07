@@ -11,25 +11,20 @@ from .stations import station_catalog
 DATASOURCE_UID = "ipradmon-mysql"
 PLAYLIST_UID = "radmon-tv"
 PLAYLIST_INTERVAL = "10s"
-DASHBOARD_FILES = (
-    "radmon-tv-page-1-realtime.json",
-    "radmon-tv-page-2-trends.json",
-    "radmon-tv-page-3-operations.json",
-    "radmon-tv-page-4-building-50.json",
-    "radmon-tv-page-5-building-38.json",
-    "radmon-tv-page-6-building-52.json",
-    "radmon-tv-page-7-building-55.json",
-    "radmon-tv-page-8-building-57.json",
-)
+OPERATIONS_PAGE_COUNT = 8
 PAGE_UIDS = (
     "radmon-tv-page-1-realtime",
     "radmon-tv-page-2-trends",
     "radmon-tv-page-3-operations",
-    "radmon-tv-page-4-building-50",
-    "radmon-tv-page-5-building-38",
-    "radmon-tv-page-6-building-52",
-    "radmon-tv-page-7-building-55",
-    "radmon-tv-page-8-building-57",
+)
+OPERATIONS_PAGE_UIDS = tuple(
+    f"{PAGE_UIDS[2]}-{page_number}" for page_number in range(1, OPERATIONS_PAGE_COUNT + 1)
+)
+DASHBOARD_UIDS = PAGE_UIDS[:2] + OPERATIONS_PAGE_UIDS
+DASHBOARD_FILES = (
+    "radmon-tv-page-1-realtime.json",
+    "radmon-tv-page-2-trends.json",
+    *(f"radmon-tv-page-3-operations-{page_number}.json" for page_number in range(1, OPERATIONS_PAGE_COUNT + 1)),
 )
 BUILDING_PAGE_ORDER = ("50", "38", "52", "55", "57")
 
@@ -116,6 +111,15 @@ def _station_ids(stations: Sequence[StationConfig] | None = None) -> str:
 
 def _stations_for_building(building: str) -> list[StationConfig]:
     return [station for station in station_catalog() if station.building == building]
+
+
+def operation_page_stations(page_number: int) -> list[StationConfig]:
+    if not 1 <= page_number <= OPERATIONS_PAGE_COUNT:
+        raise ValueError(f"operations page must be 1..{OPERATIONS_PAGE_COUNT}")
+    stations = station_catalog()
+    page_size = max(1, (len(stations) + OPERATIONS_PAGE_COUNT - 1) // OPERATIONS_PAGE_COUNT)
+    start = (page_number - 1) * page_size
+    return stations[start : start + page_size]
 
 
 def _latest_relation(stations: Sequence[StationConfig] | None = None) -> str:
@@ -296,10 +300,8 @@ def _operation_table(
     h: int,
     *,
     stations: Sequence[StationConfig] | None = None,
-    limit: int | None = None,
 ) -> dict[str, Any]:
     relation = _status_relation(stations)
-    limit_sql = f"LIMIT {int(limit)}" if limit else ""
     table = _panel(panel_id, "table", title, x, y, w, h)
     table["description"] = "operational-condition"
     table["targets"] = [_target(f"""
@@ -312,7 +314,6 @@ SELECT
   s.status AS `Status`
 FROM ({relation}) s
 ORDER BY FIELD(s.status, 'ALARM', 'ALERT', 'OFFLINE', 'NORMAL'), s.serid
-{limit_sql}
 """)]
     table["fieldConfig"] = {
         "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
@@ -401,7 +402,6 @@ def build_page_one() -> dict[str, Any]:
         panel_id += 1
         dashboard["panels"].append(_time_stat(panel_id, station, x, y + 3, width, 1))
         panel_id += 1
-    dashboard["panels"].append(_operation_table(panel_id, "Kondisi Operasional Detector · Page 1/8", 0, 16, 24, 8, limit=8))
     return dashboard
 
 
@@ -427,17 +427,30 @@ def build_page_two() -> dict[str, Any]:
     ]
     for title, sql, x, color, decimals in summaries:
         dashboard["panels"].append(_latest_scalar_stat(
-            panel_id, title, sql, x, 14, 6, 4,
+            panel_id,
+            title,
+            sql,
+            x,
+            14,
+            6,
+            4,
             unit="suffix: µSv/h" if decimals else "none",
-            color=color, decimals=decimals, value_size=28,
+            color=color,
+            decimals=decimals,
+            value_size=28,
         ))
         panel_id += 1
-    dashboard["panels"].append(_operation_table(panel_id, "Kondisi Operasional Detector · Page 2/8", 0, 18, 24, 6, limit=5))
     return dashboard
 
 
-def build_page_three() -> dict[str, Any]:
-    dashboard = _base_dashboard("RadMon TV · Operations", PAGE_UIDS[2], time_from="now-24h")
+def build_page_three(page_number: int = 1) -> dict[str, Any]:
+    if not 1 <= page_number <= OPERATIONS_PAGE_COUNT:
+        raise ValueError(f"operations page must be 1..{OPERATIONS_PAGE_COUNT}")
+    dashboard = _base_dashboard(
+        "RadMon TV · Operations",
+        OPERATIONS_PAGE_UIDS[page_number - 1],
+        time_from="now-24h",
+    )
     status_relation = _status_relation()
     pie = _panel(10, "piechart", "Status Detector", 0, 4, 8, 7)
     pie["targets"] = [_target(f"""
@@ -455,8 +468,23 @@ ORDER BY FIELD(s.status, 'ALARM', 'ALERT', 'OFFLINE', 'NORMAL')
         "tooltip": {"mode": "single", "sort": "none"},
     }
     dashboard["panels"].append(pie)
-    dashboard["panels"].append(_operation_table(11, "Kondisi Operasional Detector · Page 3/8", 8, 4, 16, 7, limit=8))
-    stats = [(12, "NORMAL", "green", 0), (13, "ALERT", "orange", 6), (14, "ALARM", "red", 12), (15, "OFFLINE", "purple", 18)]
+    dashboard["panels"].append(
+        _operation_table(
+            11,
+            f"Kondisi Operasional Detector · Page {page_number}/{OPERATIONS_PAGE_COUNT}",
+            8,
+            4,
+            16,
+            7,
+            stations=operation_page_stations(page_number),
+        )
+    )
+    stats = [
+        (12, "NORMAL", "green", 0),
+        (13, "ALERT", "orange", 6),
+        (14, "ALARM", "red", 12),
+        (15, "OFFLINE", "purple", 18),
+    ]
     for panel_id, status, color, x in stats:
         dashboard["panels"].append(_latest_scalar_stat(
             panel_id,
@@ -486,81 +514,20 @@ WHERE a.serid IN ({_station_ids()})
 ORDER BY a.dtom DESC, a.alarmid DESC
 LIMIT 12
 """)]
-    alarms["fieldConfig"] = {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": []}
+    alarms["fieldConfig"] = {
+        "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
+        "overrides": [],
+    }
     alarms["options"] = {"cellHeight": "sm", "enablePagination": False, "showHeader": True}
     dashboard["panels"].append(alarms)
     return dashboard
-
-
-def _building_card_widths(count: int) -> list[int]:
-    if count <= 1:
-        return [24]
-    if count == 2:
-        return [12, 12]
-    if count == 3:
-        return [8, 8, 8]
-    if count == 4:
-        return [6, 6, 6, 6]
-    return [5, 5, 5, 5, 4]
-
-
-def build_building_page(page_number: int, building: str) -> dict[str, Any]:
-    uid = PAGE_UIDS[page_number - 1]
-    stations = _stations_for_building(building)
-    dashboard = _base_dashboard(f"RadMon TV · Gedung {building}", uid, time_from="now-3h")
-    widths = _building_card_widths(len(stations))
-    x = 0
-    panel_id = 10
-    for station, width in zip(stations, widths):
-        dashboard["panels"].append(_dose_stat(panel_id, station, x, 4, width, 3))
-        panel_id += 1
-        dashboard["panels"].append(_time_stat(panel_id, station, x, 7, width, 1))
-        panel_id += 1
-        x += width
-    dashboard["panels"].append(_building_trend(panel_id, building, 0, 8, 24, 8))
-    panel_id += 1
-    dashboard["panels"].append(_operation_table(
-        panel_id,
-        f"Kondisi Operasional Detector · Page {page_number}/8 · Gedung {building}",
-        0,
-        16,
-        24,
-        8,
-        stations=stations,
-    ))
-    return dashboard
-
-
-def build_page_four() -> dict[str, Any]:
-    return build_building_page(4, "50")
-
-
-def build_page_five() -> dict[str, Any]:
-    return build_building_page(5, "38")
-
-
-def build_page_six() -> dict[str, Any]:
-    return build_building_page(6, "52")
-
-
-def build_page_seven() -> dict[str, Any]:
-    return build_building_page(7, "55")
-
-
-def build_page_eight() -> dict[str, Any]:
-    return build_building_page(8, "57")
 
 
 def build_dashboard_payloads() -> list[dict[str, Any]]:
     return [
         build_page_one(),
         build_page_two(),
-        build_page_three(),
-        build_page_four(),
-        build_page_five(),
-        build_page_six(),
-        build_page_seven(),
-        build_page_eight(),
+        *(build_page_three(page_number) for page_number in range(1, OPERATIONS_PAGE_COUNT + 1)),
     ]
 
 
@@ -568,6 +535,17 @@ def build_playlist_payload(*, resource_version: str | None = None) -> dict[str, 
     metadata: dict[str, Any] = {"name": PLAYLIST_UID, "namespace": "default"}
     if resource_version:
         metadata["resourceVersion"] = resource_version
+
+    items: list[dict[str, str]] = []
+    for operations_uid in OPERATIONS_PAGE_UIDS:
+        items.extend(
+            [
+                {"type": "dashboard_by_uid", "value": PAGE_UIDS[0]},
+                {"type": "dashboard_by_uid", "value": PAGE_UIDS[1]},
+                {"type": "dashboard_by_uid", "value": operations_uid},
+            ]
+        )
+
     return {
         "kind": "Playlist",
         "apiVersion": "playlist.grafana.app/v1",
@@ -575,7 +553,7 @@ def build_playlist_payload(*, resource_version: str | None = None) -> dict[str, 
         "spec": {
             "title": "RadMon TV",
             "interval": PLAYLIST_INTERVAL,
-            "items": [{"type": "dashboard_by_uid", "value": uid} for uid in PAGE_UIDS],
+            "items": items,
         },
     }
 
