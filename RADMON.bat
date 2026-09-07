@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 call :bootstrap || exit /b 1
-start "" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0main.py" --source dummy
+start "" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0main.py" --source detector
 exit /b 0
 
 :bootstrap

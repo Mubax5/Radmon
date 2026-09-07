@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QGroupBox, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from radmon.status import classify_status, trend_code, trend_symbol
@@ -13,6 +13,7 @@ class RecentPage(QWidget):
         super().__init__(parent)
         self.repository = repository
         self.settings = settings
+        self.last_error: str | None = None
         self.dose = QLabel("--- µSv/h")
         self.dose.setAlignment(Qt.AlignCenter)
         self.dose.setStyleSheet("font-size: 42px; font-weight: 700;")
@@ -24,7 +25,6 @@ class RecentPage(QWidget):
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["Time", "Dose rate (µSv/h)", "Prev interval", "Stat"])
         self.table.horizontalHeader().setStretchLastSection(True)
-
         cards = QGridLayout()
         cards.addWidget(self._box("Current dose rate", self.dose), 0, 0)
         cards.addWidget(self._box("Status", self.state), 0, 1)
@@ -33,11 +33,7 @@ class RecentPage(QWidget):
         layout.addLayout(cards)
         layout.addWidget(QLabel("Recent measurements"))
         layout.addWidget(self.table, 1)
-
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.refresh)
-        self.timer.start(2000)
-        self.refresh()
+        self.refresh_live()
 
     @staticmethod
     def _box(title: str, widget: QWidget) -> QGroupBox:
@@ -46,7 +42,7 @@ class RecentPage(QWidget):
         layout.addWidget(widget)
         return box
 
-    def refresh(self):
+    def refresh_live(self) -> None:
         try:
             reading = self.repository.latest_reading(self.settings.serid)
             station = reading.station
@@ -55,13 +51,16 @@ class RecentPage(QWidget):
             trend = "OFFLINE" if status.value == "OFFLINE" else trend_code(reading.dose_rate, reading.previous_dose_rate)
             self.dose.setText("--- µSv/h" if reading.dose_rate is None else f"{reading.dose_rate:.3f} µSv/h  {trend_symbol(trend)}")
             self.state.setText(status.value)
-            colors = {"NORMAL":"#258a45", "ALERT":"#d77b00", "ALARM":"#b51f1f", "OFFLINE":"#6b4380"}
+            colors = {"NORMAL": "#258a45", "ALERT": "#d77b00", "ALARM": "#b51f1f", "OFFLINE": "#6b4380"}
             self.state.setStyleSheet(f"font-size:24px;font-weight:700;padding:8px;color:white;background:{colors[status.value]};")
-            self.info.setText(
-                f"ID: {station.serid}\nName: {station.room}\nLocation: {station.location}\n"
-                f"Alert: {station.warnlevel:g} µSv/h\nAlarm: {station.alarmlevel:g} µSv/h\n"
-                f"Last: {reading.measured_at:%Y-%m-%d %H:%M:%S}" if reading.measured_at else f"ID: {station.serid}\nName: {station.room}\nLocation: {station.location}\nNO DATA"
-            )
+            if reading.measured_at:
+                self.info.setText(
+                    f"ID: {station.serid}\nName: {station.room}\nLocation: {station.location}\n"
+                    f"Alert: {station.warnlevel:g} µSv/h\nAlarm: {station.alarmlevel:g} µSv/h\n"
+                    f"Last: {reading.measured_at:%Y-%m-%d %H:%M:%S}"
+                )
+            else:
+                self.info.setText(f"ID: {station.serid}\nName: {station.room}\nLocation: {station.location}\nNO DATA")
             rows = self.repository.measurement_history(now - timedelta(minutes=10), now, serid=station.serid, limit=20)
             self.table.setRowCount(len(rows))
             for r, row in enumerate(reversed(rows)):
@@ -69,6 +68,7 @@ class RecentPage(QWidget):
                 for c, value in enumerate(values):
                     text = value.strftime("%Y-%m-%d %H:%M:%S") if hasattr(value, "strftime") else (f"{value:.4f}" if isinstance(value, float) else str(value))
                     self.table.setItem(r, c, QTableWidgetItem(text))
+            self.last_error = None
         except Exception as exc:
+            self.last_error = f"Database/read error: {exc}"
             self.state.setText("OFFLINE")
-            self.info.setText(f"Database/read error:\n{exc}")

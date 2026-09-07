@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
+
 import pytest
+
 from radmon.detector import parse_detector_line
 from radmon.status import MonitorStatus, classify_status
 from radmon.config import Settings
@@ -12,7 +14,8 @@ def test_detector_parser_matches_existing_first_seven_character_protocol():
 
 @pytest.mark.parametrize("raw", ["", "abc", "-0.1234", "nan", "inf", "-inf"])
 def test_detector_parser_rejects_invalid_values(raw: str):
-    with pytest.raises(ValueError): parse_detector_line(raw)
+    with pytest.raises(ValueError):
+        parse_detector_line(raw)
 
 
 def test_status_alarm_alert_normal_offline():
@@ -24,10 +27,20 @@ def test_status_alarm_alert_normal_offline():
     assert classify_status(None, None, now, 8, 10, 5) is MonitorStatus.OFFLINE
 
 
-def test_settings_defaults_match_demo(monkeypatch):
-    for key in list(__import__('os').environ):
-        if key.startswith('RADMON_'): monkeypatch.delenv(key, raising=False)
+def test_settings_defaults_match_user_database_and_dummy_profile(monkeypatch):
+    for key in list(__import__("os").environ):
+        if key.startswith("RADMON_"):
+            monkeypatch.delenv(key, raising=False)
     settings = Settings.from_env()
-    assert settings.serial_port == "COM15" and settings.baudrate == 2400 and settings.serid == 5202
-    assert settings.building == "52" and settings.room == "IS-1 Koridor" and settings.sample_interval == 2.0
-    assert settings.warnlevel == 8.0 and settings.alarmlevel == 10.0
+    assert settings.serial_port == "COM15"
+    assert settings.baudrate == 2400
+    assert settings.serid == 5201
+    assert settings.building == "52"
+    assert settings.room == "R. Lab Iradiasi"
+    assert settings.sample_interval == 2.0
+    assert settings.refresh_interval == 2.0
+    assert settings.warnlevel == 8.0
+    assert settings.alarmlevel == 10.0
+    dummy = settings.for_dummy()
+    assert dummy.serid == 5202
+    assert dummy.room == "IS-1 Koridor"

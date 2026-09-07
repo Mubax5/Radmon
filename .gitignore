@@ -7,3 +7,4 @@ logs/*.log
 reports/*.pdf
 reports/*.csv
 .worktrees/
+runtime/

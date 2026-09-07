@@ -1,359 +1,189 @@
-# Radmon DPFK — Python Backend, Admin Desktop, Public Monitoring
+# Radiation Monitoring
 
-Project ini adalah versi Python-first untuk demo satu detector **Gedung 52 / IS-1 Koridor / SERID 5202**. Backend, collector, admin desktop, public monitoring, report, alarm, dummy generator, sinkronisasi lokal-ke-pusat, dan central API semuanya Python.
+Sistem monitoring radiasi lokal memakai Python untuk akuisisi detector, database MariaDB, admin desktop, monitoring fullscreen, report, alarm, dan sinkronisasi opsional ke server pusat.
 
-Source `reference/original_user_main.py` menyimpan script awal buatan user sebagai referensi. `main.py` baru tetap mempertahankan protokol detector yang sama tetapi memecah logic ke module yang bisa diuji, dan default station sudah diperbaiki ke **5202** untuk IS-1 Koridor.
+## Jalankan
 
-## 1. Alur sistem
+Untuk detector asli, double-click:
 
 ```text
-DETECTOR (COM15, 2400 baud)
-        │
-        ▼
-main.py / Python SerialCollector
-        │
-        ├────────► rawdata
-        ├────────► measurement
-        ├────────► radmon_alarm_event
-        └────────► radmon_sync_queue
-                     │
-                     ▼
-                  MariaDB lokal ipradmon
-                     │
-          ┌──────────┼────────────┐
-          ▼          ▼            ▼
-      Admin UI   Public Web   sync_agent.py
-      PySide6    FastAPI          │ HTTPS
-                                 ▼
-                         central_server.py
-                                 │
-                                 ▼
-                           DB server pusat
+RADMON.bat
 ```
 
-Setiap gedung/ruangan nantinya boleh mempunyai server lokal sendiri. Acquisition dan monitoring lokal tetap jalan saat link ke **server pusat** putus; queue dikirim lagi setelah koneksi kembali.
+Untuk demo dummy Gedung 52 / IS-1 Koridor / SERID 5202, double-click:
 
-## 2. Demo yang sudah dikunci
+```text
+RUN_DUMMY.bat
+```
+
+Hanya satu mode yang bisa berjalan pada satu komputer. Kalau mode detector sedang aktif, mode dummy akan ditolak, dan sebaliknya. Tidak ada `STOP_ALL.bat`; tutup aplikasi admin untuk menghentikan seluruh proses lokal milik aplikasi secara bersih.
+
+Pada first run, launcher membuat `.venv`, meng-install dependency, dan membuat `.env` dari `.env.example` bila belum ada. Setelah itu launcher memakai `pythonw.exe`, sehingga tidak ada kumpulan jendela console untuk admin, public monitor, dan sync.
+
+## Database
+
+Aplikasi memakai schema `ipradmon` yang sudah ada. Tidak ada tabel tambahan `radmon_*` dan tidak ada migration schema aplikasi.
+
+Tabel yang dipakai:
+
+```text
+device
+measurement
+recent
+alarm
+applog
+news
+rawdata
+```
+
+Saat start, aplikasi memvalidasi tabel dan kolom tersebut. Jika schema tidak sesuai, aplikasi berhenti dengan satu pesan yang jelas dan tidak melakukan perubahan schema otomatis.
+
+Detector asli default mengikuti data lokal:
+
+```text
+SERID       5201
+Name        R. Lab Iradiasi
+Location    Gedung 52
+Alert       8 uSv/h
+Alarm       10 uSv/h
+Serial      COM15
+Baudrate    2400
+```
+
+Mode dummy membuat/memperbarui row `device` untuk:
 
 ```text
 SERID       5202
-Gedung      52
-Room        IS-1 Koridor
+Name        IS-1 Koridor
 Location    Gd.52
-Alert       8 µSv/h
-Alarm       10 µSv/h
-Max idle    5 menit
-Dummy       setiap 2 detik
-Serial      COM15 / 2400 / 8N1 / timeout 3 detik
-Database    ipradmon
+Alert       8 uSv/h
+Alarm       10 uSv/h
+Interval    2 detik
 ```
 
-## 3. Setup Windows
-
-Dari PowerShell/CMD di folder project:
-
-```bat
-py -3 -m venv .venv
-.venv\Scripts\activate
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-copy .env.example .env
-```
-
-Edit `.env` sesuai MariaDB lokal. Default-nya sengaja cocok dengan mesin demo, tapi password database jangan ditaruh di source code.
-
-## Windows launcher cepat
-
-Untuk Windows, runner utama sekarang dipisahkan supaya **measurement dummy tidak pernah otomatis hidup bersamaan dengan detector asli**.
+## Alur data lokal
 
 ```text
-SETUP_WINDOWS.bat   setup .venv + requirements + .env
-START_COMMON.bat    central + public monitoring + sync + admin
-RUN_DUMMY.bat       writer dummy 5202 setiap 2 detik
-RUN_DETECTOR.bat    writer detector asli melalui main.py
-STOP_ALL.bat        stop window Radmon yang dibuka launcher
+Detector / Dummy
+       ↓
+Python acquisition
+       ↓
+measurement + recent
+       ├── Admin desktop
+       ├── Fullscreen monitoring
+       ├── Alarm → alarm
+       ├── Report
+       └── optional sync → server pusat
 ```
 
-Urutan demo:
+`rawdata` dipakai untuk raw line dari detector asli. `applog` tetap tersedia sesuai schema existing untuk application log/audit yang membutuhkan penyimpanan database.
+
+Setiap measurement menyimpan `dose` aproksimasi dengan integrasi trapezoid dari dua pembacaan berurutan. Row `recent` diperbarui pada transaksi yang sama dengan measurement.
+
+## Refresh
+
+Semua data live menggunakan interval **2 detik**:
+
+- Recent
+- Tabular ketika tab aktif
+- Chart ketika tab aktif
+- Reports preview ketika tab aktif
+- Alarm ketika tab aktif
+- Logs ketika tab aktif
+- Fullscreen monitoring browser
+- Dummy acquisition
+- Sync loop bila diaktifkan
+
+Admin hanya me-refresh tab yang sedang terlihat agar database tidak dihantam banyak query bersamaan.
+
+## Admin
+
+Satu window admin menyediakan:
 
 ```text
-1. SETUP_WINDOWS.bat
-2. Siapkan MariaDB / schema / station 5202
-3. START_COMMON.bat
-4. RUN_DUMMY.bat
+Recent | Tabular | Chart | Reports | Alarm | Logs
 ```
 
-Untuk mode detector asli, ganti langkah 4 dengan `RUN_DETECTOR.bat`.
+Background refresh tidak membuka popup error berulang. Error polling ditampilkan di status bar. Popup hanya dipakai untuk aksi operator seperti export yang gagal atau error startup fatal.
 
-> **Penting:** jangan menjalankan `RUN_DETECTOR.bat` dan `RUN_DUMMY.bat` bersamaan. Keduanya menulis measurement dan dapat mencampur data real dengan data simulasi.
+## Monitoring fullscreen
 
-Dokumentasi Windows lengkap: [`docs/WINDOWS_RUNBOOK.md`](docs/WINDOWS_RUNBOOK.md).
-
-## 4. Siapkan database
-
-Tabel lama `device`, `rawdata`, dan `measurement` diasumsikan sudah ada di database `ipradmon` seperti sistem lama.
-
-Jalankan file additive berikut lewat MariaDB CLI / HeidiSQL:
+Secara default tersedia di:
 
 ```text
-database/schema_extension.sql
+http://127.0.0.1:8080
 ```
 
-File tersebut menambah:
+Untuk layar lain pada jaringan lokal, gunakan IP komputer server:
 
 ```text
-radmon_alarm_event
-radmon_sync_queue
-radmon_sync_receipt
+http://IP-SERVER:8080
 ```
 
-Tidak ada `DROP TABLE` dan tidak menghapus data lama.
+Halaman monitoring hanya menampilkan data publik station dan mengambil data terbaru setiap 2 detik.
 
-Daftarkan demo detector 5202:
+## Report
 
-```bat
-python scripts/register_demo_station.py
-```
+Tab Reports dapat memilih From/To dan menampilkan:
 
-Script ini meng-upsert `device` menjadi `IS-1 Koridor`, `Gd.52`, warnlevel 8, alarmlevel 10, maxidlemin 5.
+- first measurement
+- last measurement
+- minimum dose rate
+- average dose rate
+- maximum dose rate
+- jumlah sample
+- approximate dose
+- measurement preview
+- alarm history
 
-## 5. Dummy generator — insert ke `measurement` tiap 2 detik
+Gunakan **Export PDF** untuk membuat file report yang dapat dibuka dan diprint. Tab Tabular juga dapat export CSV.
 
-Mode normal:
+## Alarm
 
-```bat
-python dummy_measurement.py --mode normal --interval 2
-```
-
-Mode alert:
-
-```bat
-python dummy_measurement.py --mode alert --interval 2
-```
-
-Mode alarm:
-
-```bat
-python dummy_measurement.py --mode alarm --interval 2
-```
-
-Mode campuran untuk demo:
-
-```bat
-python dummy_measurement.py --mode mixed --interval 2
-```
-
-Generate 20 row lalu berhenti:
-
-```bat
-python dummy_measurement.py --mode mixed --interval 2 --count 20 --seed 123
-```
-
-Tambahkan simulated raw line ke `rawdata`:
-
-```bat
-python dummy_measurement.py --mode normal --interval 2 --write-raw
-```
-
-Launcher Windows: `scripts\run_dummy.bat`.
-
-## 6. Detector asli — `main.py`
-
-Hubungkan detector ke COM15 lalu:
-
-```bat
-python main.py
-```
-
-Default serial sesuai source user:
+Alarm memakai tabel existing:
 
 ```text
-COM15
-2400 baud
-8 data bits
-No parity
-1 stop bit
-3 s read timeout
+alarm(alarmid, serid, dtom, type, msg)
 ```
 
-Setiap line ASCII diparse dari tujuh karakter pertama, disimpan ke `rawdata` + `measurement`, `previnterval=2`, `stat=0`, dievaluasi alarm, dan dimasukkan ke sync queue.
+Event yang disimpan adalah transisi `ALERT`, `ALARM`, dan `RECOVERY`, sehingga polling 2 detik tidak menghasilkan baris alarm duplikat setiap sample.
 
-Launcher: `scripts\run_collector.bat`.
+## Server pusat
 
-## 7. Admin desktop Python
+Sync lokal default **OFF**. Sistem lokal tetap normal meskipun server pusat belum tersedia.
 
-```bat
-python admin_app.py
+Aktifkan di `.env` hanya ketika endpoint pusat sudah siap:
+
+```env
+RADMON_SYNC_ENABLED=1
+RADMON_CENTRAL_URL=http://IP-SERVER-PUSAT:8090
+RADMON_CENTRAL_TOKEN=ganti-token-kuat
 ```
 
-Workflow admin mengikuti konsep aplikasi Python lama:
+Sync membaca `measurement` berdasarkan checkpoint file lokal di folder `runtime/`. Tidak ada queue table tambahan. Jika koneksi pusat gagal, checkpoint tidak maju sehingga data dicoba lagi setelah koneksi pulih.
 
-**Recent / Tabular / Chart / Reports / Alarm / Logs**
+Server pusat dijalankan hanya pada mesin pusat:
 
-- **Recent** — live dose, status, trend, last update, threshold, recent rows.
-- **Tabular** — pilih From/To, limit, lihat measurement, export CSV.
-- **Chart** — grafik Dose rate dan Approx. Dose serta garis Alert/Alarm.
-- **Reports** — recap jangka waktu tertentu, first/last, min/average/max, samples, approximate dose, preview, **Export PDF**, buka PDF untuk print.
-- **Alarm** — active/history event, value/threshold, acknowledgement operator + note.
-- **Logs** — tail `logs/radmon.log`.
-
-Launcher: `scripts\run_admin.bat`.
-
-## 8. Public fullscreen monitoring
-
-Ini yang ditampilkan di TV/browser/hosting, bukan admin UI:
-
-```bat
-python public_app.py --host 0.0.0.0 --port 8080
-```
-
-Buka:
-
-```text
-http://127.0.0.1:8080/
-```
-
-Untuk komputer lain pada LAN gunakan IP server lokal, misalnya:
-
-```text
-http://192.168.1.52:8080/
-```
-
-API polling:
-
-```text
-GET /api/latest
-GET /health
-```
-
-Browser refresh data otomatis tiap 2 detik dan menampilkan `[5202] IS-1 Koridor (Gd. 52)`, current dose, trend, status, timestamp, Alert 8 µSv/h, Alarm 10 µSv/h. Halaman public tidak punya Reports, Alarm acknowledgement, database setting, atau fungsi admin.
-
-Launcher: `scripts\run_public.bat`.
-
-## 9. Report jangka waktu tertentu
-
-Di Admin → Reports pilih From/To → Preview recap → **Export PDF**. PDF memuat:
-
-- station/gedung/ID;
-- periode;
-- threshold;
-- first dan last measurement;
-- min / average / max;
-- jumlah sample;
-- approximate cumulative dose (integrasi trapezoid);
-- measurement table;
-- alarm history dan acknowledgement.
-
-Tabular juga dapat export CSV.
-
-## 10. Alarm
-
-Logic status shared untuk UI public/admin:
-
-```text
-OFFLINE  tidak ada data / lebih tua dari maxidlemin
-ALARM    dose >= alarmlevel
-ALERT    warnlevel <= dose < alarmlevel
-NORMAL   dose < warnlevel
-```
-
-`AlarmService` menyimpan transition, bukan row alarm baru tiap 2 detik. Continuous alert/alarm hanya meng-update event. Recovery menutup event aktif. Admin dapat acknowledgement dengan nama operator dan note.
-
-## 11. Sinkronisasi server lokal → server pusat
-
-Pada server pusat siapkan Python environment + database, jalankan `database/schema_extension.sql`. Untuk demo station 5202, jalankan juga `python scripts/register_demo_station.py` pada database pusat, lalu:
-
-```bat
+```bash
 python central_server.py --host 0.0.0.0 --port 8090
 ```
 
-Pada `.env` server lokal:
+Database pusat menggunakan schema yang sama. Ingest memakai primary key `measurement (serid, dtom)` untuk idempotensi.
 
-```dotenv
-RADMON_CENTRAL_URL=http://IP-SERVER-PUSAT:8090
-RADMON_CENTRAL_TOKEN=ganti-dengan-token-rahasia
+## Konfigurasi
+
+Edit `.env` bila perlu:
+
+```env
+RADMON_SERIAL_PORT=COM15
+RADMON_DB_HOST=localhost
+RADMON_DB_PORT=3306
+RADMON_DB_USER=root
+RADMON_DB_PASSWORD=
+RADMON_DB_NAME=ipradmon
+RADMON_REFRESH_INTERVAL=2
+RADMON_PUBLIC_PORT=8080
+RADMON_SYNC_ENABLED=0
 ```
 
-Token yang sama dipakai di `.env` central server. Jalankan lokal:
-
-```bat
-python sync_agent.py --interval 2
-```
-
-Atau kirim satu batch lalu exit:
-
-```bat
-python sync_agent.py --once
-```
-
-`radmon_sync_queue` menyimpan measurement yang belum terkirim. Kalau internet/LAN pusat mati, acquisition lokal tetap jalan. Sync memakai `sample_key` + `radmon_sync_receipt` sehingga retry tidak menduplikasi measurement pusat.
-
-Central API:
-
-```text
-POST /api/v1/measurements/batch
-GET  /api/v1/stations
-GET  /api/v1/latest/{serid}
-GET  /health
-```
-
-Launcher: `scripts\run_sync.bat` dan `scripts\run_central.bat`.
-
-## 12. Struktur project
-
-```text
-main.py                       collector detector asli
-dummy_measurement.py          dummy measurement 2 detik
-admin_app.py                  PySide6 admin desktop
-public_app.py                 FastAPI fullscreen public monitoring
-sync_agent.py                 uploader local → pusat
-central_server.py             FastAPI central ingest
-radmon/                       domain/backend/service modules
-radmon/admin/                 Recent/Tabular/Chart/Reports/Alarm/Logs
-database/schema_extension.sql alarm + queue + receipt
-monitoring/                   template/CSS/JS public fullscreen
-scripts/                      registration, launchers, smoke
-reference/original_user_main.py
-```
-
-## 13. Offline smoke test
-
-Tanpa detector, MariaDB, dan GUI display:
-
-```bat
-python scripts/smoke_demo.py
-python -m pytest -q
-```
-
-Smoke test memeriksa dummy generator, public API, HTML public, CSV, dan PDF.
-
-## 14. Urutan demo yang paling gampang
-
-Terminal 1:
-
-```bat
-python dummy_measurement.py --mode mixed --interval 2
-```
-
-Terminal 2:
-
-```bat
-python public_app.py
-```
-
-Terminal 3:
-
-```bat
-python admin_app.py
-```
-
-Buka `http://127.0.0.1:8080` untuk public monitoring. Gunakan admin desktop untuk chart/recap/report/alarm/log.
-
-## 15. Catatan production
-
-- Jangan jalankan collector asli dan dummy untuk SERID 5202 secara bersamaan pada database production.
-- Password MariaDB dan central token wajib diganti.
-- Gunakan TLS/reverse proxy/VPN untuk central API lintas gedung.
-- Batasi public monitor ke endpoint read-only.
-- Backup database sebelum schema extension.
-- Alarm software/network monitoring bukan pengganti interlock proteksi radiasi hardware yang fail-safe.
+Jangan menjalankan detector dan dummy bersamaan. Aplikasi sudah mengunci satu instance untuk mencegah collision writer.
