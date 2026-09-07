@@ -48,6 +48,7 @@ class Settings:
     grafana_fallback_port: int = 3300
     grafana_user: str = "admin"
     grafana_password: str = "admin"
+    grafana_bin: str = ""
     report_dir: Path = Path("!REPORT!")
     runtime_dir: Path = Path("runtime")
     log_dir: Path = Path("logs")
@@ -95,6 +96,7 @@ class Settings:
             grafana_fallback_port=int(get("RADMON_GRAFANA_PORT", "3300")),
             grafana_user=get("RADMON_GRAFANA_USER", "admin"),
             grafana_password=get("RADMON_GRAFANA_PASSWORD", "admin"),
+            grafana_bin=get("RADMON_GRAFANA_BIN", "").strip(),
             report_dir=Path(get("RADMON_REPORT_DIR", "!REPORT!")),
             runtime_dir=Path(get("RADMON_RUNTIME_DIR", "runtime")),
             log_dir=Path(get("RADMON_LOG_DIR", "logs")),
