@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
-    QListWidget,
-    QListWidgetItem,
+    QFormLayout,
+    QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QSplitter,
     QTabWidget,
     QToolBar,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -40,6 +45,9 @@ class MainWindow(QMainWindow):
         parent=None,
     ) -> None:
         super().__init__(parent)
+        self.repository = repository
+        self.report_service = report_service
+        self.base_settings = settings
         self.settings = settings
         self.source = source
         self.setWindowTitle("Radiation Monitoring")
@@ -50,17 +58,6 @@ class MainWindow(QMainWindow):
         self._build_actions()
         self._build_menus()
         self._build_toolbar()
-
-        stations = QListWidget()
-        stations.setObjectName("stationList")
-        stations.addItem(
-            QListWidgetItem(
-                silk_icon("feed"),
-                f"{settings.room}  [{settings.serid}]",
-            )
-        )
-        stations.setCurrentRow(0)
-        stations.setMinimumWidth(220)
 
         self.tabs.addTab(
             RecentPage(repository, settings), silk_icon("clock"), "Recent"
@@ -81,8 +78,9 @@ class MainWindow(QMainWindow):
             LogsPage(log_path), silk_icon("page_white_text"), "Logs"
         )
 
+        sidebar = self._build_station_sidebar()
         splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(stations)
+        splitter.addWidget(sidebar)
         splitter.addWidget(self.tabs)
         splitter.setStretchFactor(1, 1)
 
@@ -95,6 +93,95 @@ class MainWindow(QMainWindow):
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_current_page)
         self.refresh_timer.start(2000)
+        self.refresh_current_page()
+
+    def _build_station_sidebar(self) -> QWidget:
+        sidebar = QWidget()
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.station_tree = QTreeWidget()
+        self.station_tree.setObjectName("stationTree")
+        self.station_tree.setHeaderHidden(True)
+        self.station_tree.setMinimumWidth(240)
+        root = QTreeWidgetItem(self.station_tree, ["Station"])
+        root.setIcon(0, silk_icon("feed"))
+        root.setExpanded(True)
+
+        selected_item = None
+        for station in self.repository.station_configs():
+            child = QTreeWidgetItem(root, [station.room])
+            child.setIcon(0, silk_icon("feed"))
+            child.setData(0, Qt.UserRole, station.serid)
+            child.setToolTip(
+                0,
+                f"[{station.serid}] {station.room} ({station.location}) · "
+                f"Alert {station.warnlevel:g} {station.unit}, "
+                f"Alarm {station.alarmlevel:g} {station.unit}",
+            )
+            if station.serid == self.settings.serid:
+                selected_item = child
+
+        details = QWidget()
+        form = QFormLayout(details)
+        form.setContentsMargins(6, 6, 6, 6)
+        self.station_tag = QLabel("-")
+        self.station_name = QLabel("-")
+        self.station_location = QLabel("-")
+        self.station_description = QLabel("-")
+        self.station_description.setWordWrap(True)
+        form.addRow("Tag", self.station_tag)
+        form.addRow("Name", self.station_name)
+        form.addRow("Location", self.station_location)
+        form.addRow("Description", self.station_description)
+        update = QPushButton("Update")
+        update.clicked.connect(self.refresh_current_page)
+        form.addRow("", update)
+
+        layout.addWidget(self.station_tree, 1)
+        layout.addWidget(details)
+        self.station_tree.currentItemChanged.connect(self._station_changed)
+        if selected_item is None and root.childCount():
+            selected_item = root.child(0)
+        if selected_item is not None:
+            self.station_tree.setCurrentItem(selected_item)
+        return sidebar
+
+    def _station_changed(self, current, previous=None) -> None:
+        if current is None:
+            return
+        serid = current.data(0, Qt.UserRole)
+        if serid is None:
+            return
+        try:
+            station = self.repository.station_config(int(serid))
+        except Exception as exc:
+            self.statusBar().showMessage(f"Station read error: {exc}")
+            return
+        selected = replace(
+            self.base_settings,
+            serid=station.serid,
+            building=station.building,
+            room=station.room,
+            location=station.location,
+            warnlevel=station.warnlevel,
+            alarmlevel=station.alarmlevel,
+            maxidlemin=station.maxidlemin,
+            unit=station.unit,
+        )
+        self.settings = selected
+        self.report_service.settings = selected
+        for index in range(self.tabs.count()):
+            page = self.tabs.widget(index)
+            if hasattr(page, "settings"):
+                page.settings = selected
+        self.station_tag.setText(str(station.serid))
+        self.station_name.setText(station.room)
+        self.station_location.setText(station.location)
+        self.station_description.setText(
+            f"Alert {station.warnlevel:g} {station.unit}, "
+            f"Alarm {station.alarmlevel:g} {station.unit}"
+        )
         self.refresh_current_page()
 
     def _build_actions(self) -> None:
