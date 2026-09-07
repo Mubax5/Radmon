@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import os
 import threading
+import webbrowser
+from typing import Callable
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
@@ -28,6 +31,42 @@ from .logs_page import LogsPage
 from .recent_page import RecentPage
 from .reports_page import ReportsPage
 from .tabular_page import TabularPage
+
+
+def open_external_url(
+    url: str,
+    *,
+    platform_name: str | None = None,
+    native_open: Callable[[str], object] | None = None,
+    qt_open: Callable[[QUrl], bool] | None = None,
+    browser_open: Callable[[str], bool] | None = None,
+) -> bool:
+    """Open a monitoring URL without silently swallowing launcher failures."""
+    platform = platform_name or os.name
+
+    if platform == "nt":
+        opener = native_open
+        if opener is None and hasattr(os, "startfile"):
+            opener = os.startfile
+        if opener is not None:
+            try:
+                opener(url)
+                return True
+            except (OSError, ValueError):
+                pass
+
+    qt_launcher = qt_open or QDesktopServices.openUrl
+    try:
+        if bool(qt_launcher(QUrl(url))):
+            return True
+    except (OSError, RuntimeError, TypeError, ValueError):
+        pass
+
+    fallback = browser_open or webbrowser.open_new_tab
+    try:
+        return bool(fallback(url))
+    except (OSError, webbrowser.Error):
+        return False
 
 
 class MainWindow(QMainWindow):
@@ -88,6 +127,11 @@ class MainWindow(QMainWindow):
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_current_page)
         self.refresh_timer.start(2000)
+
+        self._monitoring_poll_timer = QTimer(self)
+        self._monitoring_poll_timer.setInterval(250)
+        self._monitoring_poll_timer.timeout.connect(self._open_monitoring_if_ready)
+
         self._start_grafana_bootstrap()
         self.refresh_current_page()
 
@@ -250,25 +294,42 @@ class MainWindow(QMainWindow):
             self._grafana_ready_url = None
             self._grafana_error = str(exc)
 
+    def _open_monitoring_url(self) -> bool:
+        if not self._grafana_ready_url:
+            return False
+        opened = open_external_url(self._grafana_ready_url)
+        if opened:
+            self.statusBar().showMessage("Monitoring Grafana dibuka di browser.", 5000)
+            return True
+        QMessageBox.warning(
+            self,
+            "Monitoring",
+            "Browser gagal membuka dashboard Grafana. Periksa default browser Windows.",
+        )
+        return False
+
     def open_monitoring(self) -> None:
         if self._grafana_ready_url:
-            QDesktopServices.openUrl(QUrl(self._grafana_ready_url))
+            self._open_monitoring_url()
             return
         self._monitoring_open_pending = True
-        if self._grafana_error:
-            self._start_grafana_bootstrap()
+        self._start_grafana_bootstrap()
+        if not self._monitoring_poll_timer.isActive():
+            self._monitoring_poll_timer.start()
         self.statusBar().showMessage("Grafana sedang disiapkan dan diverifikasi...")
 
     def _open_monitoring_if_ready(self) -> None:
         if not self._monitoring_open_pending:
+            if self._monitoring_poll_timer.isActive():
+                self._monitoring_poll_timer.stop()
             return
         if self._grafana_ready_url:
             self._monitoring_open_pending = False
-            opened = QDesktopServices.openUrl(QUrl(self._grafana_ready_url))
-            if not opened:
-                QMessageBox.warning(self, "Monitoring", "Browser gagal membuka dashboard Grafana.")
+            self._monitoring_poll_timer.stop()
+            self._open_monitoring_url()
         elif self._grafana_error:
             self._monitoring_open_pending = False
+            self._monitoring_poll_timer.stop()
             message = f"Grafana setup error: {self._grafana_error}"
             self.statusBar().showMessage(message)
             QMessageBox.warning(self, "Monitoring", message)
@@ -290,10 +351,15 @@ class MainWindow(QMainWindow):
         page = self.tabs.currentWidget()
         if page is not None and hasattr(page, "refresh_live"):
             page.refresh_live()
+
+        self._open_monitoring_if_ready()
+        if self._monitoring_open_pending:
+            self.statusBar().showMessage("Grafana sedang disiapkan dan diverifikasi...")
+            return
+
         error = getattr(page, "last_error", None) if page is not None else None
         mode = "DEMO" if self.source == "dummy" else "DETECTOR"
         if error:
             self.statusBar().showMessage(f"{mode} · {error}")
         else:
             self.statusBar().showMessage(f"{mode} · {self.settings.station_label} · refresh 2s")
-        self._open_monitoring_if_ready()
