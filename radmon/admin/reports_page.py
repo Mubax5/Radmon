@@ -49,6 +49,7 @@ class ReportsPage(QWidget):
         csv_button.clicked.connect(self.export_csv)
 
         controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
         controls.addWidget(QLabel("From"))
         controls.addWidget(self.start)
         controls.addWidget(QLabel("To"))
@@ -62,11 +63,15 @@ class ReportsPage(QWidget):
 
         self.preview = QTextBrowser()
         self.preview.setOpenExternalLinks(False)
+        self.preview.setContentsMargins(0, 0, 0, 0)
+        self.preview.document().setDocumentMargin(2.0)
         self.preview.setHtml(
             "<h3 style='text-align:center'>Pilih range waktu lalu klik Preview</h3>"
         )
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         layout.addLayout(controls)
         layout.addWidget(self.preview, 1)
 
@@ -76,22 +81,29 @@ class ReportsPage(QWidget):
     def build_preview(self) -> None:
         try:
             start, end = self.range()
+            self.report_service.settings = self.settings
             html = self.report_service.preview_html(start, end)
+            self.preview.setUpdatesEnabled(False)
             self.preview.setHtml(html)
+            self.preview.document().setDocumentMargin(2.0)
+            self.preview.setUpdatesEnabled(True)
             self.preview_ready = True
             self.print_button.setEnabled(True)
             self.pdf_button.setEnabled(True)
             self.last_error = None
         except Exception as exc:
+            self.preview.setUpdatesEnabled(True)
             self.preview_ready = False
             self.print_button.setEnabled(False)
             self.pdf_button.setEnabled(False)
             self.last_error = f"Report preview error: {exc}"
 
     def refresh_live(self) -> None:
-        if self.live.isChecked() and self.preview_ready:
+        # The global Admin timer calls this every two seconds. Updating the end
+        # timestamp is cheap; rebuilding the report here made the GUI repeatedly
+        # query MariaDB and relayout rich text on the UI thread.
+        if self.live.isChecked():
             self.end.setDateTime(QDateTime.currentDateTime())
-            self.build_preview()
 
     def print_report(self) -> None:
         if not self.preview_ready:
@@ -129,6 +141,7 @@ class ReportsPage(QWidget):
         if not filename:
             return
         try:
+            self.report_service.settings = self.settings
             self.report_service.export_csv(start, end, Path(filename))
             QMessageBox.information(self, "CSV exported", filename)
         except Exception as exc:
