@@ -4,26 +4,38 @@ from pathlib import Path
 from radmon.grafana_tv import (
     BUILDING_PAGE_ORDER,
     DASHBOARD_FILES,
+    DASHBOARD_UIDS,
+    OPERATIONS_PAGE_COUNT,
+    OPERATIONS_PAGE_UIDS,
     PAGE_UIDS,
     PLAYLIST_INTERVAL,
     PLAYLIST_UID,
     build_dashboard_payloads,
     build_playlist_payload,
+    operation_page_stations,
     playlist_url,
 )
+from radmon.stations import station_catalog
 
 
 def _panel_by_title(dashboard, title):
     return next(panel for panel in dashboard["panels"] if panel.get("title") == title)
 
 
-def test_playlist_cycles_eight_pages_every_ten_seconds_in_kiosk_autofit():
+def test_playlist_keeps_three_logical_pages_and_advances_operations_subpage_each_rotation():
     payload = build_playlist_payload()
     assert PLAYLIST_INTERVAL == "10s"
-    assert len(PAGE_UIDS) == 8
+    assert len(PAGE_UIDS) == 3
+    assert OPERATIONS_PAGE_COUNT == 8
+    assert len(OPERATIONS_PAGE_UIDS) == 8
     assert payload["metadata"]["name"] == PLAYLIST_UID
     assert payload["spec"]["interval"] == "10s"
-    assert [item["value"] for item in payload["spec"]["items"]] == list(PAGE_UIDS)
+
+    values = [item["value"] for item in payload["spec"]["items"]]
+    assert len(values) == 24
+    for index, operations_uid in enumerate(OPERATIONS_PAGE_UIDS):
+        assert values[index * 3 : index * 3 + 3] == [PAGE_UIDS[0], PAGE_UIDS[1], operations_uid]
+
     url = playlist_url("http://localhost:3000")
     assert f"/playlists/play/{PLAYLIST_UID}" in url
     assert "kiosk=1" in url
@@ -33,9 +45,10 @@ def test_playlist_cycles_eight_pages_every_ten_seconds_in_kiosk_autofit():
     assert "_dash.hideVariables=true" in url
 
 
-def test_every_tv_page_has_identical_two_panel_header_and_fits_without_scroll():
+def test_every_generated_dashboard_has_identical_two_panel_header_and_fits_without_scroll():
     dashboards = build_dashboard_payloads()
-    assert len(dashboards) == 8
+    assert len(dashboards) == 10
+    assert [dashboard["uid"] for dashboard in dashboards] == list(DASHBOARD_UIDS)
     headers = []
     for dashboard in dashboards:
         assert dashboard["refresh"] == "2s"
@@ -56,9 +69,11 @@ def test_page_one_keeps_dose_as_main_focus_with_separate_short_sparkline_and_sma
     dose = [panel for panel in page1["panels"] if panel.get("title", "").startswith("[")]
     spark = [panel for panel in page1["panels"] if panel.get("description") == "latest-dose-sparkline"]
     timestamp = [panel for panel in page1["panels"] if panel.get("description") == "latest-measurement-time"]
+    operations = [panel for panel in page1["panels"] if panel.get("description") == "operational-condition"]
     assert len(dose) == 15
     assert len(spark) == 15
     assert len(timestamp) == 15
+    assert operations == []
     for panel in dose:
         assert panel["type"] == "stat"
         assert panel["gridPos"]["h"] == 2
@@ -82,9 +97,11 @@ def test_page_one_keeps_dose_as_main_focus_with_separate_short_sparkline_and_sma
         assert panel["fieldConfig"]["defaults"]["unit"] == "dateTimeAsLocal"
 
 
-def test_page_two_uses_readable_building_small_multiples_instead_of_one_fifteen_series_wall():
+def test_page_two_uses_readable_building_small_multiples_and_has_no_operations_table():
     page2 = build_dashboard_payloads()[1]
     trends = [panel for panel in page2["panels"] if panel.get("description") == "building-dose-trend"]
+    operations = [panel for panel in page2["panels"] if panel.get("description") == "operational-condition"]
+    assert operations == []
     assert len(trends) == 5
     assert {panel["title"] for panel in trends} == {f"Dose Rate · Gedung {building} · 3 Jam" for building in BUILDING_PAGE_ORDER}
     for panel in trends:
@@ -108,56 +125,53 @@ def test_integer_summary_stats_have_no_trailing_decimal_places():
     assert seen == wanted
 
 
-def test_operational_condition_rotates_across_all_eight_pages():
+def test_only_operations_logical_page_rotates_eight_detector_subpages():
     dashboards = build_dashboard_payloads()
-    assert len(dashboards) == 8
-    for page_number, dashboard in enumerate(dashboards, start=1):
+    assert all(panel.get("description") != "operational-condition" for dashboard in dashboards[:2] for panel in dashboard["panels"])
+
+    operations_dashboards = dashboards[2:]
+    assert len(operations_dashboards) == 8
+    for page_number, dashboard in enumerate(operations_dashboards, start=1):
         operations = [panel for panel in dashboard["panels"] if panel.get("description") == "operational-condition"]
-        assert operations, f"page {page_number} is missing operational condition"
-        assert any(f"Page {page_number}/8" in panel["title"] for panel in operations)
-        for panel in operations:
-            assert "FROM measurement" in panel["targets"][0]["rawSql"]
-            assert " recent " not in panel["targets"][0]["rawSql"].lower()
+        assert len(operations) == 1
+        assert f"Page {page_number}/8" in operations[0]["title"]
+        sql = operations[0]["targets"][0]["rawSql"]
+        assert "FROM measurement" in sql
+        assert " recent " not in sql.lower()
+
+    chunks = [operation_page_stations(page_number) for page_number in range(1, 9)]
+    flattened = [station.serid for chunk in chunks for station in chunk]
+    expected = [station.serid for station in station_catalog()]
+    assert flattened == expected
+    assert len(flattened) == len(set(flattened)) == 15
+    assert all(1 <= len(chunk) <= 2 for chunk in chunks)
 
 
-def test_building_detail_pages_cover_all_five_buildings_with_current_value_trend_and_condition():
-    dashboards = build_dashboard_payloads()[3:]
-    assert len(dashboards) == 5
-    for building, dashboard in zip(BUILDING_PAGE_ORDER, dashboards):
+def test_operations_variants_keep_same_page_three_content_except_detector_table_slice():
+    operations_dashboards = build_dashboard_payloads()[2:]
+    for page_number, dashboard in enumerate(operations_dashboards, start=1):
         payload = json.dumps(dashboard, ensure_ascii=False)
-        assert f"Gedung {building}" in dashboard["title"]
-        assert "latest-measurement-time" in payload
-        assert "building-dose-trend" in payload
-        assert "operational-condition" in payload
+        assert dashboard["title"] == "RadMon TV · Operations"
+        assert "Status Detector" in payload
+        assert f"Kondisi Operasional Detector · Page {page_number}/8" in payload
+        assert "Alarm Terbaru · 24 Jam" in payload
+        assert "OFFLINE" in payload and "ALARM" in payload and "ALERT" in payload and "NORMAL" in payload
+        assert "piechart" in payload
 
 
-def test_page_three_status_is_derived_from_latest_measurement_not_recent_table():
-    page3 = build_dashboard_payloads()[2]
-    payload = json.dumps(page3, ensure_ascii=False)
-    assert "Status Detector" in payload
-    assert "Kondisi Operasional Detector · Page 3/8" in payload
-    assert "FROM measurement" in payload
-    assert " recent " not in payload.lower()
-    assert "OFFLINE" in payload and "ALARM" in payload and "ALERT" in payload and "NORMAL" in payload
-    assert "piechart" in payload
-
-
-def test_dashboard_file_contract_has_eight_distinct_page_names():
-    assert set(DASHBOARD_FILES) == {
+def test_dashboard_file_contract_has_two_shared_pages_and_eight_operations_variants():
+    assert DASHBOARD_FILES[:2] == (
         "radmon-tv-page-1-realtime.json",
         "radmon-tv-page-2-trends.json",
-        "radmon-tv-page-3-operations.json",
-        "radmon-tv-page-4-building-50.json",
-        "radmon-tv-page-5-building-38.json",
-        "radmon-tv-page-6-building-52.json",
-        "radmon-tv-page-7-building-55.json",
-        "radmon-tv-page-8-building-57.json",
-    }
+    )
+    assert len(DASHBOARD_FILES) == 10
+    assert len(set(DASHBOARD_FILES)) == 10
+    assert all(name.startswith("radmon-tv-page-3-operations-") for name in DASHBOARD_FILES[2:])
 
 
 def test_dashboard_payloads_are_generated_at_runtime_not_duplicated_as_static_json():
     root = Path(__file__).resolve().parents[1]
-    assert len(build_dashboard_payloads()) == 8
+    assert len(build_dashboard_payloads()) == 10
     for filename in DASHBOARD_FILES:
         assert not (root / "grafana" / "dashboards" / filename).exists()
     assert not (root / "grafana" / "dashboards" / "radiation-monitoring.json").exists()
