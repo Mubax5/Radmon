@@ -40,7 +40,7 @@ def test_bootstrap_requires_playlist_and_returns_playlist_kiosk_url(tmp_path):
     assert "kiosk=1" in url and "autofitpanels" in url
 
 
-def test_api_provisioner_upserts_three_dashboards_and_playlist(tmp_path):
+def test_api_provisioner_upserts_eight_dashboards_and_playlist(tmp_path):
     bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
     calls = []
 
@@ -55,12 +55,13 @@ def test_api_provisioner_upserts_three_dashboards_and_playlist(tmp_path):
     bootstrap._request_json = request
     assert bootstrap._provision_via_api("http://localhost:3000") is True
     dashboard_posts = [call for call in calls if call[0] == "POST" and call[1].endswith("/api/dashboards/db")]
-    assert len(dashboard_posts) == 3
+    assert len(dashboard_posts) == 8
     assert [call[2]["dashboard"]["uid"] for call in dashboard_posts] == list(PAGE_UIDS)
     playlist_posts = [call for call in calls if call[0] == "POST" and "/apis/playlist.grafana.app/" in call[1]]
     assert len(playlist_posts) == 1
     assert playlist_posts[0][2]["metadata"]["name"] == PLAYLIST_UID
     assert playlist_posts[0][2]["spec"]["interval"] == "10s"
+    assert len(playlist_posts[0][2]["spec"]["items"]) == 8
 
 
 def test_api_provisioner_updates_existing_playlist_with_resource_version(tmp_path):
