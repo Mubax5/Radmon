@@ -80,6 +80,7 @@ def test_bootstrap_refuses_to_return_unverified_playlist():
 
 def test_grafana_tv_pages_refresh_every_two_seconds_and_use_existing_schema_only():
     dashboards = build_dashboard_payloads()
+    assert len(dashboards) == 8
     assert [dashboard["uid"] for dashboard in dashboards] == list(PAGE_UIDS)
     for dashboard in dashboards:
         assert dashboard["refresh"] == "2s"
@@ -92,7 +93,8 @@ def test_grafana_tv_pages_refresh_every_two_seconds_and_use_existing_schema_only
     assert "radmon_" not in payload
     assert "REAL TIME DOSE RATE MONITORING SYSTEM" in payload
     assert "µSv/h" in payload
-    assert "Dose Rate Monitoring" in payload
+    assert "Dose Rate · Gedung" in payload
+    assert "Kondisi Operasional Detector · Page 8/8" in payload
 
 
 def test_grafana_provisioning_uses_mysql_and_collision_safe_bundled_port():
