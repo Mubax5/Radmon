@@ -1,0 +1,42 @@
+:root {
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: #121212;
+  background: #d5d9d7;
+}
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #c9cecb; }
+body { transition: background .25s ease; }
+.wallboard { height: 100vh; display: grid; grid-template-rows: 15vh 1fr 12vh; padding: 2.2vh 3vw; gap: 2vh; }
+.headline { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; border-top: 1.2vh solid #9a291f; background: #eef0ed; padding: 1vh 2vw; }
+.headline h1 { margin: 0; font-family: Georgia, serif; font-size: clamp(24px, 2.5vw, 48px); text-align: center; letter-spacing: .04em; white-space: nowrap; }
+.clock { justify-self: end; color: #444; font-size: clamp(16px, 1.2vw, 24px); }
+.station-card { width: min(72vw, 1100px); align-self: center; justify-self: center; border: .35vw solid #202525; background: #edf0ed; box-shadow: 0 2vh 5vh rgba(0,0,0,.18); }
+.station-title { background: #303533; color: #fff; padding: 1.2vh 1.4vw; font-size: clamp(22px, 2.1vw, 42px); }
+.last-row { display: flex; justify-content: space-between; gap: 2vw; padding: 1.5vh 1.4vw .5vh; font-size: clamp(20px, 1.6vw, 32px); font-weight: 650; }
+.freshness { color: #4f5854; }
+.reading-row { display: flex; align-items: center; justify-content: center; gap: 1.5vw; padding: 2vh 2vw; }
+.trend { font-size: clamp(56px, 6vw, 120px); font-weight: 900; min-width: 1.1em; text-align: center; }
+.dose { font-size: clamp(72px, 9vw, 180px); line-height: .95; font-weight: 800; font-variant-numeric: tabular-nums; }
+.unit { font-size: clamp(36px, 4vw, 80px); font-weight: 700; align-self: end; padding-bottom: 1vh; }
+.state { width: max-content; min-width: 22%; margin: 0 auto 2vh; padding: .8vh 2vw; border-radius: 999px; text-align: center; color: #fff; font-weight: 800; font-size: clamp(20px, 1.8vw, 36px); }
+.thresholds { border-top: .2vh solid #a6aaa7; padding: 1.5vh 1.4vw; font-size: clamp(20px, 1.5vw, 30px); }
+footer { text-align: center; background: #eef0ed; padding: 1.5vh 2vw; font-family: Georgia, serif; font-size: clamp(18px, 1.5vw, 30px); }
+.status-normal .state { background: #2d8a45; }
+.status-normal .trend { color: #267cb5; }
+.status-alert { background: #ead7ae; }
+.status-alert .station-card { border-color: #c87b13; }
+.status-alert .state { background: #e18b16; }
+.status-alert .trend { color: #d06a0b; }
+.status-alarm { background: #e8b9b9; }
+.status-alarm .station-card { border-color: #a71717; }
+.status-alarm .state { background: #b11919; }
+.status-alarm .trend { color: #a71717; }
+.status-offline { background: #cdc2d7; }
+.status-offline .station-card { border-color: #684279; }
+.status-offline .state { background: #684279; }
+.status-offline .trend { color: #684279; }
+@media (max-aspect-ratio: 4/3) {
+  .station-card { width: 92vw; }
+  .headline { grid-template-columns: 1fr; }
+  .clock { display: none; }
+}
