@@ -76,6 +76,7 @@ def test_background_refresh_never_opens_modal_error_popups():
 
 def test_public_monitor_fetches_latest_every_two_seconds():
     source = read("monitoring/static/js/monitor.js")
+    assert "setInterval(updateClock, 2000)" in source
     assert "setInterval(refresh, 2000)" in source
 
 
