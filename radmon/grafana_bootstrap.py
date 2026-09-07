@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import time
 from typing import Callable
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
@@ -60,10 +61,9 @@ class GrafanaBootstrap:
         if self.dashboard_probe(preferred):
             return dashboard_url(preferred)
 
+        # The preferred endpoint may be an unrelated Grafana. Always bring up
+        # the bundled/provisioned instance before trusting the fallback port.
         fallback = self.fallback_base_url
-        if fallback != preferred and self.dashboard_probe(fallback):
-            return dashboard_url(fallback)
-
         env = os.environ.copy()
         env.update(
             {
@@ -130,12 +130,16 @@ class GrafanaBootstrap:
     def _request_json(self, url: str) -> dict:
         credentials = f"{self.settings.grafana_user}:{self.settings.grafana_password}"
         encoded = base64.b64encode(credentials.encode("utf-8")).decode("ascii")
-        request = Request(
-            url,
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Basic {encoded}",
-            },
-        )
-        with urlopen(request, timeout=1.5) as response:
-            return json.loads(response.read().decode("utf-8"))
+        headers = {"Accept": "application/json", "Authorization": f"Basic {encoded}"}
+        try:
+            request = Request(url, headers=headers)
+            with urlopen(request, timeout=1.5) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            # Bundled Grafana permits anonymous Viewer access. Retry without
+            # Basic auth in case existing admin credentials differ.
+            if exc.code not in {401, 403}:
+                raise
+            request = Request(url, headers={"Accept": "application/json"})
+            with urlopen(request, timeout=1.5) as response:
+                return json.loads(response.read().decode("utf-8"))
