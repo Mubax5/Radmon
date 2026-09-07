@@ -9,6 +9,7 @@ from radmon.admin.main_window import MainWindow
 from radmon.alarm import AlarmService
 from radmon.config import Settings
 from radmon.logging_setup import configure_logging
+from radmon.report_queries import DatabaseReportSummaryReader
 from radmon.repository import MariaDBRepository
 from radmon.reports import ReportService
 from radmon.runtime import ApplicationRuntime
@@ -31,7 +32,11 @@ def main() -> int:
 
     lock = SingleInstanceLock(settings.single_instance_port)
     if not lock.acquire():
-        QMessageBox.critical(None, "Radiation Monitoring", "Radiation Monitoring sudah berjalan. Tutup aplikasi yang aktif sebelum membuka mode lain.")
+        QMessageBox.critical(
+            None,
+            "Radiation Monitoring",
+            "Radiation Monitoring sudah berjalan. Tutup aplikasi yang aktif sebelum membuka mode lain.",
+        )
         return 2
 
     repository = MariaDBRepository(settings)
@@ -46,9 +51,20 @@ def main() -> int:
         return 3
 
     alarm_service = AlarmService(repository, station)
-    report_service = ReportService(repository, settings)
+    report_service = ReportService(
+        repository,
+        settings,
+        summary_reader=DatabaseReportSummaryReader(settings),
+    )
     runtime = ApplicationRuntime(repository, settings, alarm_service, args.source)
-    window = MainWindow(repository, report_service, alarm_service, settings, log_path, source=args.source)
+    window = MainWindow(
+        repository,
+        report_service,
+        alarm_service,
+        settings,
+        log_path,
+        source=args.source,
+    )
 
     app.aboutToQuit.connect(runtime.stop)
     app.aboutToQuit.connect(lock.release)

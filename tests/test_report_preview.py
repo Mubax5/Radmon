@@ -61,3 +61,46 @@ def test_preview_reuses_one_measurement_snapshot_for_summary_and_detail():
     repo = CountingRepo()
     ReportService(repo, Settings().for_dummy()).preview_html(start, end)
     assert repo.calls == 1
+
+
+def test_preview_uses_database_aggregate_when_repository_provides_it():
+    class AggregateRepo(FakeRepo):
+        def measurement_summary(self, start, end, *, serid=None):
+            return {
+                "first_measurement": start,
+                "last_measurement": end,
+                "minimum": 0.01,
+                "average": 9.9,
+                "maximum": 10.1,
+                "sample_count": 43200,
+                "approximate_dose": 1.23,
+            }
+
+    start = datetime(2026, 9, 7, 8, 0, 0)
+    end = start + timedelta(days=1)
+    html = ReportService(AggregateRepo(), Settings().for_dummy()).preview_html(start, end)
+    assert "9.9000 / 10.1000" in html
+
+
+def test_report_service_accepts_production_summary_reader_for_full_range_aggregates():
+    class SummaryReader:
+        def summary(self, start, end, *, serid):
+            return {
+                "first_measurement": start,
+                "last_measurement": end,
+                "minimum": 0.01,
+                "average": 7.7,
+                "maximum": 8.8,
+                "sample_count": 999999,
+                "approximate_dose": 3.21,
+            }
+
+    start = datetime(2026, 9, 1, 0, 0, 0)
+    end = start + timedelta(days=10)
+    service = ReportService(
+        FakeRepo(),
+        Settings().for_dummy(),
+        summary_reader=SummaryReader(),
+    )
+    html = service.preview_html(start, end)
+    assert "7.7000 / 8.8000" in html

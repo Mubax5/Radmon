@@ -10,21 +10,8 @@
       "title": "Notifikasi Laju Dosis",
       "gridPos": {"h": 3, "w": 24, "x": 0, "y": 0},
       "datasource": {"type": "mysql", "uid": "ipradmon-mysql"},
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "rawSql": "SELECT CASE WHEN COUNT(r.serid)=0 THEN 'NO DATA' WHEN SUM(CASE WHEN r.doserate >= d.alarmlevel THEN 1 ELSE 0 END)>0 THEN 'ALARM' WHEN SUM(CASE WHEN r.doserate >= d.warnlevel THEN 1 ELSE 0 END)>0 THEN 'ALERT' ELSE 'OK' END AS `Current Status`, COALESCE((SELECT CONCAT(a.`type`, ' · ', COALESCE(a.msg, '')) FROM alarm a WHERE CAST(a.serid AS CHAR) REGEXP '^(${station:regex})$' ORDER BY a.dtom DESC, a.alarmid DESC LIMIT 1), 'No alarm history') AS `Last Alarm Event` FROM recent r JOIN device d ON d.serid=r.serid WHERE CAST(r.serid AS CHAR) REGEXP '^(${station:regex})$'"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [
-            {"type": "value", "options": {"OK": {"text": "OK", "color": "green"}, "ALERT": {"text": "ALERT", "color": "orange"}, "ALARM": {"text": "ALARM", "color": "red"}, "NO DATA": {"text": "NO DATA", "color": "purple"}}}
-          ]
-        },
-        "overrides": []
-      },
+      "targets": [{"refId": "A", "format": "table", "rawSql": "SELECT CASE WHEN COUNT(r.serid)=0 THEN 'NO DATA' WHEN SUM(CASE WHEN r.doserate >= d.alarmlevel THEN 1 ELSE 0 END)>0 THEN 'ALARM' WHEN SUM(CASE WHEN r.doserate >= d.warnlevel THEN 1 ELSE 0 END)>0 THEN 'ALERT' ELSE 'OK' END AS `Current Status`, COALESCE((SELECT CONCAT(a.`type`, ' · ', COALESCE(a.msg, '')) FROM alarm a WHERE CAST(a.serid AS CHAR) REGEXP '^(${station:regex})$' ORDER BY a.dtom DESC, a.alarmid DESC LIMIT 1), 'No alarm history') AS `Last Alarm Event` FROM recent r JOIN device d ON d.serid=r.serid WHERE CAST(r.serid AS CHAR) REGEXP '^(${station:regex})$'"}],
+      "fieldConfig": {"defaults": {"mappings": [{"type": "value", "options": {"OK": {"text": "OK", "color": "green"}, "ALERT": {"text": "ALERT", "color": "orange"}, "ALARM": {"text": "ALARM", "color": "red"}, "NO DATA": {"text": "NO DATA", "color": "purple"}}}]}, "overrides": []},
       "options": {"colorMode": "background", "graphMode": "none", "textMode": "value_and_name", "reduceOptions": {"calcs": ["lastNotNull"], "values": false}}
     },
     {
@@ -66,21 +53,7 @@
   "refresh": "2s",
   "schemaVersion": 42,
   "tags": ["radiation", "monitoring"],
-  "templating": {
-    "list": [
-      {
-        "name": "station",
-        "label": "Station",
-        "type": "query",
-        "datasource": {"type": "mysql", "uid": "ipradmon-mysql"},
-        "query": "SELECT CAST(serid AS CHAR) AS __value, CONCAT(name,' (',location,')') AS __text FROM device ORDER BY serid",
-        "multi": true,
-        "includeAll": true,
-        "allValue": ".*",
-        "refresh": 1
-      }
-    ]
-  },
+  "templating": {"list": [{"name": "station", "label": "Station", "type": "query", "datasource": {"type": "mysql", "uid": "ipradmon-mysql"}, "query": "SELECT CAST(serid AS CHAR) AS __value, CONCAT(name,' (',location,')') AS __text FROM device ORDER BY serid", "multi": true, "includeAll": true, "refresh": 1, "current": {"selected": true, "text": ["All"], "value": ["$__all"]}}]},
   "time": {"from": "now-3h", "to": "now"},
   "timepicker": {"refresh_intervals": ["2s", "5s", "10s", "30s", "1m", "5m"]},
   "timezone": "browser",

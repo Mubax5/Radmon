@@ -83,10 +83,29 @@ def _summary_from_rows(rows: list[dict[str, Any]]) -> ReportSummary:
     )
 
 
+def _summary_from_mapping(row: dict[str, Any]) -> ReportSummary:
+    return ReportSummary(
+        first_measurement=row.get("first_measurement"),
+        last_measurement=row.get("last_measurement"),
+        minimum=float(row["minimum"]) if row.get("minimum") is not None else None,
+        average=float(row["average"]) if row.get("average") is not None else None,
+        maximum=float(row["maximum"]) if row.get("maximum") is not None else None,
+        sample_count=int(row.get("sample_count") or 0),
+        approximate_dose=float(row.get("approximate_dose") or 0.0),
+    )
+
+
 class ReportService:
-    def __init__(self, repository: ReportRepository, settings: Settings) -> None:
+    def __init__(
+        self,
+        repository: ReportRepository,
+        settings: Settings,
+        *,
+        summary_reader: Any | None = None,
+    ) -> None:
         self.repository = repository
         self.settings = settings
+        self.summary_reader = summary_reader
 
     def rows(
         self,
@@ -103,8 +122,27 @@ class ReportService:
             limit=limit,
         )
 
+    def _summary_for_range(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        fallback_rows: list[dict[str, Any]] | None = None,
+    ) -> ReportSummary:
+        if self.summary_reader is not None:
+            row = self.summary_reader.summary(start, end, serid=self.settings.serid)
+            if row:
+                return _summary_from_mapping(row)
+        aggregate = getattr(self.repository, "measurement_summary", None)
+        if callable(aggregate):
+            row = aggregate(start, end, serid=self.settings.serid)
+            if row:
+                return _summary_from_mapping(row)
+        rows = fallback_rows if fallback_rows is not None else self.rows(start, end)
+        return _summary_from_rows(rows)
+
     def summary(self, start: datetime, end: datetime) -> ReportSummary:
-        return _summary_from_rows(self.rows(start, end))
+        return self._summary_for_range(start, end)
 
     @staticmethod
     def _dt(value: datetime | None) -> str:
@@ -123,7 +161,7 @@ class ReportService:
     ) -> str:
         station = self.repository.station_config(self.settings.serid)
         rows = self.rows(start, end, limit=limit)
-        summary = _summary_from_rows(rows)
+        summary = self._summary_for_range(start, end, fallback_rows=rows)
         detail_rows: list[str] = []
         running_dose = 0.0
         previous: tuple[datetime, float] | None = None
@@ -132,7 +170,6 @@ class ReportService:
             measured_at = row.get("dtom")
             raw_rate = row.get("doserate")
             rate = float(raw_rate) if raw_rate is not None else None
-
             if previous and isinstance(measured_at, datetime) and rate is not None:
                 previous_time, previous_rate = previous
                 hours = max(
@@ -142,7 +179,6 @@ class ReportService:
                 running_dose += ((previous_rate + rate) / 2.0) * hours
             if isinstance(measured_at, datetime) and rate is not None:
                 previous = (measured_at, rate)
-
             detail_rows.append(
                 "<tr>"
                 f"<td>{index}</td>"
@@ -205,11 +241,7 @@ th {{ background: #efefef; }}
         rows = self.rows(start, end)
         columns = ("serid", "dtom", "doserate", "dose", "previnterval", "stat")
         with path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(
-                handle,
-                fieldnames=columns,
-                extrasaction="ignore",
-            )
+            writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
             writer.writeheader()
             for row in rows:
                 item = dict(row)
@@ -228,13 +260,13 @@ th {{ background: #efefef; }}
         path = Path(destination)
         path.parent.mkdir(parents=True, exist_ok=True)
         station = self.repository.station_config(self.settings.serid)
-        rows = self.rows(start, end)
-        summary = _summary_from_rows(rows)
+        rows = self.rows(start, end, limit=1000)
+        summary = self._summary_for_range(start, end, fallback_rows=rows)
         alarms = self.repository.alarm_history(
             start,
             end,
             serid=self.settings.serid,
-            limit=5000,
+            limit=500,
         )
 
         styles = getSampleStyleSheet()
@@ -259,7 +291,6 @@ th {{ background: #efefef; }}
             ),
             Spacer(1, 6 * mm),
         ]
-
         summary_data = [
             ["First", "Last", "Min", "Average", "Max", "Samples", "Approx. Dose"],
             [
@@ -277,7 +308,7 @@ th {{ background: #efefef; }}
         story.extend([summary_table, Spacer(1, 6 * mm)])
 
         measurement_data = [["No", "Time", "Dose rate", "Prev interval", "Stat"]]
-        for index, row in enumerate(rows[:1000], start=1):
+        for index, row in enumerate(rows, start=1):
             measurement_data.append(
                 [
                     str(index),
@@ -296,7 +327,7 @@ th {{ background: #efefef; }}
         story.extend([measurements, Spacer(1, 6 * mm)])
 
         alarm_data = [["Alarm ID", "Time", "Type", "Message"]]
-        for row in alarms[:500]:
+        for row in alarms:
             alarm_data.append(
                 [
                     str(row.get("alarmid", "-")),
@@ -310,7 +341,6 @@ th {{ background: #efefef; }}
         alarm_table = Table(alarm_data, repeatRows=1)
         alarm_table.setStyle(self._table_style())
         story.append(alarm_table)
-
         document.build(story)
         return path
 

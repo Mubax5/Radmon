@@ -52,3 +52,11 @@ def test_grafana_owns_public_monitoring_and_queries_alarm_table_explicitly():
     assert not (ROOT / "monitoring").exists()
     payload = read("grafana/dashboards/radiation-monitoring.json")
     assert "FROM alarm" in payload or "FROM `alarm`" in payload
+
+
+def test_all_station_selection_expands_for_repeated_cards():
+    dashboard = json.loads(read("grafana/dashboards/radiation-monitoring.json"))
+    station = dashboard["templating"]["list"][0]
+    assert station["includeAll"] is True
+    assert "allValue" not in station
+    assert station["current"]["value"] == ["$__all"]
