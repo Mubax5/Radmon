@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,4 +35,6 @@ def test_runtime_collision_is_prevented_by_single_instance_lock():
 def test_refresh_interval_is_two_seconds_everywhere_live():
     assert "RADMON_REFRESH_INTERVAL=2" in read(".env.example")
     assert "self.refresh_timer.start(2000)" in read("radmon/admin/main_window.py")
-    assert "setInterval(refresh, 2000)" in read("monitoring/static/js/monitor.js")
+    dashboard = json.loads(read("grafana/dashboards/radiation-monitoring.json"))
+    assert dashboard["refresh"] == "2s"
+    assert "2s" in dashboard["timepicker"]["refresh_intervals"]

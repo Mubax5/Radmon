@@ -1,28 +1,35 @@
 # Radiation Monitoring
 
-Sistem monitoring radiasi lokal memakai Python untuk akuisisi detector, database MariaDB, admin desktop, monitoring fullscreen, report, alarm, dan sinkronisasi opsional ke server pusat.
+Sistem terdiri dari dua bagian utama:
+
+- **Python Admin** untuk operator: Recent, Tabular, Chart, Reports, Alarm, Logs, acquisition detector/dummy, dan optional sync ke server pusat.
+- **Grafana Monitoring** untuk layar monitoring umum/TV/kiosk.
+
+Semua pembacaan dan refresh live memakai interval **2 detik**.
 
 ## Jalankan
 
-Untuk detector asli, double-click:
+Detector asli:
 
 ```text
 RADMON.bat
 ```
 
-Untuk demo dummy Gedung 52 / IS-1 Koridor / SERID 5202, double-click:
+Demo dummy Gedung 52 / IS-1 Koridor / SERID 5202:
 
 ```text
 RUN_DUMMY.bat
 ```
 
-Hanya satu mode yang bisa berjalan pada satu komputer. Kalau mode detector sedang aktif, mode dummy akan ditolak, dan sebaliknya. Tidak ada `STOP_ALL.bat`; tutup aplikasi admin untuk menghentikan seluruh proses lokal milik aplikasi secara bersih.
+Hanya satu mode acquisition yang boleh berjalan pada satu komputer. Aplikasi memakai single-instance lock supaya detector dan dummy tidak menulis `measurement` secara bersamaan.
 
-Pada first run, launcher membuat `.venv`, meng-install dependency, dan membuat `.env` dari `.env.example` bila belum ada. Setelah itu launcher memakai `pythonw.exe`, sehingga tidak ada kumpulan jendela console untuk admin, public monitor, dan sync.
+Pada first run, launcher membuat `.venv`, meng-install dependency, dan membuat `.env` dari `.env.example`. Aplikasi utama dijalankan melalui `pythonw.exe`, sehingga tidak membuka console tambahan untuk tiap service.
+
+Jika Docker Desktop tersedia dan sedang aktif, launcher juga mencoba menyalakan Grafana secara background dengan `docker compose up -d`. Jika Docker tidak tersedia, Python Admin tetap dapat dipakai dan Grafana dapat dijalankan dari instalasi terpisah.
 
 ## Database
 
-Aplikasi memakai schema `ipradmon` yang sudah ada. Tidak ada tabel tambahan `radmon_*` dan tidak ada migration schema aplikasi.
+Aplikasi memakai schema `ipradmon` yang sudah ada. Tidak ada tabel aplikasi tambahan dan tidak ada migration schema otomatis.
 
 Tabel yang dipakai:
 
@@ -36,21 +43,9 @@ news
 rawdata
 ```
 
-Saat start, aplikasi memvalidasi tabel dan kolom tersebut. Jika schema tidak sesuai, aplikasi berhenti dengan satu pesan yang jelas dan tidak melakukan perubahan schema otomatis.
+Saat start, aplikasi memvalidasi tabel/kolom yang dibutuhkan. Acquisition menyimpan measurement dan memperbarui `recent` pada transaksi yang sama. Detector asli juga dapat menyimpan raw line ke `rawdata`.
 
-Detector asli default mengikuti data lokal:
-
-```text
-SERID       5201
-Name        R. Lab Iradiasi
-Location    Gedung 52
-Alert       8 uSv/h
-Alarm       10 uSv/h
-Serial      COM15
-Baudrate    2400
-```
-
-Mode dummy membuat/memperbarui row `device` untuk:
+Mode dummy menggunakan:
 
 ```text
 SERID       5202
@@ -61,82 +56,116 @@ Alarm       10 uSv/h
 Interval    2 detik
 ```
 
-## Alur data lokal
+## Python Admin
 
-```text
-Detector / Dummy
-       ↓
-Python acquisition
-       ↓
-measurement + recent
-       ├── Admin desktop
-       ├── Fullscreen monitoring
-       ├── Alarm → alarm
-       ├── Report
-       └── optional sync → server pusat
-```
-
-`rawdata` dipakai untuk raw line dari detector asli. `applog` tetap tersedia sesuai schema existing untuk application log/audit yang membutuhkan penyimpanan database.
-
-Setiap measurement menyimpan `dose` aproksimasi dengan integrasi trapezoid dari dua pembacaan berurutan. Row `recent` diperbarui pada transaksi yang sama dengan measurement.
-
-## Refresh
-
-Semua data live menggunakan interval **2 detik**:
-
-- Recent
-- Tabular ketika tab aktif
-- Chart ketika tab aktif
-- Reports preview ketika tab aktif
-- Alarm ketika tab aktif
-- Logs ketika tab aktif
-- Fullscreen monitoring browser
-- Dummy acquisition
-- Sync loop bila diaktifkan
-
-Admin hanya me-refresh tab yang sedang terlihat agar database tidak dihantam banyak query bersamaan.
-
-## Admin
-
-Satu window admin menyediakan:
+Tampilan admin mengikuti workflow aplikasi operator:
 
 ```text
 Recent | Tabular | Chart | Reports | Alarm | Logs
 ```
 
-Background refresh tidak membuka popup error berulang. Error polling ditampilkan di status bar. Popup hanya dipakai untuk aksi operator seperti export yang gagal atau error startup fatal.
-
-## Monitoring fullscreen
-
-Secara default tersedia di:
+Menu utama:
 
 ```text
-http://127.0.0.1:8080
+File | View | Tools | Help
 ```
 
-Untuk layar lain pada jaringan lokal, gunakan IP komputer server:
+Toolbar dan tab memakai icon **FamFamFam Silk** 16x16, bukan emoji. Icon yang dibundel berada di `radmon/admin/icons/silk/`; attribution/lisensi ada pada folder yang sama.
+
+Background refresh hanya me-refresh tab yang sedang aktif setiap 2 detik. Error polling tampil di status bar, bukan popup berulang.
+
+### Chart
+
+Chart memakai PyQtGraph dan mendukung:
+
+- wheel zoom;
+- drag/pan;
+- crosshair;
+- tooltip waktu, dose rate, dan Approx. Dose;
+- left axis Dose rate `[µSv/h]`;
+- right axis Approx. Dose `[µSv]`;
+- garis Alert dan Alarm;
+- range From/To;
+- Live follow;
+- Apply range dan Reset view.
+
+Saat operator melakukan zoom/pan dengan Live OFF, refresh 2 detik tidak mengembalikan viewport ke posisi awal.
+
+### Reports
+
+Workflow report adalah **preview-first**:
+
+1. pilih `From` dan `To`;
+2. klik **Preview**;
+3. aplikasi menampilkan report langsung di tab Reports;
+4. setelah preview berhasil, **Print** dan **Export PDF** baru aktif.
+
+Preview berisi:
+
+- header instalasi;
+- Summary;
+- first/last measurement;
+- dose rate Average/Max;
+- tabel `Dose rate and Approx. Dose` untuk range yang dipilih.
+
+Print dan Export PDF memakai `QTextDocument` yang sama dengan preview sehingga layout yang dilihat operator menjadi sumber dokumen cetak. CSV tetap tersedia untuk data mentah.
+
+## Grafana Monitoring
+
+Monitoring umum tidak dijalankan oleh FastAPI/Python. Grafana membaca schema `ipradmon` langsung.
+
+Dashboard tersedia di:
 
 ```text
-http://IP-SERVER:8080
+grafana/dashboards/radiation-monitoring.json
 ```
 
-Halaman monitoring hanya menampilkan data publik station dan mengambil data terbaru setiap 2 detik.
+Provisioning:
 
-## Report
+```text
+grafana/provisioning/datasources/ipradmon.yaml
+grafana/provisioning/dashboards/radmon.yaml
+```
 
-Tab Reports dapat memilih From/To dan menampilkan:
+Dashboard menyediakan:
 
-- first measurement
-- last measurement
-- minimum dose rate
-- average dose rate
-- maximum dose rate
-- jumlah sample
-- approximate dose
-- measurement preview
-- alarm history
+- Notifikasi Laju Dosis;
+- current dose rate card + sparkline per station;
+- Waktu pengukuran per station;
+- main Dose Rate Monitoring time-series;
+- station selector;
+- histori alarm terakhir;
+- refresh 2 detik.
 
-Gunakan **Export PDF** untuk membuat file report yang dapat dibuka dan diprint. Tab Tabular juga dapat export CSV.
+Semua query dashboard memakai tabel existing `device`, `measurement`, `recent`, dan `alarm`.
+
+Tombol **Monitoring** pada Python Admin membuka URL Grafana dari:
+
+```env
+RADMON_GRAFANA_URL=http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv
+```
+
+### Menjalankan Grafana manual
+
+Dari root project:
+
+```bash
+docker compose --env-file .env -f grafana/docker-compose.yml up -d
+```
+
+Untuk database MariaDB yang berada pada host Windows, default datasource container menggunakan:
+
+```env
+RADMON_GRAFANA_DB_HOST=host.docker.internal
+```
+
+Jika database berada di server lain, ubah ke IP/hostname database tersebut. MariaDB harus menerima koneksi dari host Grafana dan user datasource sebaiknya hanya memiliki privilege `SELECT`.
+
+Jika sudah memiliki instalasi Grafana sendiri, import dashboard JSON dan buat datasource MySQL dengan UID:
+
+```text
+ipradmon-mysql
+```
 
 ## Alarm
 
@@ -146,13 +175,13 @@ Alarm memakai tabel existing:
 alarm(alarmid, serid, dtom, type, msg)
 ```
 
-Event yang disimpan adalah transisi `ALERT`, `ALARM`, dan `RECOVERY`, sehingga polling 2 detik tidak menghasilkan baris alarm duplikat setiap sample.
+Python menyimpan transisi `ALERT`, `ALARM`, dan `RECOVERY`. Tab Alarm dan Grafana membaca histori dari tabel yang sama.
 
 ## Server pusat
 
-Sync lokal default **OFF**. Sistem lokal tetap normal meskipun server pusat belum tersedia.
+Sync lokal default OFF. Sistem lokal tetap berjalan tanpa server pusat.
 
-Aktifkan di `.env` hanya ketika endpoint pusat sudah siap:
+Aktifkan saat endpoint pusat sudah siap:
 
 ```env
 RADMON_SYNC_ENABLED=1
@@ -160,19 +189,15 @@ RADMON_CENTRAL_URL=http://IP-SERVER-PUSAT:8090
 RADMON_CENTRAL_TOKEN=ganti-token-kuat
 ```
 
-Sync membaca `measurement` berdasarkan checkpoint file lokal di folder `runtime/`. Tidak ada queue table tambahan. Jika koneksi pusat gagal, checkpoint tidak maju sehingga data dicoba lagi setelah koneksi pulih.
+Sync membaca `measurement` berdasarkan checkpoint lokal. Jika koneksi gagal, checkpoint tidak maju dan data dicoba kembali. Database pusat memakai schema yang sama.
 
-Server pusat dijalankan hanya pada mesin pusat:
+Server pusat:
 
 ```bash
 python central_server.py --host 0.0.0.0 --port 8090
 ```
 
-Database pusat menggunakan schema yang sama. Ingest memakai primary key `measurement (serid, dtom)` untuk idempotensi.
-
-## Konfigurasi
-
-Edit `.env` bila perlu:
+## Konfigurasi utama
 
 ```env
 RADMON_SERIAL_PORT=COM15
@@ -182,8 +207,8 @@ RADMON_DB_USER=root
 RADMON_DB_PASSWORD=
 RADMON_DB_NAME=ipradmon
 RADMON_REFRESH_INTERVAL=2
-RADMON_PUBLIC_PORT=8080
+RADMON_GRAFANA_DB_HOST=host.docker.internal
 RADMON_SYNC_ENABLED=0
 ```
 
-Jangan menjalankan detector dan dummy bersamaan. Aplikasi sudah mengunci satu instance untuk mencegah collision writer.
+Gunakan user database dengan privilege minimum yang diperlukan dan jangan menjalankan detector/dummy bersamaan.
