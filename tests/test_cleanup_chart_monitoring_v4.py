@@ -1,0 +1,65 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from radmon.admin.chart_page import chart_series_from_rows
+from radmon.config import Settings
+from radmon.grafana_bootstrap import GrafanaBootstrap
+
+
+def test_chart_uses_database_values_without_reintegrating_dose() -> None:
+    start = datetime(2026, 9, 7, 17, 0, 0)
+    rows = [
+        {"dtom": start, "doserate": 0.21, "dose": 0.00012, "stat": 0},
+        {"dtom": start + timedelta(seconds=2), "doserate": 0.23, "dose": 0.00013, "stat": 0},
+    ]
+    x, rates, doses, stats = chart_series_from_rows(rows)
+    assert rates == [0.21, 0.23]
+    assert doses == [0.00012, 0.00013]
+    assert stats == [0, 0]
+    assert x[1] > x[0]
+
+
+def test_chart_visual_selector_supports_multiple_views() -> None:
+    source = Path("radmon/admin/chart_page.py").read_text(encoding="utf-8")
+    for label in ("Trend", "Dose Rate Distribution", "Status Distribution"):
+        assert label in source
+    assert "QComboBox" in source
+
+
+def test_reports_default_to_dedicated_report_directory() -> None:
+    settings = Settings()
+    assert settings.report_dir == Path("!REPORT!")
+    source = Path("radmon/admin/reports_page.py").read_text(encoding="utf-8")
+    assert "self.settings.report_dir" in source
+    assert "mkdir(parents=True, exist_ok=True)" in source
+
+
+def test_grafana_can_provision_an_existing_local_instance_before_docker_fallback() -> None:
+    calls: list[str] = []
+    probe_count = {"value": 0}
+
+    def probe(base: str) -> bool:
+        probe_count["value"] += 1
+        calls.append(f"probe:{base}")
+        return probe_count["value"] >= 2
+
+    bootstrap = GrafanaBootstrap(
+        Settings(grafana_url="http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring"),
+        dashboard_probe=probe,
+        grafana_health_probe=lambda base: base == "http://localhost:3000",
+        api_provisioner=lambda base: calls.append(f"provision:{base}") or True,
+        compose_runner=lambda **_: calls.append("compose"),
+        sleeper=lambda _: None,
+        attempts=1,
+    )
+
+    url = bootstrap.ensure()
+    assert url.startswith("http://localhost:3000/d/radmon-radiation-monitoring/")
+    assert "provision:http://localhost:3000" in calls
+    assert "compose" not in calls
+
+
+def test_internal_planning_artifacts_are_not_kept_in_repo() -> None:
+    assert not Path("docs/superpowers").exists()
