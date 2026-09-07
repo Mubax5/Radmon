@@ -61,20 +61,33 @@ class GrafanaBootstrap:
     def fallback_base_url(self) -> str:
         return f"http://localhost:{self.settings.grafana_fallback_port}"
 
-    def ensure(self) -> str:
+    def _candidate_base_urls(self) -> list[str]:
         preferred = _base_url(self.settings.grafana_url)
-        if self.dashboard_probe(preferred):
-            return dashboard_url(preferred)
+        candidates = [preferred]
+        # Old .env files may still point to the bundled fallback port. Always
+        # discover a normal local Grafana on 3000 as well so upgrades repair
+        # themselves without asking the operator to edit configuration.
+        local_default = "http://localhost:3000"
+        if local_default not in candidates:
+            candidates.append(local_default)
+        return candidates
 
-        # If Grafana already exists locally, install the RadMon datasource and
-        # dashboard into that instance instead of requiring another Grafana.
-        if self.grafana_health_probe(preferred):
+    def ensure(self) -> str:
+        candidates = self._candidate_base_urls()
+
+        for base in candidates:
+            if self.dashboard_probe(base):
+                return dashboard_url(base)
+
+        for base in candidates:
+            if not self.grafana_health_probe(base):
+                continue
             try:
-                provisioned = self.api_provisioner(preferred)
+                provisioned = self.api_provisioner(base)
             except Exception:
                 provisioned = False
-            if provisioned and self.dashboard_probe(preferred):
-                return dashboard_url(preferred)
+            if provisioned and self.dashboard_probe(base):
+                return dashboard_url(base)
 
         fallback = self.fallback_base_url
         env = os.environ.copy()
@@ -107,29 +120,39 @@ class GrafanaBootstrap:
         path = self.project_root / "grafana" / "dashboards" / "radiation-monitoring.json"
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def _datasource_payload(self) -> dict:
+        return {
+            "uid": DATASOURCE_UID,
+            "name": "ipradmon",
+            "type": "mysql",
+            "access": "proxy",
+            "url": f"{self.settings.db_host}:{self.settings.db_port}",
+            "database": self.settings.db_name,
+            "user": self.settings.db_user,
+            "jsonData": {
+                "maxOpenConns": 10,
+                "maxIdleConns": 5,
+                "connMaxLifetime": 14400,
+            },
+            "secureJsonData": {"password": self.settings.db_password},
+        }
+
     def _provision_via_api(self, base_url: str) -> bool:
-        """Install datasource/dashboard into an already-running local Grafana."""
-        datasource_url = f"{self.settings.db_host}:{self.settings.db_port}"
+        """Install or repair datasource/dashboard in an existing Grafana."""
+        datasource_endpoint = f"{base_url.rstrip('/')}/api/datasources/uid/{DATASOURCE_UID}"
+        payload = self._datasource_payload()
         try:
-            self._request_json(
-                f"{base_url.rstrip('/')}/api/datasources/uid/{DATASOURCE_UID}"
-            )
+            self._request_json(datasource_endpoint)
         except Exception:
             self._request_json(
                 f"{base_url.rstrip('/')}/api/datasources",
                 method="POST",
-                payload={
-                    "uid": DATASOURCE_UID,
-                    "name": "ipradmon",
-                    "type": "mysql",
-                    "access": "proxy",
-                    "url": datasource_url,
-                    "database": self.settings.db_name,
-                    "user": self.settings.db_user,
-                    "jsonData": {"maxOpenConns": 10, "maxIdleConns": 5, "connMaxLifetime": 14400},
-                    "secureJsonData": {"password": self.settings.db_password},
-                },
+                payload=payload,
             )
+        else:
+            # Keep an existing RadMon datasource aligned with the current DB
+            # settings instead of leaving a stale host/user after deployment.
+            self._request_json(datasource_endpoint, method="PUT", payload=payload)
 
         self._request_json(
             f"{base_url.rstrip('/')}/api/dashboards/db",
