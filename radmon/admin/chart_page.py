@@ -2,31 +2,35 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from datetime import datetime
-from math import ceil
 
 import pyqtgraph as pg
-from PySide6.QtCore import QDateTime, Qt
+from PySide6.QtCore import QDateTime, QRectF, Qt
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDateTimeEdit,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from .chart_metrics import status_breakdown, threshold_progress
 from .chart_state import ChartViewport
 
 
 VISUAL_TREND = "Trend"
-VISUAL_DISTRIBUTION = "Dose Rate Distribution"
-VISUAL_STATUS = "Status Distribution"
+VISUAL_STATUS = "Status Pie"
+VISUAL_PROGRESS = "Threshold Progress"
 
 
 def chart_series_from_rows(rows):
-    """Return the exact operator values stored in measurement."""
+    """Return the exact values stored in measurement, ordered by measurement time."""
     normalized = []
     for row in rows:
         measured_at = row.get("dtom")
@@ -50,8 +54,153 @@ def chart_series_from_rows(rows):
     )
 
 
+class StatusDonutWidget(QWidget):
+    """Compact status pie that communicates sample health without bar-chart clutter."""
+
+    COLORS = {
+        "NORMAL": QColor("#2e7d32"),
+        "ALERT": QColor("#f9a825"),
+        "ALARM": QColor("#c62828"),
+    }
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.counts = {"NORMAL": 0, "ALERT": 0, "ALARM": 0}
+        self.setMinimumHeight(320)
+
+    def set_counts(self, counts: dict[str, int]) -> None:
+        self.counts = {key: int(counts.get(key, 0)) for key in self.COLORS}
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#ffffff"))
+
+        total = sum(self.counts.values())
+        side = min(self.height() - 64, int(self.width() * 0.48))
+        side = max(180, side)
+        left = max(24, int(self.width() * 0.12))
+        top = max(28, (self.height() - side) // 2)
+        pie_rect = QRectF(left, top, side, side)
+
+        if total <= 0:
+            painter.setPen(QPen(QColor("#c7c7c7"), 22))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(pie_rect.adjusted(12, 12, -12, -12))
+        else:
+            start_angle = 90 * 16
+            for label in ("NORMAL", "ALERT", "ALARM"):
+                count = self.counts[label]
+                if count <= 0:
+                    continue
+                span = -int(round((count / total) * 360 * 16))
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(self.COLORS[label])
+                painter.drawPie(pie_rect, start_angle, span)
+                start_angle += span
+
+            inner = pie_rect.adjusted(side * 0.27, side * 0.27, -side * 0.27, -side * 0.27)
+            painter.setBrush(QColor("#ffffff"))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(inner)
+
+        painter.setPen(QColor("#222222"))
+        center_font = painter.font()
+        center_font.setPointSize(18)
+        center_font.setBold(True)
+        painter.setFont(center_font)
+        painter.drawText(pie_rect, Qt.AlignmentFlag.AlignCenter, str(total) if total else "NO DATA")
+
+        legend_x = left + side + 52
+        legend_y = top + 48
+        painter.setFont(self.font())
+        for index, label in enumerate(("NORMAL", "ALERT", "ALARM")):
+            y = legend_y + index * 62
+            painter.setBrush(self.COLORS[label])
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(QRectF(legend_x, y, 22, 22), 4, 4)
+            painter.setPen(QColor("#222222"))
+            count = self.counts[label]
+            percent = (count / total * 100.0) if total else 0.0
+            painter.drawText(
+                QRectF(legend_x + 34, y - 4, 240, 32),
+                Qt.AlignmentFlag.AlignVCenter,
+                f"{label}   {count} sample   {percent:.1f}%",
+            )
+        painter.end()
+
+
+class ThresholdProgressWidget(QWidget):
+    """Current/average/peak radiation level relative to the configured alarm limit."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.title = QLabel("Dose rate relative to alarm threshold")
+        title_font = self.title.font()
+        title_font.setPointSize(14)
+        title_font.setBold(True)
+        self.title.setFont(title_font)
+
+        self.bars: dict[str, QProgressBar] = {}
+        grid = QGridLayout()
+        for row, key in enumerate(("Current", "Average", "Peak")):
+            label = QLabel(key)
+            bar = QProgressBar()
+            bar.setRange(0, 1000)
+            bar.setMinimumHeight(34)
+            bar.setTextVisible(True)
+            self.bars[key.lower()] = bar
+            grid.addWidget(label, row, 0)
+            grid.addWidget(bar, row, 1)
+        grid.setColumnStretch(1, 1)
+
+        self.thresholds = QLabel()
+        self.thresholds.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(48, 52, 48, 52)
+        layout.addWidget(self.title)
+        layout.addSpacing(24)
+        layout.addLayout(grid)
+        layout.addSpacing(20)
+        layout.addWidget(self.thresholds)
+        layout.addStretch(1)
+
+    @staticmethod
+    def _color(value: float, warnlevel: float, alarmlevel: float) -> str:
+        if value >= alarmlevel:
+            return "#c62828"
+        if value >= warnlevel:
+            return "#f9a825"
+        return "#2e7d32"
+
+    def set_metrics(self, metrics: dict[str, float], *, warnlevel: float, alarmlevel: float) -> None:
+        mapping = (
+            ("current", "Current"),
+            ("average", "Average"),
+            ("peak", "Peak"),
+        )
+        for prefix, title in mapping:
+            value = float(metrics[f"{prefix}_value"])
+            percent = float(metrics[f"{prefix}_percent"])
+            bar = self.bars[prefix]
+            bar.setValue(int(round(percent * 10)))
+            bar.setFormat(f"{title}: {value:.4f} µSv/h   ·   {percent:.1f}% of alarm")
+            color = self._color(value, warnlevel, alarmlevel)
+            bar.setStyleSheet(
+                "QProgressBar { border: 1px solid #bdbdbd; border-radius: 4px; "
+                "text-align: center; background: #f4f4f4; } "
+                f"QProgressBar::chunk {{ background: {color}; border-radius: 3px; }}"
+            )
+        self.thresholds.setText(
+            f"Alert {warnlevel:g} µSv/h     ·     Alarm {alarmlevel:g} µSv/h"
+        )
+
+
 class ChartPage(QWidget):
-    """Interactive chart page with multiple operator-selectable views."""
+    """Interactive operator chart with trend, status pie and threshold progress views."""
 
     def __init__(self, repository, settings, parent=None) -> None:
         super().__init__(parent)
@@ -60,7 +209,6 @@ class ChartPage(QWidget):
         self.last_error: str | None = None
         self.viewport = ChartViewport(live=True)
         self.points: list[tuple[float, float, float, int]] = []
-        self.bar_item = None
 
         self.start = QDateTimeEdit(QDateTime.currentDateTime().addSecs(-3 * 3600))
         self.end = QDateTimeEdit(QDateTime.currentDateTime())
@@ -74,8 +222,12 @@ class ChartPage(QWidget):
         self.live.toggled.connect(self._live_changed)
 
         self.visual = QComboBox()
-        self.visual.addItems([VISUAL_TREND, VISUAL_DISTRIBUTION, VISUAL_STATUS])
+        self.visual.addItems([VISUAL_TREND, VISUAL_STATUS, VISUAL_PROGRESS])
         self.visual.currentTextChanged.connect(self._visual_changed)
+
+        self.show_dose = QCheckBox("Approx. Dose")
+        self.show_dose.setChecked(False)
+        self.show_dose.toggled.connect(self._render_current_view)
 
         apply_range = QPushButton("Apply range")
         apply_range.clicked.connect(self.apply_range)
@@ -90,6 +242,7 @@ class ChartPage(QWidget):
         controls.addWidget(self.live)
         controls.addWidget(QLabel("View"))
         controls.addWidget(self.visual)
+        controls.addWidget(self.show_dose)
         controls.addWidget(apply_range)
         controls.addWidget(reset)
         controls.addStretch(1)
@@ -111,7 +264,14 @@ class ChartPage(QWidget):
         self.plot.getPlotItem().vb.sigResized.connect(self._sync_right_view)
 
         self.rate_curve = self.plot.plot(
-            [], [], pen=pg.mkPen("#c62828", width=2), name="Dose rate"
+            [],
+            [],
+            pen=pg.mkPen("#c62828", width=2),
+            symbol="o",
+            symbolSize=3,
+            symbolPen=pg.mkPen("#c62828"),
+            symbolBrush=pg.mkBrush("#ffffff"),
+            name="Dose rate",
         )
         self.dose_curve = pg.PlotCurveItem(
             [], [], pen=pg.mkPen("#1565c0", width=2), name="Approx. Dose"
@@ -151,9 +311,16 @@ class ChartPage(QWidget):
             slot=self._mouse_moved,
         )
 
+        self.status_pie = StatusDonutWidget()
+        self.threshold_progress = ThresholdProgressWidget()
+        self.visual_stack = QStackedWidget()
+        self.visual_stack.addWidget(self.plot)
+        self.visual_stack.addWidget(self.status_pie)
+        self.visual_stack.addWidget(self.threshold_progress)
+
         layout = QVBoxLayout(self)
         layout.addLayout(controls)
-        layout.addWidget(self.plot, 1)
+        layout.addWidget(self.visual_stack, 1)
         self._sync_right_view()
         self.refresh_live()
 
@@ -204,12 +371,18 @@ class ChartPage(QWidget):
             self.plot.setXRange(start.timestamp(), end.timestamp(), padding=0)
             self.plot.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
             self.dose_view.enableAutoRange(axis=pg.ViewBox.YAxis, enable=True)
-        else:
-            self.plot.enableAutoRange()
 
-    def _visual_changed(self, _label: str) -> None:
+    def _visual_changed(self, label: str) -> None:
+        index = {
+            VISUAL_TREND: 0,
+            VISUAL_STATUS: 1,
+            VISUAL_PROGRESS: 2,
+        }.get(label, 0)
+        self.visual_stack.setCurrentIndex(index)
+        self.show_dose.setEnabled(label == VISUAL_TREND)
         self._render_current_view()
-        self.reset_view()
+        if label == VISUAL_TREND:
+            self.reset_view()
 
     def refresh_live(self) -> None:
         if self.live.isChecked():
@@ -243,15 +416,10 @@ class ChartPage(QWidget):
             if target is not None:
                 self.plot.setXRange(*target, padding=0)
 
-    def _remove_bar(self) -> None:
-        if self.bar_item is not None:
-            self.plot.removeItem(self.bar_item)
-            self.bar_item = None
-
     def _set_trend_items_visible(self, visible: bool) -> None:
+        dose_visible = visible and self.show_dose.isChecked()
         for item in (
             self.rate_curve,
-            self.dose_curve,
             self.alert_line,
             self.alarm_line,
             self.cross_x,
@@ -259,17 +427,17 @@ class ChartPage(QWidget):
             self.hover,
         ):
             item.setVisible(visible)
-        self.plot.getAxis("right").setVisible(visible)
+        self.dose_curve.setVisible(dose_visible)
+        self.plot.getAxis("right").setVisible(dose_visible)
 
     def _render_current_view(self, *_args) -> None:
-        self._remove_bar()
         mode = self.visual.currentText()
         if mode == VISUAL_TREND:
             self._render_trend()
-        elif mode == VISUAL_DISTRIBUTION:
-            self._render_distribution()
+        elif mode == VISUAL_STATUS:
+            self._render_status_pie()
         else:
-            self._render_status_distribution()
+            self._render_threshold_progress()
 
     def _render_trend(self) -> None:
         self._set_trend_items_visible(True)
@@ -280,59 +448,27 @@ class ChartPage(QWidget):
         x = [point[0] for point in self.points]
         rates = [point[1] for point in self.points]
         doses = [point[2] for point in self.points]
-        self.rate_curve.setData(x, rates)
-        self.dose_curve.setData(x, doses)
+        self.rate_curve.setData(x, rates, connect="finite")
+        self.dose_curve.setData(x, doses, connect="finite")
         self.alert_line.setValue(self.settings.warnlevel)
         self.alarm_line.setValue(self.settings.alarmlevel)
 
-    def _render_distribution(self) -> None:
-        self._set_trend_items_visible(False)
+    def _render_status_pie(self) -> None:
         rates = [point[1] for point in self.points]
-        self.plot.setLabel("left", "Samples")
-        self.plot.setLabel("bottom", "Dose rate", units="µSv/h")
-        self.plot.getAxis("bottom").setTicks(None)
-        if not rates:
-            return
-        low, high = min(rates), max(rates)
-        if high <= low:
-            centers = [low]
-            counts = [len(rates)]
-            width = max(abs(low) * 0.05, 0.01)
-        else:
-            bucket_count = min(20, max(5, int(ceil(len(rates) ** 0.5))))
-            width = (high - low) / bucket_count
-            counts = [0] * bucket_count
-            for rate in rates:
-                index = min(bucket_count - 1, int((rate - low) / width))
-                counts[index] += 1
-            centers = [low + (index + 0.5) * width for index in range(bucket_count)]
-        self.bar_item = pg.BarGraphItem(
-            x=centers,
-            height=counts,
-            width=width * 0.9,
-            brush="#607d8b",
+        self.status_pie.set_counts(
+            status_breakdown(
+                rates,
+                warnlevel=self.settings.warnlevel,
+                alarmlevel=self.settings.alarmlevel,
+            )
         )
-        self.plot.addItem(self.bar_item)
 
-    def _render_status_distribution(self) -> None:
-        self._set_trend_items_visible(False)
+    def _render_threshold_progress(self) -> None:
         rates = [point[1] for point in self.points]
-        normal = sum(rate < self.settings.warnlevel for rate in rates)
-        alert = sum(self.settings.warnlevel <= rate < self.settings.alarmlevel for rate in rates)
-        alarm = sum(rate >= self.settings.alarmlevel for rate in rates)
-        x = [0, 1, 2]
-        heights = [normal, alert, alarm]
-        self.bar_item = pg.BarGraphItem(
-            x=x,
-            height=heights,
-            width=0.6,
-            brushes=["#2e7d32", "#f9a825", "#c62828"],
-        )
-        self.plot.addItem(self.bar_item)
-        self.plot.setLabel("left", "Samples")
-        self.plot.setLabel("bottom", "Status")
-        self.plot.getAxis("bottom").setTicks(
-            [[(0, "NORMAL"), (1, "ALERT"), (2, "ALARM")]]
+        self.threshold_progress.set_metrics(
+            threshold_progress(rates, alarmlevel=self.settings.alarmlevel),
+            warnlevel=self.settings.warnlevel,
+            alarmlevel=self.settings.alarmlevel,
         )
 
     def _mouse_moved(self, event) -> None:
@@ -348,8 +484,8 @@ class ChartPage(QWidget):
         self.cross_x.setPos(x)
         self.cross_y.setPos(rate)
         self.hover.setPos(x, rate)
+        dose_text = f"\nApprox. Dose: {dose:.6f} µSv" if self.show_dose.isChecked() else ""
         self.hover.setText(
             f"{datetime.fromtimestamp(x):%Y-%m-%d %H:%M:%S}\n"
-            f"Dose rate: {rate:.4f} µSv/h\n"
-            f"Approx. Dose: {dose:.6f} µSv"
+            f"Dose rate: {rate:.4f} µSv/h{dose_text}"
         )
