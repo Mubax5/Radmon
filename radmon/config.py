@@ -37,6 +37,7 @@ class Settings:
     unit: str = "µSv/h"
     sample_interval: float = 2.0
     refresh_interval: float = 2.0
+    dummy_mode: str = "normal"
     sync_enabled: bool = False
     central_url: str = ""
     central_token: str = ""
@@ -57,6 +58,9 @@ class Settings:
         if load_dotenv is not None and env_file:
             load_dotenv(env_file, override=False)
         get = os.getenv
+        dummy_mode = get("RADMON_DUMMY_MODE", "normal").strip().lower()
+        if dummy_mode not in {"normal", "alert", "alarm", "mixed"}:
+            raise ValueError("RADMON_DUMMY_MODE harus normal, alert, alarm, atau mixed")
         return cls(
             serial_port=get("RADMON_SERIAL_PORT", "COM15"),
             detectors=get("RADMON_DETECTORS", ""),
@@ -77,6 +81,7 @@ class Settings:
             unit=get("RADMON_UNIT", "µSv/h").replace("μ", "µ").replace("uSv/h", "µSv/h"),
             sample_interval=float(get("RADMON_SAMPLE_INTERVAL", "2")),
             refresh_interval=float(get("RADMON_REFRESH_INTERVAL", "2")),
+            dummy_mode=dummy_mode,
             sync_enabled=_as_bool(get("RADMON_SYNC_ENABLED"), False),
             central_url=get("RADMON_CENTRAL_URL", ""),
             central_token=get("RADMON_CENTRAL_TOKEN", ""),
