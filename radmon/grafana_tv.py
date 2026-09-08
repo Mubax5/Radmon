@@ -11,7 +11,7 @@ from .stations import station_catalog
 DATASOURCE_UID = "ipradmon-mysql"
 PLAYLIST_UID = "radmon-tv"
 PLAYLIST_INTERVAL = "10s"
-OPERATIONS_PAGE_COUNT = 8
+OPERATIONS_PAGE_COUNT = 5
 PAGE_UIDS = (
     "radmon-tv-page-1-realtime",
     "radmon-tv-page-2-trends",
@@ -273,11 +273,11 @@ def _time_stat(panel_id: int, station: StationConfig, x: int, y: int, w: int, h:
     panel = _panel(panel_id, "stat", "", x, y, w, h)
     panel["description"] = "latest-measurement-time"
     panel["targets"] = [_target(f"""
-SELECT UNIX_TIMESTAMP(MAX(m.dtom)) * 1000 AS value
+SELECT DATE_FORMAT(MAX(m.dtom), '%d/%m/%Y %H:%i:%s') AS value
 FROM measurement m
 WHERE m.serid = {station.serid}
 """)]
-    panel["fieldConfig"] = {"defaults": {"unit": "dateTimeAsLocal", "decimals": 0}, "overrides": []}
+    panel["fieldConfig"] = {"defaults": {"unit": "none", "decimals": 0}, "overrides": []}
     panel["options"] = {
         "colorMode": "none",
         "graphMode": "none",
@@ -368,6 +368,8 @@ ORDER BY m.dtom, d.serid
         "defaults": {
             "unit": "suffix: µSv/h",
             "decimals": 3,
+            "min": 0,
+            "max": 1,
             "color": {"mode": "palette-classic"},
             "custom": {
                 "drawStyle": "line",
@@ -437,7 +439,7 @@ def build_page_two() -> dict[str, Any]:
             unit="suffix: µSv/h" if decimals else "none",
             color=color,
             decimals=decimals,
-            value_size=28,
+            value_size=42,
         ))
         panel_id += 1
     return dashboard
@@ -452,7 +454,7 @@ def build_page_three(page_number: int = 1) -> dict[str, Any]:
         time_from="now-24h",
     )
     status_relation = _status_relation()
-    pie = _panel(10, "piechart", "Status Detector", 0, 4, 8, 7)
+    pie = _panel(10, "piechart", "Status Detector", 0, 4, 10, 7)
     pie["targets"] = [_target(f"""
 SELECT s.status AS metric, COUNT(*) AS value
 FROM ({status_relation}) s
@@ -461,8 +463,13 @@ ORDER BY FIELD(s.status, 'ALARM', 'ALERT', 'OFFLINE', 'NORMAL')
 """)]
     pie["fieldConfig"] = {"defaults": {"unit": "none", "decimals": 0}, "overrides": []}
     pie["options"] = {
-        "displayLabels": ["name", "percent", "value"],
-        "legend": {"displayMode": "list", "placement": "right", "showLegend": True},
+        "displayLabels": ["name", "value"],
+        "legend": {
+            "displayMode": "table",
+            "placement": "bottom",
+            "showLegend": True,
+            "values": ["value"],
+        },
         "pieType": "donut",
         "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": True},
         "tooltip": {"mode": "single", "sort": "none"},
@@ -472,9 +479,9 @@ ORDER BY FIELD(s.status, 'ALARM', 'ALERT', 'OFFLINE', 'NORMAL')
         _operation_table(
             11,
             f"Kondisi Operasional Detector · Page {page_number}/{OPERATIONS_PAGE_COUNT}",
-            8,
+            10,
             4,
-            16,
+            14,
             7,
             stations=operation_page_stations(page_number),
         )
@@ -496,7 +503,7 @@ ORDER BY FIELD(s.status, 'ALARM', 'ALERT', 'OFFLINE', 'NORMAL')
             4,
             color=color,
             decimals=0,
-            value_size=30,
+            value_size=42,
         ))
     alarms = _panel(16, "table", "Alarm Terbaru · 24 Jam", 0, 15, 24, 9)
     alarms["targets"] = [_target(f"""
