@@ -224,3 +224,30 @@ def test_verified_archive_purges_once_rebuilds_recent_and_is_idempotent(tmp_path
     assert store.purge_calls == ["2026-Q3"]
     assert store.rebuild_calls == ["2026-Q4"]
     assert "ARCHIVE_COMPLETE" in audit.actions
+
+
+class OldestCursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def execute(self, sql, params=()):
+        assert "SELECT MIN(dtom) FROM measurement" in " ".join(sql.split())
+
+    def fetchone(self):
+        return (datetime(2026, 7, 1, 0, 0, 0),)
+
+
+class OldestConnection:
+    def cursor(self):
+        return OldestCursor()
+
+    def close(self):
+        pass
+
+
+def test_archive_store_can_find_oldest_central_measurement():
+    store = CentralArchiveStore(object(), connection_factory=OldestConnection)
+    assert store.oldest_measurement_time() == datetime(2026, 7, 1, 0, 0, 0)
