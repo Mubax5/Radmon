@@ -92,8 +92,9 @@ def test_page_one_keeps_dose_as_main_focus_with_separate_short_sparkline_and_sma
         assert panel["gridPos"]["h"] == 1
         assert panel["options"]["text"]["valueSize"] <= 12
         sql = panel["targets"][0]["rawSql"]
-        assert "DATE_FORMAT(MAX(m.dtom), '%d/%m/%Y %H:%i:%s')" in sql
-        assert panel["fieldConfig"]["defaults"]["unit"] == "none"
+        assert "UNIX_TIMESTAMP(MAX(m.dtom)) * 1000" in sql
+        assert "DATE_FORMAT" not in sql
+        assert panel["fieldConfig"]["defaults"]["unit"] == "dateTimeAsLocal"
 
 
 def test_page_two_uses_readable_building_small_multiples_and_has_no_operations_table():
