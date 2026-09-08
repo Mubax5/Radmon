@@ -42,6 +42,10 @@ class CreateUserRequest(BaseModel):
     user_pin: str = Field(min_length=4, max_length=8)
 
 
+class ArchiveRetryRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+
+
 def attach_secure_routes(
     app: FastAPI,
     *,
@@ -51,6 +55,8 @@ def attach_secure_routes(
     alarm_control: Any,
     device_admin: Any,
     cookie_secure: bool = False,
+    archive_catalog: Any | None = None,
+    archive_service: Any | None = None,
 ) -> FastAPI:
     def current_user(request: Request) -> UserIdentity:
         identity = security.session_user(request.cookies.get(SESSION_COOKIE))
@@ -137,7 +143,6 @@ def attach_secure_routes(
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except Exception as exc:
-            # Deliberately do not return secrets or internal stack details.
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/v1/control/stations/{serid}")
@@ -199,5 +204,57 @@ def attach_secure_routes(
     @app.get("/api/v1/control/audit")
     def audit_events(identity: UserIdentity = Depends(current_user)):
         return audit.list_events(limit=500)
+
+    @app.get("/api/v1/control/archives")
+    def archives(identity: UserIdentity = Depends(current_user)):
+        if archive_catalog is None:
+            return []
+        return archive_catalog.list_archives(limit=1000)
+
+    @app.get("/api/v1/control/archives/{quarter_id}/recap")
+    def archive_recap(
+        quarter_id: str,
+        identity: UserIdentity = Depends(current_user),
+    ):
+        if archive_catalog is None:
+            raise HTTPException(status_code=404, detail="archive catalog unavailable")
+        try:
+            return archive_catalog.recap(quarter_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/v1/control/archives/{quarter_id}/retry")
+    def retry_archive(
+        quarter_id: str,
+        payload: ArchiveRetryRequest,
+        identity: UserIdentity = Depends(require_admin),
+    ):
+        if archive_service is None:
+            raise HTTPException(status_code=404, detail="archive service unavailable")
+        try:
+            security.require_sensitive(identity, "manage_sources", payload.pin)
+            result = archive_service.retry(quarter_id)
+        except Exception as exc:
+            audit.record(
+                "ARCHIVE_MANUAL_RETRY",
+                identity,
+                "archive",
+                quarter_id,
+                success=False,
+                reason=str(exc),
+                source="central",
+            )
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        audit.record(
+            "ARCHIVE_MANUAL_RETRY",
+            identity,
+            "archive",
+            quarter_id,
+            after=result,
+            source="central",
+        )
+        return result
 
     return app
