@@ -8,6 +8,8 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from radmon.admin.auth_dialogs import BootstrapAdminDialog, LoginDialog
 from radmon.admin.main_window import MainWindow
 from radmon.alarm import AlarmService
+from radmon.archive import ArchiveCatalog
+from radmon.archive_reports import ArchiveReportRepository, CompositeReportRepository
 from radmon.config import Settings
 from radmon.logging_setup import configure_logging
 from radmon.report_queries import DatabaseReportSummaryReader
@@ -89,11 +91,30 @@ def main() -> int:
     )
 
     alarm_service = AlarmService(repository, station)
-    report_service = ReportService(
-        repository,
-        settings,
-        summary_reader=DatabaseReportSummaryReader(settings),
-    )
+    archive_catalog = None
+    active_summary_reader = DatabaseReportSummaryReader(settings)
+    if args.source == "lan":
+        archive_catalog = ArchiveCatalog(
+            secure.security,
+            settings.archive_dir,
+            timezone_name=settings.archive_timezone,
+        )
+        report_repository = CompositeReportRepository(
+            repository,
+            ArchiveReportRepository(
+                archive_catalog,
+                timezone_name=settings.archive_timezone,
+            ),
+            timezone_name=settings.archive_timezone,
+            active_summary_reader=active_summary_reader,
+        )
+        report_service = ReportService(report_repository, settings)
+    else:
+        report_service = ReportService(
+            repository,
+            settings,
+            summary_reader=active_summary_reader,
+        )
 
     runtime = None
     if args.source != "lan":
@@ -106,6 +127,7 @@ def main() -> int:
         settings,
         log_path,
         source=args.source,
+        archive_catalog=archive_catalog,
     )
     install_window_security(window)
 
