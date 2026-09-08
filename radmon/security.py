@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 CREATE TABLE IF NOT EXISTS remote_alarm_state (
   source_id TEXT NOT NULL,
   serid INTEGER NOT NULL,
+  remote_serid INTEGER,
   event_time TEXT NOT NULL,
   level TEXT NOT NULL,
   measured_value REAL,
@@ -120,6 +121,15 @@ CREATE TABLE IF NOT EXISTS source_station_map (
   PRIMARY KEY (source_id, remote_serid)
 );
 """
+            )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(remote_alarm_state)").fetchall()
+            }
+            if "remote_serid" not in columns:
+                connection.execute("ALTER TABLE remote_alarm_state ADD COLUMN remote_serid INTEGER")
+            connection.execute(
+                "UPDATE remote_alarm_state SET remote_serid = serid WHERE remote_serid IS NULL"
             )
 
     @classmethod
@@ -315,4 +325,39 @@ WHERE s.token_hash = ?
         with self._connection() as connection:
             connection.execute(
                 "DELETE FROM sessions WHERE token_hash = ?", (self._token_hash(token),)
+            )
+
+    def resolve_station(self, source_id: str, remote_serid: int) -> int:
+        """Return stable central identity for a production station.
+
+        The first observation maps remote SERID to itself.  A later central Tag
+        migration changes only ``central_serid`` so LAN checkpoints and ACK still
+        address the original production identifier.
+        """
+        source = source_id.strip()
+        remote = int(remote_serid)
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT central_serid FROM source_station_map WHERE source_id = ? AND remote_serid = ?",
+                (source, remote),
+            ).fetchone()
+            if row is not None:
+                return int(row[0])
+            connection.execute(
+                "INSERT INTO source_station_map (source_id, remote_serid, central_serid) VALUES (?, ?, ?)",
+                (source, remote, remote),
+            )
+        return remote
+
+    def remap_central_serid(self, old_serid: int, new_serid: int) -> None:
+        old = int(old_serid)
+        new = int(new_serid)
+        with self._connection() as connection:
+            connection.execute(
+                "UPDATE source_station_map SET central_serid = ? WHERE central_serid = ?",
+                (new, old),
+            )
+            connection.execute(
+                "UPDATE remote_alarm_state SET serid = ? WHERE serid = ?",
+                (new, old),
             )
