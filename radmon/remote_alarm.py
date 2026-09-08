@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Callable
 
 from .audit import AuditTrail
@@ -31,14 +31,16 @@ class RemoteAlarmMirror:
             for row in rows:
                 event_time = self._event_time(row).isoformat()
                 serid = int(row["serid"])
+                remote_serid = int(row.get("_remote_serid", serid))
                 before = connection.total_changes
                 connection.execute(
                     """
 INSERT INTO remote_alarm_state
-  (source_id, serid, event_time, level, measured_value, threshold, hit_count,
+  (source_id, serid, remote_serid, event_time, level, measured_value, threshold, hit_count,
    acknowledged_at, pic, action, note)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(source_id, serid, event_time) DO UPDATE SET
+  remote_serid = excluded.remote_serid,
   level = excluded.level,
   measured_value = COALESCE(excluded.measured_value, measured_value),
   threshold = COALESCE(excluded.threshold, threshold),
@@ -50,6 +52,7 @@ ON CONFLICT(source_id, serid, event_time) DO UPDATE SET
                     (
                         source_id,
                         serid,
+                        remote_serid,
                         event_time,
                         self._level(row),
                         row.get("mvalue"),
@@ -65,9 +68,10 @@ ON CONFLICT(source_id, serid, event_time) DO UPDATE SET
                     changed += 1
         return changed
 
-    def _row(self, row: tuple[Any, ...]) -> dict[str, Any]:
+    @staticmethod
+    def _row(row: tuple[Any, ...]) -> dict[str, Any]:
         keys = (
-            "source_id", "serid", "event_time", "level", "measured_value", "threshold",
+            "source_id", "serid", "remote_serid", "event_time", "level", "measured_value", "threshold",
             "hit_count", "acknowledged_at", "pic", "action", "note", "notification_sent_at",
         )
         item = dict(zip(keys, row))
@@ -81,7 +85,7 @@ ON CONFLICT(source_id, serid, event_time) DO UPDATE SET
         with self.store._connection() as connection:
             rows = connection.execute(
                 f"""
-SELECT source_id, serid, event_time, level, measured_value, threshold, hit_count,
+SELECT source_id, serid, remote_serid, event_time, level, measured_value, threshold, hit_count,
        acknowledged_at, pic, action, note, notification_sent_at
 FROM remote_alarm_state {clause}
 ORDER BY event_time DESC LIMIT ?
@@ -94,7 +98,7 @@ ORDER BY event_time DESC LIMIT ?
         with self.store._connection() as connection:
             row = connection.execute(
                 """
-SELECT source_id, serid, event_time, level, measured_value, threshold, hit_count,
+SELECT source_id, serid, remote_serid, event_time, level, measured_value, threshold, hit_count,
        acknowledged_at, pic, action, note, notification_sent_at
 FROM remote_alarm_state
 WHERE source_id = ? AND serid = ? AND event_time = ?
@@ -122,13 +126,8 @@ SET acknowledged_at = ?, pic = ?, action = ?, note = ?
 WHERE source_id = ? AND serid = ? AND event_time = ? AND acknowledged_at IS NULL
 """,
                 (
-                    acknowledged_at.isoformat(),
-                    pic,
-                    action,
-                    note,
-                    source_id,
-                    int(serid),
-                    event_time.isoformat(),
+                    acknowledged_at.isoformat(), pic, action, note,
+                    source_id, int(serid), event_time.isoformat(),
                 ),
             )
             if cursor.rowcount != 1:
@@ -163,7 +162,7 @@ class AlarmControlService:
         self.mirror = mirror
         self.audit = audit
         self.remote_factory = remote_factory
-        self.now = now or (lambda: datetime.now())
+        self.now = now or datetime.now
 
     def ack(
         self,
@@ -185,13 +184,14 @@ class AlarmControlService:
             raise RuntimeError("alarm tidak ditemukan")
         if before.get("acknowledged_at") is not None:
             raise RuntimeError("alarm sudah di-ACK")
+        remote_serid = int(before.get("remote_serid") or serid)
         at = self.now()
         target_id = f"{source_id}:{serid}:{event_time.isoformat()}"
         try:
             remote = self.remote_factory(source_id)
             ok = bool(
                 remote.ack_legacy(
-                    serid,
+                    remote_serid,
                     event_time,
                     action=action.strip(),
                     pic=pic.strip(),
@@ -212,23 +212,12 @@ class AlarmControlService:
             )
         except Exception as exc:
             self.audit.record(
-                "ALARM_ACK",
-                identity,
-                "alarm",
-                target_id,
-                before=before,
-                success=False,
-                reason=str(exc),
-                source=source_id,
+                "ALARM_ACK", identity, "alarm", target_id,
+                before=before, success=False, reason=str(exc), source=source_id,
             )
             raise
         self.audit.record(
-            "ALARM_ACK",
-            identity,
-            "alarm",
-            target_id,
-            before=before,
-            after=after,
-            source=source_id,
+            "ALARM_ACK", identity, "alarm", target_id,
+            before=before, after=after, source=source_id,
         )
         return after
