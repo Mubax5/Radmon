@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import os
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     from dotenv import load_dotenv
@@ -53,6 +54,12 @@ class Settings:
     runtime_dir: Path = Path("runtime")
     log_dir: Path = Path("logs")
     single_instance_port: int = 47652
+    central_host: str = "192.168.1.2"
+    archive_enabled: bool = True
+    archive_dir: Path = Path("archives")
+    archive_timezone: str = "Asia/Jakarta"
+    archive_min_retention_years: int = 5
+    archive_check_interval: float = 60.0
 
     @classmethod
     def from_env(cls, env_file: str | None = ".env") -> "Settings":
@@ -62,6 +69,17 @@ class Settings:
         dummy_mode = get("RADMON_DUMMY_MODE", "normal").strip().lower()
         if dummy_mode not in {"normal", "alert", "alarm", "mixed"}:
             raise ValueError("RADMON_DUMMY_MODE harus normal, alert, alarm, atau mixed")
+        archive_retention = int(get("RADMON_ARCHIVE_MIN_RETENTION_YEARS", "5"))
+        if archive_retention < 5:
+            raise ValueError("RADMON_ARCHIVE_MIN_RETENTION_YEARS minimal 5 tahun")
+        archive_timezone = get("RADMON_ARCHIVE_TIMEZONE", "Asia/Jakarta").strip() or "Asia/Jakarta"
+        try:
+            ZoneInfo(archive_timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"timezone archive tidak valid: {archive_timezone}") from exc
+        archive_check_interval = float(get("RADMON_ARCHIVE_CHECK_INTERVAL", "60"))
+        if archive_check_interval <= 0:
+            raise ValueError("RADMON_ARCHIVE_CHECK_INTERVAL harus lebih dari 0")
         return cls(
             serial_port=get("RADMON_SERIAL_PORT", "COM15"),
             detectors=get("RADMON_DETECTORS", ""),
@@ -101,6 +119,12 @@ class Settings:
             runtime_dir=Path(get("RADMON_RUNTIME_DIR", "runtime")),
             log_dir=Path(get("RADMON_LOG_DIR", "logs")),
             single_instance_port=int(get("RADMON_SINGLE_INSTANCE_PORT", "47652")),
+            central_host=get("RADMON_CENTRAL_HOST", "192.168.1.2"),
+            archive_enabled=_as_bool(get("RADMON_ARCHIVE_ENABLED"), True),
+            archive_dir=Path(get("RADMON_ARCHIVE_DIR", "archives")),
+            archive_timezone=archive_timezone,
+            archive_min_retention_years=archive_retention,
+            archive_check_interval=archive_check_interval,
         )
 
     def detector_bindings(self) -> list[tuple[int, str]]:
