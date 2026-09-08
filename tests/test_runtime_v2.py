@@ -12,20 +12,22 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_only_two_operator_bat_launchers_remain():
+def test_operator_launchers_include_detector_dummy_and_central_lan():
     bats = sorted(path.name for path in ROOT.glob("*.bat"))
-    assert bats == ["RADMON.bat", "RUN_DUMMY.bat"]
+    assert bats == ["RADMON.bat", "RUN_DUMMY.bat", "RUN_LAN.bat"]
     scripts = ROOT / "scripts"
     if scripts.exists():
         assert list(scripts.glob("*.bat")) == []
 
 
-def test_both_launchers_start_the_same_single_process_without_cmd_fanout():
+def test_launchers_start_single_process_without_cmd_fanout():
     real = read("RADMON.bat").lower()
     dummy = read("RUN_DUMMY.bat").lower()
+    lan = read("RUN_LAN.bat").lower()
     assert "main.py" in real and "--source detector" in real
     assert "main.py" in dummy and "--source dummy" in dummy
-    for text in (real, dummy):
+    assert "main.py" in lan and "--source lan" in lan
+    for text in (real, dummy, lan):
         assert "pythonw.exe" in text
         assert "cmd /k" not in text
         assert "run_sync.bat" not in text
