@@ -214,7 +214,7 @@ def test_grafana_tv_uses_three_logical_pages_with_five_operations_variants():
     assert "Kondisi Operasional Detector · Page 5/5" in payload
 
 
-def test_realtime_measurement_time_is_forced_to_24_hour_format():
+def test_realtime_measurement_time_uses_numeric_epoch_for_grafana_datetime():
     dashboard = build_page_one()
     time_panels = [
         panel for panel in dashboard["panels"]
@@ -223,9 +223,9 @@ def test_realtime_measurement_time_is_forced_to_24_hour_format():
     assert len(time_panels) == 15
     for panel in time_panels:
         sql = panel["targets"][0]["rawSql"]
-        assert "DATE_FORMAT" in sql
-        assert "%H:%i:%s" in sql
-        assert panel["fieldConfig"]["defaults"]["unit"] == "none"
+        assert "UNIX_TIMESTAMP(MAX(m.dtom)) * 1000" in sql
+        assert "DATE_FORMAT" not in sql
+        assert panel["fieldConfig"]["defaults"]["unit"] == "dateTimeAsLocal"
         assert panel["options"]["text"]["valueSize"] <= 12
 
 
