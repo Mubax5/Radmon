@@ -341,29 +341,50 @@ class LanAggregator:
         self.alarm_mirror = alarm_mirror
         self.batch_size = max(1, int(batch_size))
 
+    def _mapped_alarm_rows(self, source_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        mapped: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            remote_serid = int(item["serid"])
+            item["_remote_serid"] = remote_serid
+            item["serid"] = self.checkpoints.store.resolve_station(source_id, remote_serid)
+            mapped.append(item)
+        return mapped
+
     def run_source_once(self, source: LanSource) -> PullResult:
         result = PullResult(source.source_id)
         try:
             remote = self.remote_factory(source)
             devices = remote.devices()
-            for device in devices:
-                serid = int(device["serid"])
-                self.central.ensure_remote_device(source.source_id, device)
+            for remote_device in devices:
+                remote_serid = int(remote_device["serid"])
+                central_serid = self.checkpoints.store.resolve_station(source.source_id, remote_serid)
+                central_device = dict(remote_device)
+                central_device["serid"] = central_serid
+                self.central.ensure_remote_device(source.source_id, central_device)
                 while True:
-                    after = self.checkpoints.load(source.source_id, serid)
-                    rows = remote.measurements_after(serid, after, self.batch_size)
-                    if not rows:
+                    after = self.checkpoints.load(source.source_id, remote_serid)
+                    remote_rows = remote.measurements_after(remote_serid, after, self.batch_size)
+                    if not remote_rows:
                         break
+                    central_rows = []
+                    for row in remote_rows:
+                        item = dict(row)
+                        item["serid"] = central_serid
+                        central_rows.append(item)
                     result.inserted_measurements += int(
-                        self.central.import_measurements(source.source_id, rows)
+                        self.central.import_measurements(source.source_id, central_rows)
                     )
-                    latest = max(row["dtom"] for row in rows)
-                    self.checkpoints.save(source.source_id, serid, latest)
-                    if len(rows) < self.batch_size:
+                    latest = max(row["dtom"] for row in remote_rows)
+                    self.checkpoints.save(source.source_id, remote_serid, latest)
+                    if len(remote_rows) < self.batch_size:
                         break
             if self.alarm_mirror is not None:
                 result.mirrored_alarms = int(
-                    self.alarm_mirror.mirror(source.source_id, remote.alarms())
+                    self.alarm_mirror.mirror(
+                        source.source_id,
+                        self._mapped_alarm_rows(source.source_id, remote.alarms()),
+                    )
                 )
         except Exception as exc:
             result.error = str(exc)
