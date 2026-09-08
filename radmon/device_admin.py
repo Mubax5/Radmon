@@ -70,6 +70,7 @@ class DeviceAdminService:
         target = f"station:{old_serid}->{new_serid}"
         try:
             after = self.repository.migrate_serid(int(old_serid), int(new_serid))
+            self.security.remap_central_serid(int(old_serid), int(new_serid))
         except Exception as exc:
             self.audit.record(
                 "DEVICE_SERID_MIGRATE", identity, "station", target,
@@ -148,12 +149,15 @@ FROM device WHERE serid = ?
                 cursor.execute("SELECT 1 FROM device WHERE serid = ?", (int(old_serid),))
                 if cursor.fetchone() is None:
                     raise ValueError("station lama tidak ditemukan")
-
-                # Existing deployments may or may not declare foreign keys. Migrate
-                # child rows first and device last inside one transaction.
                 for table in ("measurement", "recent", "alarm", "rawdata"):
-                    cursor.execute(f"UPDATE {table} SET serid = ? WHERE serid = ?", (int(new_serid), int(old_serid)))
-                cursor.execute("UPDATE device SET serid = ? WHERE serid = ?", (int(new_serid), int(old_serid)))
+                    cursor.execute(
+                        f"UPDATE {table} SET serid = ? WHERE serid = ?",
+                        (int(new_serid), int(old_serid)),
+                    )
+                cursor.execute(
+                    "UPDATE device SET serid = ? WHERE serid = ?",
+                    (int(new_serid), int(old_serid)),
+                )
             connection.commit()
         except Exception:
             connection.rollback()
