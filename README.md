@@ -297,7 +297,7 @@ RADMON_WHATSAPP_INTERVAL=20
 
 Browser profile dan credential tidak boleh di-commit.
 
-## Existing push sync
+## Existing push sync / server pusat
 
 Mekanisme SyncAgent lama tetap tersedia dan default OFF:
 
