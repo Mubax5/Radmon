@@ -187,20 +187,14 @@ class ArchiveReportRepository:
         limit: int = 1000,
     ) -> list[dict[str, Any]]:
         if start is None or end is None:
-            complete = [
-                item for item in self.catalog.list_archives(limit=1000)
-                if item.get("state") == "COMPLETE"
-            ]
+            items = self.catalog.list_archives(limit=1000)
+            complete = [item for item in items if item.get("state") == "COMPLETE"]
             if not complete:
                 return []
-            start_values = [_parse_datetime(str(item.get("start_at") or "")) for item in complete]
-            end_values = [_parse_datetime(str(item.get("end_at") or "")) for item in complete]
-            start_values = [value for value in start_values if value is not None]
-            end_values = [value for value in end_values if value is not None]
-            if not start_values or not end_values:
+            start = min(_parse_datetime(str(item["start_at"])) for item in complete)
+            end = max(_parse_datetime(str(item["end_at"])) for item in complete)
+            if start is None or end is None:
                 return []
-            start = min(start_values)
-            end = max(end_values)
         start_value = _as_local_naive(start, self.timezone_name)
         end_value = _as_local_naive(end, self.timezone_name)
         station_id = int(serid) if serid is not None else None
@@ -233,12 +227,12 @@ class ArchiveReportRepository:
         start_n = _as_local_naive(start, self.timezone_name)
         end_n = _as_local_naive(end, self.timezone_name)
         for item in self._items(start, end):
-            raw_start = _parse_datetime(str(item["start_at"]))
-            raw_end = _parse_datetime(str(item["end_at"]))
-            if raw_start is None or raw_end is None:
+            item_start_raw = _parse_datetime(str(item["start_at"]))
+            item_end_raw = _parse_datetime(str(item["end_at"]))
+            if item_start_raw is None or item_end_raw is None:
                 continue
-            item_start = _as_local_naive(raw_start, self.timezone_name)
-            item_end = _as_local_naive(raw_end, self.timezone_name)
+            item_start = _as_local_naive(item_start_raw, self.timezone_name)
+            item_end = _as_local_naive(item_end_raw, self.timezone_name)
             if start_n <= item_start and end_n >= item_end:
                 recap = self.catalog.recap(str(item["quarter_id"]))
                 selected = [row for row in recap if int(row.get("serid") or 0) == int(serid)]
@@ -331,8 +325,9 @@ class CompositeReportRepository:
             archived_end = min(end, boundary)
             if archived_end > start:
                 rows.extend(self.archive.measurement_history(start, archived_end, serid=serid, limit=limit))
-        if end >= boundary and len(rows) < limit:
-            rows.extend(self.active.measurement_history(max(start, boundary), end, serid=serid, limit=limit))
+        if end > boundary and len(rows) < limit:
+            active_start = max(start, boundary)
+            rows.extend(self.active.measurement_history(active_start, end, serid=serid, limit=limit))
         dedup = {}
         for row in rows:
             dedup[(int(row.get("serid") or 0), row.get("dtom"))] = row
@@ -348,7 +343,7 @@ class CompositeReportRepository:
             archived_end = min(end, boundary)
             if archived_end > start:
                 rows.extend(self.archive.alarm_history(start, archived_end, serid=serid, limit=limit))
-        if end >= boundary and len(rows) < limit:
+        if end > boundary and len(rows) < limit:
             rows.extend(self.active.alarm_history(max(start, boundary), end, serid=serid, limit=limit))
         dedup = {}
         for row in rows:
@@ -371,7 +366,7 @@ class CompositeReportRepository:
             archived_end = min(end, boundary)
             if archived_end > start:
                 parts.append(self.archive.measurement_summary(start, archived_end, serid=serid))
-        if end >= boundary:
+        if end > boundary:
             active_start = max(start, boundary)
             if end >= active_start:
                 parts.append(self._active_summary(active_start, end, serid))
