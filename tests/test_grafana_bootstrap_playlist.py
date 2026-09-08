@@ -40,7 +40,7 @@ def test_bootstrap_requires_playlist_and_returns_playlist_kiosk_url(tmp_path):
     assert "kiosk=1" in url and "autofitpanels" in url
 
 
-def test_api_provisioner_upserts_shared_pages_and_eight_operations_variants(tmp_path):
+def test_api_provisioner_upserts_shared_pages_and_five_operations_variants(tmp_path):
     bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
     calls = []
 
@@ -55,7 +55,7 @@ def test_api_provisioner_upserts_shared_pages_and_eight_operations_variants(tmp_
     bootstrap._request_json = request
     assert bootstrap._provision_via_api("http://localhost:3000") is True
     dashboard_posts = [call for call in calls if call[0] == "POST" and call[1].endswith("/api/dashboards/db")]
-    assert len(dashboard_posts) == 10
+    assert len(dashboard_posts) == 7
     assert [call[2]["dashboard"]["uid"] for call in dashboard_posts] == list(DASHBOARD_UIDS)
 
     playlist_posts = [call for call in calls if call[0] == "POST" and "/apis/playlist.grafana.app/" in call[1]]
@@ -64,7 +64,7 @@ def test_api_provisioner_upserts_shared_pages_and_eight_operations_variants(tmp_
     assert playlist["metadata"]["name"] == PLAYLIST_UID
     assert playlist["spec"]["interval"] == "10s"
     values = [item["value"] for item in playlist["spec"]["items"]]
-    assert len(values) == 24
+    assert len(values) == 15
     for cycle, operations_uid in enumerate(OPERATIONS_PAGE_UIDS):
         assert values[cycle * 3 : cycle * 3 + 3] == [PAGE_UIDS[0], PAGE_UIDS[1], operations_uid]
 
