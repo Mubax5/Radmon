@@ -21,7 +21,7 @@ def test_every_dashboard_has_date_organization_and_wib_update_header():
     for dashboard in dashboards:
         header = dashboard["panels"][:4]
         assert len(header) == 4
-        title, date_panel, organization, update_panel = header
+        title, organization, date_panel, update_panel = header
         assert "REAL TIME DOSE RATE MONITORING SYSTEM" in title["options"]["content"]
         assert date_panel.get("description") == "header-date-wib"
         assert organization.get("description") == "header-organization"
@@ -33,6 +33,8 @@ def test_every_dashboard_has_date_organization_and_wib_update_header():
         assert date_panel["gridPos"] == {"x": 0, "y": 2, "w": 6, "h": 2}
         assert organization["gridPos"] == {"x": 6, "y": 2, "w": 12, "h": 2}
         assert update_panel["gridPos"] == {"x": 18, "y": 2, "w": 6, "h": 2}
+        assert date_panel["options"]["text"]["valueSize"] < 18
+        assert update_panel["options"]["text"]["valueSize"] < 18
         max_bottom = max(
             panel["gridPos"]["y"] + panel["gridPos"]["h"]
             for panel in dashboard["panels"]
