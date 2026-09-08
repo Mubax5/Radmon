@@ -35,7 +35,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
       - name: Compile Python
-        run: python -m compileall -q main.py radmon
+        run: python -m compileall -q main.py central_server.py radmon
       - name: Validate Grafana TV payloads
         run: |
           python - <<'PY'
