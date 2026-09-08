@@ -36,18 +36,20 @@ jobs:
               PAGE_UIDS,
               build_dashboard_payloads,
               build_playlist_payload,
+              operation_page_stations,
           )
           dashboards = build_dashboard_payloads()
           assert len(PAGE_UIDS) == 3
-          assert len(OPERATIONS_PAGE_UIDS) == 8
-          assert len(dashboards) == 10
+          assert len(OPERATIONS_PAGE_UIDS) == 5
+          assert len(dashboards) == 7
+          assert [len(operation_page_stations(page)) for page in range(1, 6)] == [3, 3, 3, 3, 3]
           for dashboard in dashboards:
               json.dumps(dashboard, ensure_ascii=False)
               assert dashboard['refresh'] == '2s'
               assert max(panel['gridPos']['y'] + panel['gridPos']['h'] for panel in dashboard['panels']) <= 24
           playlist = build_playlist_payload()
           assert playlist['spec']['interval'] == '10s'
-          assert len(playlist['spec']['items']) == 24
+          assert len(playlist['spec']['items']) == 15
           for path in Path('grafana').rglob('*.yaml'):
               yaml.safe_load(path.read_text())
           for path in Path('grafana').rglob('*.yml'):
