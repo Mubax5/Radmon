@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+set RADMON_LAN_ENABLED=1
 call :bootstrap || exit /b 1
 call :grafana
 call :central || exit /b 1
