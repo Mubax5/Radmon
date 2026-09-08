@@ -126,7 +126,7 @@ class ArchiveReportRepository:
                 raise ArchiveCorruptionError(
                     f"archive {item.get('quarter_id')} rusak: {item.get('last_error') or 'unknown'}"
                 )
-            if item.get("state") != "COMPLETE":
+            if item.get("state") not in {"COMPLETE", "SEALED", "PURGING"}:
                 continue
             if not item.get("archive_path"):
                 raise ArchiveCorruptionError(f"archive {item.get('quarter_id')} tidak memiliki file")
@@ -134,7 +134,11 @@ class ArchiveReportRepository:
         result.sort(key=lambda item: str(item.get("start_at") or ""))
         return result
 
-    def _stream_csv(self, item: dict[str, Any], member: str):
+    def _stream_csv(
+        self,
+        item: dict[str, Any],
+        member: str,
+    ):
         path = Path(str(item["archive_path"]))
         verify_archive(path)
         with zipfile.ZipFile(path) as archive:
@@ -188,7 +192,7 @@ class ArchiveReportRepository:
     ) -> list[dict[str, Any]]:
         if start is None or end is None:
             items = self.catalog.list_archives(limit=1000)
-            complete = [item for item in items if item.get("state") == "COMPLETE"]
+            complete = [item for item in items if item.get("state") in {"COMPLETE", "SEALED", "PURGING"}]
             if not complete:
                 return []
             start = min(_parse_datetime(str(item["start_at"])) for item in complete)
@@ -227,12 +231,12 @@ class ArchiveReportRepository:
         start_n = _as_local_naive(start, self.timezone_name)
         end_n = _as_local_naive(end, self.timezone_name)
         for item in self._items(start, end):
-            item_start_raw = _parse_datetime(str(item["start_at"]))
-            item_end_raw = _parse_datetime(str(item["end_at"]))
-            if item_start_raw is None or item_end_raw is None:
+            item_start_value = _parse_datetime(str(item["start_at"]))
+            item_end_value = _parse_datetime(str(item["end_at"]))
+            if item_start_value is None or item_end_value is None:
                 continue
-            item_start = _as_local_naive(item_start_raw, self.timezone_name)
-            item_end = _as_local_naive(item_end_raw, self.timezone_name)
+            item_start = _as_local_naive(item_start_value, self.timezone_name)
+            item_end = _as_local_naive(item_end_value, self.timezone_name)
             if start_n <= item_start and end_n >= item_end:
                 recap = self.catalog.recap(str(item["quarter_id"]))
                 selected = [row for row in recap if int(row.get("serid") or 0) == int(serid)]
@@ -267,7 +271,10 @@ class ArchiveReportRepository:
 
     def station_config(self, serid: int | None = None):
         station_id = int(serid) if serid is not None else None
-        items = [item for item in self.catalog.list_archives(limit=1000) if item.get("state") == "COMPLETE"]
+        items = [
+            item for item in self.catalog.list_archives(limit=1000)
+            if item.get("state") in {"COMPLETE", "SEALED", "PURGING"}
+        ]
         items.sort(key=lambda item: str(item.get("start_at") or ""), reverse=True)
         for item in items:
             for row in self._stream_csv(item, "device.csv"):
