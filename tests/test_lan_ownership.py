@@ -16,10 +16,11 @@ def test_static_station_catalog_is_not_seeded_in_lan_central_mode():
     assert "ensure_station_catalog()" in guarded
 
 
-def test_run_lan_starts_central_server_and_then_admin_view():
+def test_run_lan_starts_central_server_before_admin_view():
     source = (ROOT / "RUN_LAN.bat").read_text(encoding="utf-8")
+    admin_launch = 'start "" "%~dp0.venv\\Scripts\\pythonw.exe" "%~dp0main.py" --source lan'
     assert "central_server.py" in source
-    assert "main.py\" --source lan" in source
-    server_position = source.index("central_server.py")
-    admin_position = source.index("main.py")
-    assert server_position < admin_position
+    assert admin_launch in source
+    assert source.index("call :central") < source.index(admin_launch)
+    central_section = source.split(":central", 1)[1]
+    assert "central_server.py" in central_section
