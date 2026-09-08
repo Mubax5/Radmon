@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
@@ -10,7 +9,6 @@ from radmon.admin.auth_dialogs import BootstrapAdminDialog, LoginDialog
 from radmon.admin.main_window import MainWindow
 from radmon.alarm import AlarmService
 from radmon.config import Settings
-from radmon.lan_runtime import LanRuntime
 from radmon.logging_setup import configure_logging
 from radmon.report_queries import DatabaseReportSummaryReader
 from radmon.repository import MariaDBRepository
@@ -19,17 +17,12 @@ from radmon.runtime import ApplicationRuntime
 from radmon.secure_context import SecurityContext, install_window_security, set_context
 from radmon.secure_services import build_secure_services
 from radmon.single_instance import SingleInstanceLock
-from radmon.whatsapp import SeleniumWhatsAppSender, WhatsAppAlarmDispatcher
 
 
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description="Radiation monitoring runtime")
     value.add_argument("--source", choices=("detector", "dummy", "lan"), default="detector")
     return value
-
-
-def _enabled(name: str) -> bool:
-    return os.getenv(name, "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def main() -> int:
@@ -52,7 +45,8 @@ def main() -> int:
     repository = MariaDBRepository(settings)
     try:
         repository.require_schema()
-        repository.ensure_station_catalog()
+        if args.source != "lan":
+            repository.ensure_station_catalog()
         station = repository.station_config(settings.serid)
     except Exception as exc:
         QMessageBox.critical(None, "Database tidak siap", str(exc))
@@ -101,16 +95,8 @@ def main() -> int:
         summary_reader=DatabaseReportSummaryReader(settings),
     )
 
-    whatsapp = None
-    if _enabled("RADMON_WHATSAPP_ENABLED"):
-        whatsapp = WhatsAppAlarmDispatcher(
-            secure.alarm_mirror,
-            SeleniumWhatsAppSender.from_env(),
-        )
-
-    if args.source == "lan":
-        runtime = LanRuntime(settings, secure, whatsapp_dispatcher=whatsapp)
-    else:
+    runtime = None
+    if args.source != "lan":
         runtime = ApplicationRuntime(repository, settings, alarm_service, args.source)
 
     window = MainWindow(
@@ -123,9 +109,11 @@ def main() -> int:
     )
     install_window_security(window)
 
-    app.aboutToQuit.connect(runtime.stop)
+    if runtime is not None:
+        app.aboutToQuit.connect(runtime.stop)
     app.aboutToQuit.connect(lock.release)
-    runtime.start()
+    if runtime is not None:
+        runtime.start()
     window.show()
     return app.exec()
 
