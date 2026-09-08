@@ -81,6 +81,19 @@ class CentralArchiveStore:
         finally:
             connection.close()
 
+    def oldest_measurement_time(self) -> datetime | None:
+        connection = self._connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT MIN(dtom) FROM measurement")
+                row = cursor.fetchone()
+            if row is None:
+                return None
+            value = row.get("MIN(dtom)") if isinstance(row, dict) else row[0]
+            return value if isinstance(value, datetime) else None
+        finally:
+            connection.close()
+
     def row_counts(self, quarter: Quarter) -> dict[str, int]:
         result: dict[str, int] = {}
         connection = self._connection()
