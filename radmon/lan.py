@@ -52,6 +52,19 @@ def parse_lan_sources() -> list[LanSource]:
     return result
 
 
+def _shared_serids() -> set[int]:
+    raw = os.getenv("RADMON_SHARED_SERIDS", "").strip()
+    if not raw:
+        return set()
+    result: set[int] = set()
+    for item in raw.split(","):
+        text = item.strip()
+        if not text.isdigit() or int(text) <= 0:
+            raise ValueError("RADMON_SHARED_SERIDS harus daftar SERID numerik dipisahkan koma")
+        result.add(int(text))
+    return result
+
+
 class LanCheckpointStore:
     def __init__(self, security_store: SecurityStore) -> None:
         self.store = security_store
@@ -77,6 +90,8 @@ ON CONFLICT(source_id, serid) DO UPDATE SET last_dtom = excluded.last_dtom
 
 
 class RemoteMariaDBSource:
+    """Production source adapter. Collector methods are read-only; ACK is explicit."""
+
     def __init__(self, source: LanSource, *, connection_factory: Callable[[], Any] | None = None) -> None:
         self.source = source
         self._connection_factory = connection_factory or self._connect
@@ -131,6 +146,22 @@ FROM measurement WHERE serid = ? AND dtom > ? ORDER BY dtom ASC LIMIT ?""",
                     )
                 rows = cursor.fetchall()
             return self._dict_rows(rows, ("serid", "dtom", "doserate", "dose", "previnterval", "stat"))
+        finally:
+            connection.close()
+
+    def latest_measurement_at_or_before(self, serid: int, cutoff: datetime) -> datetime | None:
+        connection = self._connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT MAX(dtom) FROM measurement WHERE serid = ? AND dtom < ?",
+                    (int(serid), cutoff),
+                )
+                row = cursor.fetchone()
+            if row is None:
+                return None
+            value = row.get("MAX(dtom)") if isinstance(row, dict) else row[0]
+            return value if isinstance(value, datetime) else None
         finally:
             connection.close()
 
@@ -211,16 +242,48 @@ class MariaCentralStore:
         connection = self._connection()
         try:
             with connection.cursor() as cursor:
+                serid = int(row["serid"])
                 cursor.execute(
-                    """INSERT IGNORE INTO device
+                    "SELECT name, location, hwaddress, hwtype FROM device WHERE serid = ?",
+                    (serid,),
+                )
+                existing = cursor.fetchone()
+                if existing is not None:
+                    if isinstance(existing, dict):
+                        old_name = str(existing.get("name") or "")
+                        old_location = str(existing.get("location") or "")
+                        old_source = str(existing.get("hwaddress") or "")
+                        old_type = str(existing.get("hwtype") or "")
+                    else:
+                        old_name, old_location, old_source, old_type = (str(value or "") for value in existing[:4])
+                    if old_type == "remote" and old_source and old_source != source_id:
+                        compatible = (
+                            old_name == str(row.get("name") or "")
+                            and old_location == str(row.get("location") or "")
+                        )
+                        if serid not in _shared_serids() or not compatible:
+                            raise RuntimeError(
+                                f"SERID conflict {serid}: source {old_source} vs {source_id}"
+                            )
+                        return
+                cursor.execute(
+                    """INSERT INTO device
   (serid, name, location, maxidlemin, warnlevel, alarmlevel, unit,
    audiopath, hwaddress, hwtype, description)
-VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 'remote', ?)""",
+VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 'remote', ?)
+ON DUPLICATE KEY UPDATE
+  name = VALUES(name), location = VALUES(location), maxidlemin = VALUES(maxidlemin),
+  warnlevel = VALUES(warnlevel), alarmlevel = VALUES(alarmlevel), unit = VALUES(unit),
+  hwaddress = VALUES(hwaddress), hwtype = 'remote', description = VALUES(description)""",
                     (
-                        int(row["serid"]), str(row.get("name") or f"Remote {row['serid']}"),
-                        str(row.get("location") or source_id), int(row.get("maxidlemin") or 30),
-                        float(row.get("warnlevel") or 0), float(row.get("alarmlevel") or 0),
-                        str(row.get("unit") or "µSv/h"), source_id[:50],
+                        serid,
+                        str(row.get("name") or f"Remote {serid}"),
+                        str(row.get("location") or source_id),
+                        int(row.get("maxidlemin") or 30),
+                        float(row.get("warnlevel") or 0),
+                        float(row.get("alarmlevel") or 0),
+                        str(row.get("unit") or "µSv/h"),
+                        source_id[:50],
                         str(row.get("description") or f"Synced from {source_id}")[:255],
                     ),
                 )
@@ -266,9 +329,17 @@ VALUES (?, ?, ?, ?, ?, ?)""",
                         previous_rate = previous[1] if previous else None
                         previous_dose = previous[2] if previous else None
                     from .models import Measurement
-                    measurement = Measurement(serid=serid, measured_at=dtom, dose_rate=float(row["doserate"]), previnterval=int(row.get("previnterval") or 2), stat=int(row.get("stat") or 0))
+                    measurement = Measurement(
+                        serid=serid,
+                        measured_at=dtom,
+                        dose_rate=float(row["doserate"]),
+                        previnterval=int(row.get("previnterval") or 2),
+                        stat=int(row.get("stat") or 0),
+                    )
                     upsert_recent(
-                        cursor, measurement, dose=float(row.get("dose") or 0.0),
+                        cursor,
+                        measurement,
+                        dose=float(row.get("dose") or 0.0),
                         previous_time=previous_time if isinstance(previous_time, datetime) else None,
                         previous_rate=float(previous_rate) if previous_rate is not None else None,
                         previous_dose=float(previous_dose) if previous_dose is not None else None,
@@ -329,7 +400,15 @@ VALUES (?, ?, ?, ?, ?, ?)""",
 
 
 class LanAggregator:
-    def __init__(self, central_store: Any, checkpoints: LanCheckpointStore, *, remote_factory: Callable[[LanSource], Any] | None = None, alarm_mirror: Any | None = None, batch_size: int = 1000) -> None:
+    def __init__(
+        self,
+        central_store: Any,
+        checkpoints: LanCheckpointStore,
+        *,
+        remote_factory: Callable[[LanSource], Any] | None = None,
+        alarm_mirror: Any | None = None,
+        batch_size: int = 1000,
+    ) -> None:
         self.central = central_store
         self.checkpoints = checkpoints
         self.remote_factory = remote_factory or (lambda source: RemoteMariaDBSource(source))
@@ -346,34 +425,73 @@ class LanAggregator:
             mapped.append(item)
         return mapped
 
+    def _ensure_device(self, source: LanSource, remote_device: dict[str, Any]) -> tuple[int, int]:
+        remote_serid = int(remote_device["serid"])
+        central_serid = self.checkpoints.store.resolve_station(source.source_id, remote_serid)
+        central_device = dict(remote_device)
+        central_device["serid"] = central_serid
+        self.central.ensure_remote_device(source.source_id, central_device)
+        return remote_serid, central_serid
+
     def run_source_once(self, source: LanSource) -> PullResult:
         result = PullResult(source.source_id)
         try:
             remote = self.remote_factory(source)
             for remote_device in remote.devices():
-                remote_serid = int(remote_device["serid"])
-                central_serid = self.checkpoints.store.resolve_station(source.source_id, remote_serid)
-                central_device = dict(remote_device)
-                central_device["serid"] = central_serid
-                self.central.ensure_remote_device(source.source_id, central_device)
+                remote_serid, central_serid = self._ensure_device(source, remote_device)
                 while True:
                     after = self.checkpoints.load(source.source_id, remote_serid)
                     remote_rows = remote.measurements_after(remote_serid, after, self.batch_size)
                     if not remote_rows:
                         break
                     central_rows = [dict(row, serid=central_serid) for row in remote_rows]
-                    result.inserted_measurements += int(self.central.import_measurements(source.source_id, central_rows))
-                    self.checkpoints.save(source.source_id, remote_serid, max(row["dtom"] for row in remote_rows))
-                    if len(remote_rows) < self.batch_size:
-                        break
-            mapped_alarms = self._mapped_alarm_rows(source.source_id, remote.alarms())
-            if hasattr(self.central, "mirror_alarm_events"):
-                self.central.mirror_alarm_events(source.source_id, mapped_alarms)
-            if self.alarm_mirror is not None:
-                result.mirrored_alarms = int(self.alarm_mirror.mirror(source.source_id, mapped_alarms))
+                    result.inserted_measurements += int(
+                        self.central.import_measurements(source.source_id, central_rows)
+                    )
+                    last_time = remote_rows[-1].get("dtom")
+                    if not isinstance(last_time, datetime):
+                        raise ValueError("remote measurement time tidak valid")
+                    self.checkpoints.save(source.source_id, remote_serid, last_time)
+            alarm_rows = remote.alarms() if hasattr(remote, "alarms") else []
+            mapped_alarms = self._mapped_alarm_rows(source.source_id, alarm_rows)
+            if mapped_alarms and self.alarm_mirror is not None:
+                result.mirrored_alarms += int(self.alarm_mirror.mirror(source.source_id, mapped_alarms))
+            if mapped_alarms and hasattr(self.central, "mirror_alarm_events"):
+                result.mirrored_alarms += int(
+                    self.central.mirror_alarm_events(source.source_id, mapped_alarms)
+                )
         except Exception as exc:
             result.error = str(exc)
         return result
+
+    def drain_source_until(self, source: LanSource, cutoff: datetime) -> dict[int, datetime | None]:
+        remote = self.remote_factory(source)
+        drained: dict[int, datetime | None] = {}
+        for remote_device in remote.devices():
+            remote_serid, central_serid = self._ensure_device(source, remote_device)
+            watermark = remote.latest_measurement_at_or_before(remote_serid, cutoff)
+            if watermark is None:
+                drained[remote_serid] = self.checkpoints.load(source.source_id, remote_serid)
+                continue
+            while True:
+                after = self.checkpoints.load(source.source_id, remote_serid)
+                if after is not None and after >= watermark:
+                    drained[remote_serid] = after
+                    break
+                remote_rows = remote.measurements_after(remote_serid, after, self.batch_size)
+                bounded = [
+                    row for row in remote_rows
+                    if isinstance(row.get("dtom"), datetime) and row["dtom"] < cutoff
+                ]
+                if not bounded:
+                    raise RuntimeError(
+                        f"drain incomplete source={source.source_id} serid={remote_serid} watermark={watermark}"
+                    )
+                central_rows = [dict(row, serid=central_serid) for row in bounded]
+                self.central.import_measurements(source.source_id, central_rows)
+                last_time = bounded[-1]["dtom"]
+                self.checkpoints.save(source.source_id, remote_serid, last_time)
+        return drained
 
     def run_sources_once(self, sources: Iterable[LanSource]) -> list[PullResult]:
         return [self.run_source_once(source) for source in sources]
