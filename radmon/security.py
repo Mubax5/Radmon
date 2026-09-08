@@ -5,10 +5,11 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 import hashlib
 import hmac
+import json
 from pathlib import Path
 import secrets
 import sqlite3
-from typing import Callable
+from typing import Any, Callable
 
 
 class SecurityError(RuntimeError):
@@ -119,6 +120,23 @@ CREATE TABLE IF NOT EXISTS source_station_map (
   remote_serid INTEGER NOT NULL,
   central_serid INTEGER NOT NULL,
   PRIMARY KEY (source_id, remote_serid)
+);
+CREATE TABLE IF NOT EXISTS archive_quarters (
+  quarter_id TEXT PRIMARY KEY,
+  start_at TEXT NOT NULL,
+  end_at TEXT NOT NULL,
+  state TEXT NOT NULL,
+  archive_path TEXT,
+  archive_sha256 TEXT,
+  row_counts_json TEXT,
+  drain_json TEXT,
+  created_at TEXT,
+  sealed_at TEXT,
+  purged_at TEXT,
+  completed_at TEXT,
+  last_error TEXT,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
 );
 """
             )
@@ -328,12 +346,6 @@ WHERE s.token_hash = ?
             )
 
     def resolve_station(self, source_id: str, remote_serid: int) -> int:
-        """Return stable central identity for a production station.
-
-        The first observation maps remote SERID to itself.  A later central Tag
-        migration changes only ``central_serid`` so LAN checkpoints and ACK still
-        address the original production identifier.
-        """
         source = source_id.strip()
         remote = int(remote_serid)
         with self._connection() as connection:
@@ -361,3 +373,143 @@ WHERE s.token_hash = ?
                 "UPDATE remote_alarm_state SET serid = ? WHERE serid = ?",
                 (new, old),
             )
+
+    @staticmethod
+    def _archive_row(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        keys = (
+            "quarter_id", "start_at", "end_at", "state", "archive_path",
+            "archive_sha256", "row_counts_json", "drain_json", "created_at",
+            "sealed_at", "purged_at", "completed_at", "last_error", "retry_count",
+            "updated_at",
+        )
+        item = dict(zip(keys, row))
+        item["row_counts"] = json.loads(item.pop("row_counts_json") or "{}")
+        item["drain"] = json.loads(item.pop("drain_json") or "{}")
+        item["retry_count"] = int(item.get("retry_count") or 0)
+        return item
+
+    def get_archive(self, quarter_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+SELECT quarter_id, start_at, end_at, state, archive_path, archive_sha256,
+       row_counts_json, drain_json, created_at, sealed_at, purged_at,
+       completed_at, last_error, retry_count, updated_at
+FROM archive_quarters WHERE quarter_id = ?
+""",
+                (quarter_id,),
+            ).fetchone()
+        return self._archive_row(row)
+
+    def list_archives(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+SELECT quarter_id, start_at, end_at, state, archive_path, archive_sha256,
+       row_counts_json, drain_json, created_at, sealed_at, purged_at,
+       completed_at, last_error, retry_count, updated_at
+FROM archive_quarters ORDER BY start_at DESC LIMIT ?
+""",
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [self._archive_row(row) for row in rows if row is not None]
+
+    def upsert_archive(
+        self,
+        *,
+        quarter_id: str,
+        start_at: str,
+        end_at: str,
+        state: str,
+        archive_path: str | None = None,
+        archive_sha256: str | None = None,
+        row_counts: dict[str, int] | None = None,
+        drain: dict[str, Any] | None = None,
+        created_at: str | None = None,
+        sealed_at: str | None = None,
+        purged_at: str | None = None,
+        completed_at: str | None = None,
+        last_error: str | None = None,
+    ) -> dict[str, Any]:
+        now = self._now().isoformat()
+        with self._connection() as connection:
+            connection.execute(
+                """
+INSERT INTO archive_quarters
+  (quarter_id, start_at, end_at, state, archive_path, archive_sha256,
+   row_counts_json, drain_json, created_at, sealed_at, purged_at, completed_at,
+   last_error, retry_count, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+ON CONFLICT(quarter_id) DO UPDATE SET
+  start_at = excluded.start_at,
+  end_at = excluded.end_at,
+  state = excluded.state,
+  archive_path = COALESCE(excluded.archive_path, archive_path),
+  archive_sha256 = COALESCE(excluded.archive_sha256, archive_sha256),
+  row_counts_json = COALESCE(excluded.row_counts_json, row_counts_json),
+  drain_json = COALESCE(excluded.drain_json, drain_json),
+  created_at = COALESCE(excluded.created_at, created_at),
+  sealed_at = COALESCE(excluded.sealed_at, sealed_at),
+  purged_at = COALESCE(excluded.purged_at, purged_at),
+  completed_at = COALESCE(excluded.completed_at, completed_at),
+  last_error = excluded.last_error,
+  updated_at = excluded.updated_at
+""",
+                (
+                    quarter_id,
+                    start_at,
+                    end_at,
+                    state,
+                    archive_path,
+                    archive_sha256,
+                    json.dumps(row_counts, sort_keys=True) if row_counts is not None else None,
+                    json.dumps(drain, sort_keys=True) if drain is not None else None,
+                    created_at,
+                    sealed_at,
+                    purged_at,
+                    completed_at,
+                    last_error,
+                    now,
+                ),
+            )
+        item = self.get_archive(quarter_id)
+        if item is None:
+            raise RuntimeError("archive state tidak tersimpan")
+        return item
+
+    def update_archive_state(self, quarter_id: str, state: str, **fields: Any) -> dict[str, Any]:
+        allowed = {
+            "archive_path", "archive_sha256", "created_at", "sealed_at", "purged_at",
+            "completed_at", "last_error",
+        }
+        assignments = ["state = ?", "updated_at = ?"]
+        params: list[Any] = [state, self._now().isoformat()]
+        if "row_counts" in fields:
+            assignments.append("row_counts_json = ?")
+            params.append(json.dumps(fields.pop("row_counts"), sort_keys=True))
+        if "drain" in fields:
+            assignments.append("drain_json = ?")
+            params.append(json.dumps(fields.pop("drain"), sort_keys=True))
+        increment_retry = bool(fields.pop("increment_retry", False))
+        if increment_retry:
+            assignments.append("retry_count = retry_count + 1")
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError("archive field tidak dikenal: " + ", ".join(sorted(unknown)))
+        for key, value in fields.items():
+            assignments.append(f"{key} = ?")
+            params.append(value)
+        params.append(quarter_id)
+        with self._connection() as connection:
+            cursor = connection.execute(
+                f"UPDATE archive_quarters SET {', '.join(assignments)} WHERE quarter_id = ?",
+                tuple(params),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"archive quarter tidak ditemukan: {quarter_id}")
+        item = self.get_archive(quarter_id)
+        if item is None:
+            raise RuntimeError("archive state tidak ditemukan setelah update")
+        return item
