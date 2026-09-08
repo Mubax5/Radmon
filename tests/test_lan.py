@@ -101,6 +101,37 @@ def test_aggregator_preserves_remote_dose_and_deduplicates(tmp_path):
     assert checkpoints.load("gd52", 5201) == datetime(2026, 9, 8, 14, 0, 2)
 
 
+def test_central_tag_mapping_does_not_change_remote_checkpoint_identity(tmp_path):
+    store = SecurityStore(tmp_path / "security.db")
+    store.resolve_station("gd52", 5201)
+    store.remap_central_serid(5201, 6201)
+    checkpoints = LanCheckpointStore(store)
+    source = LanSource("gd52", "192.168.1.52", 3306, "u", "p", "ipradmon")
+    rows = [{
+        "serid": 5201,
+        "dtom": datetime(2026, 9, 8, 14, 0, 0),
+        "doserate": 1.2,
+        "dose": 0.0042,
+        "previnterval": 2,
+        "stat": 0,
+    }]
+    central = FakeCentral()
+    aggregator = LanAggregator(
+        central,
+        checkpoints,
+        remote_factory=lambda value: FakeRemote(value, rows),
+    )
+
+    result = aggregator.run_source_once(source)
+
+    assert result.inserted_measurements == 1
+    assert 6201 in central.devices
+    assert 5201 not in central.devices
+    assert (6201, datetime(2026, 9, 8, 14, 0, 0)) in central.measurements
+    assert checkpoints.load("gd52", 5201) == datetime(2026, 9, 8, 14, 0, 0)
+    assert checkpoints.load("gd52", 6201) is None
+
+
 def test_one_offline_source_does_not_define_other_source_result(tmp_path):
     store = SecurityStore(tmp_path / "security.db")
     checkpoints = LanCheckpointStore(store)
