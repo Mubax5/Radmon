@@ -16,6 +16,8 @@ Demo seluruh station/detector:
 RUN_DUMMY.bat
 ```
 
+Demo fleet tetap mencakup station `5202 / IS-1 Koridor` bersama seluruh katalog detector canonical dan menulis sampel tiap 2 detik.
+
 Central LAN pada PC3:
 
 ```text
