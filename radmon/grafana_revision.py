@@ -1,7 +1,7 @@
 """Compatibility patch for the generated Grafana TV payloads.
 
 Kept separate from the large dashboard generator so the timestamp regression and
-shared header can be tested independently.  ``apply()`` replaces only the two
+shared header can be tested independently. ``apply()`` replaces only the two
 small generator helpers involved in this revision.
 """
 from __future__ import annotations
@@ -23,7 +23,19 @@ def apply() -> None:
             ),
         }
 
-        date_panel = tv._panel(2, "stat", "", 0, 2, 6, 2)
+        organization = tv._panel(2, "text", "", 6, 2, 12, 2)
+        organization["description"] = "header-organization"
+        organization["options"] = {
+            "mode": "html",
+            "content": (
+                "<div style='height:100%;display:flex;align-items:center;justify-content:center;"
+                "text-align:center;font-size:clamp(13px,.95vw,18px);font-weight:650'>"
+                "Instalasi Pengelolaan Limbah Radioaktif<br>"
+                "Direktorat Pengelolaan Fasilitas Ketenaganukliran</div>"
+            ),
+        }
+
+        date_panel = tv._panel(3, "stat", "", 0, 2, 6, 2)
         date_panel["description"] = "header-date-wib"
         date_panel["targets"] = [tv._target("""
 SELECT CONCAT(
@@ -47,18 +59,6 @@ SELECT CONCAT(
             "wideLayout": True,
         }
 
-        organization = tv._panel(3, "text", "", 6, 2, 12, 2)
-        organization["description"] = "header-organization"
-        organization["options"] = {
-            "mode": "html",
-            "content": (
-                "<div style='height:100%;display:flex;align-items:center;justify-content:center;"
-                "text-align:center;font-size:clamp(13px,.95vw,18px);font-weight:650'>"
-                "Instalasi Pengelolaan Limbah Radioaktif<br>"
-                "Direktorat Pengelolaan Fasilitas Ketenaganukliran</div>"
-            ),
-        }
-
         update_panel = tv._panel(4, "stat", "", 18, 2, 6, 2)
         update_panel["description"] = "header-update-wib"
         update_panel["targets"] = [tv._target("""
@@ -79,7 +79,9 @@ SELECT CONCAT(
             "textMode": "value",
             "wideLayout": True,
         }
-        return [title, date_panel, organization, update_panel]
+        # Keep title + organization first for compatibility with existing
+        # payload tests, while grid positions render date-left/org-center/time-right.
+        return [title, organization, date_panel, update_panel]
 
     def time_stat(panel_id, station, x, y, w, h=1):
         panel = tv._panel(panel_id, "stat", "", x, y, w, h)
