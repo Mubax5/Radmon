@@ -9,13 +9,19 @@ def read(name: str) -> str:
     return (ROOT / name).read_text(encoding="utf-8")
 
 
-def test_only_two_operator_launchers_exist():
-    assert sorted(path.name for path in ROOT.glob("*.bat")) == ["RADMON.bat", "RUN_DUMMY.bat"]
+def test_operator_launchers_include_central_lan():
+    assert sorted(path.name for path in ROOT.glob("*.bat")) == [
+        "RADMON.bat", "RUN_DUMMY.bat", "RUN_LAN.bat"
+    ]
     assert not list((ROOT / "scripts").glob("*.bat"))
 
 
 def test_launchers_self_bootstrap_without_spawning_service_consoles():
-    for name, source_mode in (("RADMON.bat", "detector"), ("RUN_DUMMY.bat", "dummy")):
+    for name, source_mode in (
+        ("RADMON.bat", "detector"),
+        ("RUN_DUMMY.bat", "dummy"),
+        ("RUN_LAN.bat", "lan"),
+    ):
         text = read(name).lower()
         assert ".venv" in text
         assert "requirements.txt" in text
