@@ -1,25 +1,35 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
+from radmon.admin.auth_dialogs import BootstrapAdminDialog, LoginDialog
 from radmon.admin.main_window import MainWindow
 from radmon.alarm import AlarmService
 from radmon.config import Settings
+from radmon.lan_runtime import LanRuntime
 from radmon.logging_setup import configure_logging
 from radmon.report_queries import DatabaseReportSummaryReader
 from radmon.repository import MariaDBRepository
 from radmon.reports import ReportService
 from radmon.runtime import ApplicationRuntime
+from radmon.secure_context import SecurityContext, install_window_security, set_context
+from radmon.secure_services import build_secure_services
 from radmon.single_instance import SingleInstanceLock
+from radmon.whatsapp import SeleniumWhatsAppSender, WhatsAppAlarmDispatcher
 
 
 def parser() -> argparse.ArgumentParser:
     value = argparse.ArgumentParser(description="Radiation monitoring runtime")
-    value.add_argument("--source", choices=("detector", "dummy"), default="detector")
+    value.add_argument("--source", choices=("detector", "dummy", "lan"), default="detector")
     return value
+
+
+def _enabled(name: str) -> bool:
+    return os.getenv(name, "0").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def main() -> int:
@@ -49,13 +59,60 @@ def main() -> int:
         lock.release()
         return 3
 
+    try:
+        secure = build_secure_services(settings)
+    except Exception as exc:
+        QMessageBox.critical(None, "Security tidak siap", str(exc))
+        lock.release()
+        return 4
+
+    identity = None
+    if not secure.security.list_users():
+        bootstrap = BootstrapAdminDialog(secure.security)
+        if bootstrap.exec() != QDialog.Accepted or bootstrap.identity is None:
+            lock.release()
+            return 5
+        identity = bootstrap.identity
+        secure.audit.record("BOOTSTRAP_ADMIN_CREATE", identity, "user", identity.username)
+    else:
+        login = LoginDialog(secure.security)
+        if login.exec() != QDialog.Accepted or login.identity is None:
+            lock.release()
+            return 5
+        identity = login.identity
+        secure.audit.record("LOGIN_SUCCESS", identity, "user", identity.username)
+
+    set_context(
+        SecurityContext(
+            identity=identity,
+            security=secure.security,
+            audit=secure.audit,
+            alarm_mirror=secure.alarm_mirror,
+            alarm_control=secure.alarm_control,
+            device_admin=secure.device_admin,
+            user_admin=secure.user_admin,
+        )
+    )
+
     alarm_service = AlarmService(repository, station)
     report_service = ReportService(
         repository,
         settings,
         summary_reader=DatabaseReportSummaryReader(settings),
     )
-    runtime = ApplicationRuntime(repository, settings, alarm_service, args.source)
+
+    whatsapp = None
+    if _enabled("RADMON_WHATSAPP_ENABLED"):
+        whatsapp = WhatsAppAlarmDispatcher(
+            secure.alarm_mirror,
+            SeleniumWhatsAppSender.from_env(),
+        )
+
+    if args.source == "lan":
+        runtime = LanRuntime(settings, secure, whatsapp_dispatcher=whatsapp)
+    else:
+        runtime = ApplicationRuntime(repository, settings, alarm_service, args.source)
+
     window = MainWindow(
         repository,
         report_service,
@@ -64,6 +121,7 @@ def main() -> int:
         log_path,
         source=args.source,
     )
+    install_window_security(window)
 
     app.aboutToQuit.connect(runtime.stop)
     app.aboutToQuit.connect(lock.release)
