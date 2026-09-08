@@ -38,8 +38,8 @@ def parse_lan_sources() -> list[LanSource]:
     port = int(os.getenv("RADMON_LAN_DB_PORT", "3306"))
     result: list[LanSource] = []
     seen: set[str] = set()
-    for entry in raw.split(";"):
-        item = entry.strip()
+    for raw_item in raw.split(";"):
+        item = raw_item.strip()
         if not item:
             continue
         if item.count("@") != 1:
@@ -62,7 +62,7 @@ class LanCheckpointStore:
                 "SELECT last_dtom FROM lan_checkpoints WHERE source_id = ? AND serid = ?",
                 (source_id, int(serid)),
             ).fetchone()
-        return datetime.fromisoformat(row[0]) if row else None
+        return datetime.fromisoformat(str(row[0])) if row else None
 
     def save(self, source_id: str, serid: int, value: datetime) -> None:
         with self.store._connection() as connection:
@@ -96,19 +96,20 @@ class RemoteMariaDBSource:
     def _connection(self):
         return self._connection_factory()
 
+    @staticmethod
+    def _dict_rows(rows, keys):
+        return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
+
     def devices(self) -> list[dict[str, Any]]:
         connection = self._connection()
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """
-SELECT serid, name, location, warnlevel, alarmlevel, maxidlemin, unit, description
-FROM device ORDER BY serid
-"""
+                    """SELECT serid, name, location, warnlevel, alarmlevel, maxidlemin, unit, description
+FROM device ORDER BY serid"""
                 )
                 rows = cursor.fetchall()
-            keys = ("serid", "name", "location", "warnlevel", "alarmlevel", "maxidlemin", "unit", "description")
-            return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
+            return self._dict_rows(rows, ("serid", "name", "location", "warnlevel", "alarmlevel", "maxidlemin", "unit", "description"))
         finally:
             connection.close()
 
@@ -118,23 +119,18 @@ FROM device ORDER BY serid
             with connection.cursor() as cursor:
                 if after is None:
                     cursor.execute(
-                        """
-SELECT serid, dtom, doserate, dose, previnterval, stat
-FROM measurement WHERE serid = ? ORDER BY dtom ASC LIMIT ?
-""",
+                        """SELECT serid, dtom, doserate, dose, previnterval, stat
+FROM measurement WHERE serid = ? ORDER BY dtom ASC LIMIT ?""",
                         (int(serid), max(1, int(limit))),
                     )
                 else:
                     cursor.execute(
-                        """
-SELECT serid, dtom, doserate, dose, previnterval, stat
-FROM measurement WHERE serid = ? AND dtom > ? ORDER BY dtom ASC LIMIT ?
-""",
+                        """SELECT serid, dtom, doserate, dose, previnterval, stat
+FROM measurement WHERE serid = ? AND dtom > ? ORDER BY dtom ASC LIMIT ?""",
                         (int(serid), after, max(1, int(limit))),
                     )
                 rows = cursor.fetchall()
-            keys = ("serid", "dtom", "doserate", "dose", "previnterval", "stat")
-            return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
+            return self._dict_rows(rows, ("serid", "dtom", "doserate", "dose", "previnterval", "stat"))
         finally:
             connection.close()
 
@@ -143,10 +139,8 @@ FROM measurement WHERE serid = ? AND dtom > ? ORDER BY dtom ASC LIMIT ?
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """
-SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'alarm'
-""",
+                    """SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'alarm'""",
                     (self.source.database,),
                 )
                 rows = cursor.fetchall()
@@ -161,24 +155,19 @@ WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'alarm'
             with connection.cursor() as cursor:
                 if {"dtoa", "lvl", "mvalue", "thvalue", "nhit", "i_op", "pic", "note"}.issubset(columns):
                     cursor.execute(
-                        """
-SELECT serid, dtoa, lvl, mvalue, thvalue, nhit, ack, i_flag, i_op, pic, note
-FROM alarm ORDER BY dtoa DESC LIMIT ?
-""",
+                        """SELECT serid, dtoa, lvl, mvalue, thvalue, nhit, ack, i_flag, i_op, pic, note
+FROM alarm ORDER BY dtoa DESC LIMIT ?""",
                         (max(1, int(limit)),),
                     )
                     keys = ("serid", "dtoa", "lvl", "mvalue", "thvalue", "nhit", "ack", "i_flag", "i_op", "pic", "note")
                 else:
                     cursor.execute(
-                        """
-SELECT alarmid, serid, dtom, type, msg
-FROM alarm ORDER BY dtom DESC LIMIT ?
-""",
+                        """SELECT alarmid, serid, dtom, type, msg
+FROM alarm ORDER BY dtom DESC LIMIT ?""",
                         (max(1, int(limit)),),
                     )
                     keys = ("alarmid", "serid", "dtom", "type", "msg")
-                rows = cursor.fetchall()
-            return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
+                return self._dict_rows(cursor.fetchall(), keys)
         finally:
             connection.close()
 
@@ -190,11 +179,9 @@ FROM alarm ORDER BY dtom DESC LIMIT ?
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """
-UPDATE alarm
+                    """UPDATE alarm
 SET ack = 1, i_op = ?, pic = ?, note = ?
-WHERE serid = ? AND dtoa = ? AND i_op IS NULL
-""",
+WHERE serid = ? AND dtoa = ? AND i_op IS NULL""",
                     (at, pic, f"[{action}] {note}".strip(), int(serid), dtoa),
                 )
                 changed = int(getattr(cursor, "rowcount", 0))
@@ -208,7 +195,7 @@ WHERE serid = ? AND dtoa = ? AND i_op IS NULL
 
 
 class MariaCentralStore:
-    """Import remote samples into the existing central ipradmon schema."""
+    """Import remote samples/events into the existing central ipradmon schema."""
 
     def __init__(self, settings, *, connection_factory: Callable[[], Any] | None = None) -> None:
         self.settings = settings
@@ -225,21 +212,15 @@ class MariaCentralStore:
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    """
-INSERT IGNORE INTO device
+                    """INSERT IGNORE INTO device
   (serid, name, location, maxidlemin, warnlevel, alarmlevel, unit,
    audiopath, hwaddress, hwtype, description)
-VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 'remote', ?)
-""",
+VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 'remote', ?)""",
                     (
-                        int(row["serid"]),
-                        str(row.get("name") or f"Remote {row['serid']}"),
-                        str(row.get("location") or source_id),
-                        int(row.get("maxidlemin") or 30),
-                        float(row.get("warnlevel") or 0),
-                        float(row.get("alarmlevel") or 0),
-                        str(row.get("unit") or "µSv/h"),
-                        source_id[:50],
+                        int(row["serid"]), str(row.get("name") or f"Remote {row['serid']}"),
+                        str(row.get("location") or source_id), int(row.get("maxidlemin") or 30),
+                        float(row.get("warnlevel") or 0), float(row.get("alarmlevel") or 0),
+                        str(row.get("unit") or "µSv/h"), source_id[:50],
                         str(row.get("description") or f"Synced from {source_id}")[:255],
                     ),
                 )
@@ -259,29 +240,16 @@ VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, 'remote', ?)
         try:
             with connection.cursor() as cursor:
                 for row in values:
-                    serid = int(row["serid"])
-                    dtom = row["dtom"]
+                    serid, dtom = int(row["serid"]), row["dtom"]
                     cursor.execute(
-                        """
-SELECT dtom, doserate, dose FROM measurement
-WHERE serid = ? AND dtom < ? ORDER BY dtom DESC LIMIT 1
-""",
+                        "SELECT dtom, doserate, dose FROM measurement WHERE serid = ? AND dtom < ? ORDER BY dtom DESC LIMIT 1",
                         (serid, dtom),
                     )
                     previous = cursor.fetchone()
                     cursor.execute(
-                        """
-INSERT IGNORE INTO measurement (serid, dtom, doserate, dose, previnterval, stat)
-VALUES (?, ?, ?, ?, ?, ?)
-""",
-                        (
-                            serid,
-                            dtom,
-                            float(row["doserate"]),
-                            float(row.get("dose") or 0.0),
-                            int(row.get("previnterval") or 2),
-                            int(row.get("stat") or 0),
-                        ),
+                        """INSERT IGNORE INTO measurement (serid, dtom, doserate, dose, previnterval, stat)
+VALUES (?, ?, ?, ?, ?, ?)""",
+                        (serid, dtom, float(row["doserate"]), float(row.get("dose") or 0.0), int(row.get("previnterval") or 2), int(row.get("stat") or 0)),
                     )
                     if int(getattr(cursor, "rowcount", 0)) != 1:
                         continue
@@ -292,25 +260,15 @@ VALUES (?, ?, ?, ?, ?, ?)
                     if recent_time is not None and dtom < recent_time:
                         continue
                     if isinstance(previous, dict):
-                        previous_time = previous.get("dtom")
-                        previous_rate = previous.get("doserate")
-                        previous_dose = previous.get("dose")
+                        previous_time, previous_rate, previous_dose = previous.get("dtom"), previous.get("doserate"), previous.get("dose")
                     else:
                         previous_time = previous[0] if previous else None
                         previous_rate = previous[1] if previous else None
                         previous_dose = previous[2] if previous else None
                     from .models import Measurement
-                    measurement = Measurement(
-                        serid=serid,
-                        measured_at=dtom,
-                        dose_rate=float(row["doserate"]),
-                        previnterval=int(row.get("previnterval") or 2),
-                        stat=int(row.get("stat") or 0),
-                    )
+                    measurement = Measurement(serid=serid, measured_at=dtom, dose_rate=float(row["doserate"]), previnterval=int(row.get("previnterval") or 2), stat=int(row.get("stat") or 0))
                     upsert_recent(
-                        cursor,
-                        measurement,
-                        dose=float(row.get("dose") or 0.0),
+                        cursor, measurement, dose=float(row.get("dose") or 0.0),
                         previous_time=previous_time if isinstance(previous_time, datetime) else None,
                         previous_rate=float(previous_rate) if previous_rate is not None else None,
                         previous_dose=float(previous_dose) if previous_dose is not None else None,
@@ -324,17 +282,54 @@ VALUES (?, ?, ?, ?, ?, ?)
         finally:
             connection.close()
 
+    @staticmethod
+    def _alarm_values(source_id: str, row: dict[str, Any]) -> tuple[int, datetime, str, str]:
+        serid = int(row["serid"])
+        event_time = row.get("dtoa", row.get("dtom"))
+        if not isinstance(event_time, datetime):
+            raise ValueError("remote alarm time tidak valid")
+        if "lvl" in row:
+            level = "ALARM" if int(row.get("lvl") or 0) >= 2 else "ALERT"
+            measured = row.get("mvalue")
+            threshold = row.get("thvalue")
+            hit = int(row.get("nhit") or 0)
+            measured_text = "-" if measured is None else f"{float(measured):.3f} µSv/h"
+            threshold_text = "-" if threshold is None else f"{float(threshold):.3f} µSv/h"
+            msg = f"[{source_id}] {level}: dose rate {measured_text}; threshold {threshold_text}; hit {hit}"
+        else:
+            level = str(row.get("type") or "ALERT").upper()
+            msg = f"[{source_id}] {str(row.get('msg') or level)}"
+        return serid, event_time, level, msg[:4000]
+
+    def mirror_alarm_events(self, source_id: str, rows: Iterable[dict[str, Any]]) -> int:
+        connection = self._connection()
+        inserted = 0
+        try:
+            with connection.cursor() as cursor:
+                for row in rows:
+                    serid, event_time, level, msg = self._alarm_values(source_id, row)
+                    cursor.execute(
+                        "SELECT alarmid FROM alarm WHERE serid = ? AND dtom = ? AND type = ? AND msg = ? LIMIT 1",
+                        (serid, event_time, level, msg),
+                    )
+                    if cursor.fetchone() is not None:
+                        continue
+                    cursor.execute(
+                        "INSERT INTO alarm (serid, dtom, type, msg) VALUES (?, ?, ?, ?)",
+                        (serid, event_time, level, msg),
+                    )
+                    inserted += 1
+            connection.commit()
+            return inserted
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
 
 class LanAggregator:
-    def __init__(
-        self,
-        central_store: Any,
-        checkpoints: LanCheckpointStore,
-        *,
-        remote_factory: Callable[[LanSource], Any] | None = None,
-        alarm_mirror: Any | None = None,
-        batch_size: int = 1000,
-    ) -> None:
+    def __init__(self, central_store: Any, checkpoints: LanCheckpointStore, *, remote_factory: Callable[[LanSource], Any] | None = None, alarm_mirror: Any | None = None, batch_size: int = 1000) -> None:
         self.central = central_store
         self.checkpoints = checkpoints
         self.remote_factory = remote_factory or (lambda source: RemoteMariaDBSource(source))
@@ -355,8 +350,7 @@ class LanAggregator:
         result = PullResult(source.source_id)
         try:
             remote = self.remote_factory(source)
-            devices = remote.devices()
-            for remote_device in devices:
+            for remote_device in remote.devices():
                 remote_serid = int(remote_device["serid"])
                 central_serid = self.checkpoints.store.resolve_station(source.source_id, remote_serid)
                 central_device = dict(remote_device)
@@ -367,25 +361,16 @@ class LanAggregator:
                     remote_rows = remote.measurements_after(remote_serid, after, self.batch_size)
                     if not remote_rows:
                         break
-                    central_rows = []
-                    for row in remote_rows:
-                        item = dict(row)
-                        item["serid"] = central_serid
-                        central_rows.append(item)
-                    result.inserted_measurements += int(
-                        self.central.import_measurements(source.source_id, central_rows)
-                    )
-                    latest = max(row["dtom"] for row in remote_rows)
-                    self.checkpoints.save(source.source_id, remote_serid, latest)
+                    central_rows = [dict(row, serid=central_serid) for row in remote_rows]
+                    result.inserted_measurements += int(self.central.import_measurements(source.source_id, central_rows))
+                    self.checkpoints.save(source.source_id, remote_serid, max(row["dtom"] for row in remote_rows))
                     if len(remote_rows) < self.batch_size:
                         break
+            mapped_alarms = self._mapped_alarm_rows(source.source_id, remote.alarms())
+            if hasattr(self.central, "mirror_alarm_events"):
+                self.central.mirror_alarm_events(source.source_id, mapped_alarms)
             if self.alarm_mirror is not None:
-                result.mirrored_alarms = int(
-                    self.alarm_mirror.mirror(
-                        source.source_id,
-                        self._mapped_alarm_rows(source.source_id, remote.alarms()),
-                    )
-                )
+                result.mirrored_alarms = int(self.alarm_mirror.mirror(source.source_id, mapped_alarms))
         except Exception as exc:
             result.error = str(exc)
         return result
