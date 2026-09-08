@@ -14,7 +14,11 @@ from radmon.grafana_tv import (
     PAGE_UIDS,
     PLAYLIST_UID,
     build_dashboard_payloads,
+    build_page_one,
+    build_page_three,
+    build_page_two,
     build_playlist_payload,
+    operation_page_stations,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -177,11 +181,11 @@ def test_bootstrap_refuses_to_return_unverified_playlist():
         raise AssertionError("unverified Grafana playlist must not be returned")
 
 
-def test_grafana_tv_uses_three_logical_pages_with_eight_operations_variants():
+def test_grafana_tv_uses_three_logical_pages_with_five_operations_variants():
     dashboards = build_dashboard_payloads()
     assert len(PAGE_UIDS) == 3
-    assert len(OPERATIONS_PAGE_UIDS) == 8
-    assert len(dashboards) == 10
+    assert len(OPERATIONS_PAGE_UIDS) == 5
+    assert len(dashboards) == 7
     assert [dashboard["uid"] for dashboard in dashboards] == list(DASHBOARD_UIDS)
     for dashboard in dashboards:
         assert dashboard["refresh"] == "2s"
@@ -189,11 +193,15 @@ def test_grafana_tv_uses_three_logical_pages_with_eight_operations_variants():
         assert dashboard["templating"]["list"] == []
 
     playlist_values = [item["value"] for item in build_playlist_payload()["spec"]["items"]]
-    assert len(playlist_values) == 24
-    for cycle in range(8):
+    assert len(playlist_values) == 15
+    for cycle in range(5):
         assert playlist_values[cycle * 3] == PAGE_UIDS[0]
         assert playlist_values[cycle * 3 + 1] == PAGE_UIDS[1]
         assert playlist_values[cycle * 3 + 2] == OPERATIONS_PAGE_UIDS[cycle]
+
+    grouped = [operation_page_stations(page_number) for page_number in range(1, 6)]
+    assert [len(group) for group in grouped] == [3, 3, 3, 3, 3]
+    assert len({station.serid for group in grouped for station in group}) == 15
 
     payload = json.dumps(dashboards, ensure_ascii=False)
     for table in ("device", "measurement", "alarm"):
@@ -203,7 +211,64 @@ def test_grafana_tv_uses_three_logical_pages_with_eight_operations_variants():
     assert "REAL TIME DOSE RATE MONITORING SYSTEM" in payload
     assert "µSv/h" in payload
     assert "Dose Rate · Gedung" in payload
-    assert "Kondisi Operasional Detector · Page 8/8" in payload
+    assert "Kondisi Operasional Detector · Page 5/5" in payload
+
+
+def test_realtime_measurement_time_is_forced_to_24_hour_format():
+    dashboard = build_page_one()
+    time_panels = [
+        panel for panel in dashboard["panels"]
+        if panel.get("description") == "latest-measurement-time"
+    ]
+    assert len(time_panels) == 15
+    for panel in time_panels:
+        sql = panel["targets"][0]["rawSql"]
+        assert "DATE_FORMAT" in sql
+        assert "%H:%i:%s" in sql
+        assert panel["fieldConfig"]["defaults"]["unit"] == "none"
+        assert panel["options"]["text"]["valueSize"] <= 12
+
+
+def test_trend_page_uses_readable_one_microsievert_scale_and_larger_summary_values():
+    dashboard = build_page_two()
+    trend_panels = [
+        panel for panel in dashboard["panels"]
+        if panel.get("description") == "building-dose-trend"
+    ]
+    assert len(trend_panels) == 5
+    for panel in trend_panels:
+        defaults = panel["fieldConfig"]["defaults"]
+        assert defaults["min"] == 0
+        assert defaults["max"] == 1
+        assert defaults["unit"] == "suffix: µSv/h"
+
+    summary_titles = {
+        "Dose Rate Tertinggi Saat Ini",
+        "Rata-rata Saat Ini",
+        "Detector Online",
+        "Detector Offline",
+    }
+    summary_panels = [panel for panel in dashboard["panels"] if panel.get("title") in summary_titles]
+    assert len(summary_panels) == 4
+    assert all(panel["options"]["text"]["valueSize"] >= 40 for panel in summary_panels)
+    for panel in summary_panels:
+        if panel["title"] in {"Detector Online", "Detector Offline"}:
+            assert panel["fieldConfig"]["defaults"]["decimals"] == 0
+
+
+def test_operations_status_panel_keeps_status_name_and_count_visible():
+    dashboard = build_page_three(1)
+    status_panel = next(panel for panel in dashboard["panels"] if panel.get("title") == "Status Detector")
+    assert status_panel["gridPos"]["w"] >= 10
+    assert status_panel["options"]["displayLabels"] == ["name", "value"]
+    assert status_panel["options"]["legend"]["placement"] == "bottom"
+    assert status_panel["options"]["legend"]["showLegend"] is True
+
+    status_titles = {"NORMAL", "ALERT", "ALARM", "OFFLINE"}
+    stat_panels = [panel for panel in dashboard["panels"] if panel.get("title") in status_titles]
+    assert len(stat_panels) == 4
+    assert all(panel["options"]["text"]["valueSize"] >= 40 for panel in stat_panels)
+    assert all(panel["fieldConfig"]["defaults"]["decimals"] == 0 for panel in stat_panels)
 
 
 def test_grafana_provisioning_uses_mysql_and_collision_safe_bundled_port():
