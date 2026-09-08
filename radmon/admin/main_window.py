@@ -83,6 +83,7 @@ class MainWindow(QMainWindow):
         log_path,
         *,
         source: str,
+        archive_catalog=None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -91,6 +92,7 @@ class MainWindow(QMainWindow):
         self.base_settings = settings
         self.settings = settings
         self.source = source
+        self.archive_catalog = archive_catalog
         self._grafana_bootstrap = GrafanaBootstrap(settings)
         self._grafana_ready_url: str | None = None
         self._grafana_error: str | None = None
@@ -108,7 +110,15 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(RecentPage(repository, settings), silk_icon("clock"), "Recent")
         self.tabs.addTab(TabularPage(repository, settings), silk_icon("table"), "Tabular")
         self.tabs.addTab(ChartPage(repository, settings), silk_icon("chart_line"), "Chart")
-        self.tabs.addTab(ReportsPage(report_service, settings), silk_icon("report"), "Reports")
+        self.tabs.addTab(
+            ReportsPage(
+                report_service,
+                settings,
+                archive_catalog=archive_catalog,
+            ),
+            silk_icon("report"),
+            "Reports",
+        )
         self.tabs.addTab(AlarmPage(repository, alarm_service, settings), silk_icon("lock"), "Alarm")
         self.tabs.addTab(LogsPage(log_path), silk_icon("page_white_text"), "Logs")
 
