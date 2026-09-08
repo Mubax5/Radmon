@@ -1,8 +1,11 @@
 from datetime import datetime
+from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from radmon.lan import LanAggregator, LanCheckpointStore, LanSource, MariaCentralStore
+from radmon.lan_runtime import LanRuntime
 from radmon.security import SecurityStore
 
 
@@ -98,3 +101,81 @@ def test_same_serid_from_different_source_is_not_silently_merged(monkeypatch):
             "serid": 5201, "name": "IS-1", "location": "Gd.52", "warnlevel": 23,
             "alarmlevel": 25, "maxidlemin": 30, "unit": "µSv/h", "description": "prod",
         })
+
+
+class RuntimeArchiveStateStore:
+    def __init__(self):
+        self.rows = {}
+
+    def upsert_archive(self, **values):
+        item = dict(values)
+        item.setdefault("drain", {})
+        self.rows[item["quarter_id"]] = item
+        return item
+
+    def update_archive_state(self, quarter_id, state, **fields):
+        item = self.rows[quarter_id]
+        item["state"] = state
+        item.update({key: value for key, value in fields.items() if key != "increment_retry"})
+        return item
+
+
+class RuntimeCatalog:
+    def __init__(self):
+        self.store = RuntimeArchiveStateStore()
+
+    def get(self, quarter_id):
+        return self.store.rows.get(quarter_id)
+
+    def list_archives(self, limit=1000):
+        return list(self.store.rows.values())
+
+
+class RuntimeArchiveData:
+    def oldest_measurement_time(self):
+        return datetime(2026, 9, 30, 23, 59, 58)
+
+
+class RuntimeAudit:
+    def __init__(self):
+        self.actions = []
+
+    def record(self, action, identity, target_type=None, target_id=None, **kwargs):
+        self.actions.append(action)
+
+
+class RuntimeArchiveService:
+    def __init__(self):
+        self.catalog = RuntimeCatalog()
+        self.store = RuntimeArchiveData()
+        self.calls = []
+
+    def run_rollover(self, quarter, *, drain_info, active_quarter=None):
+        self.calls.append((quarter.quarter_id, drain_info))
+        return {"state": "COMPLETE"}
+
+
+class OfflineDrainAggregator:
+    def drain_source_until(self, source, cutoff):
+        raise RuntimeError("offline")
+
+
+def test_archive_check_keeps_previous_quarter_pending_when_source_is_offline(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    audit = RuntimeAudit()
+    services = SimpleNamespace(
+        security=security,
+        alarm_mirror=None,
+        audit=audit,
+        sources={"gd52": LanSource("gd52", "db", 3306, "u", "p", "ipradmon")},
+    )
+    archive_service = RuntimeArchiveService()
+    runtime = LanRuntime(object(), services, archive_service=archive_service)
+    runtime._aggregator = lambda: OfflineDrainAggregator()
+    result = runtime.run_archive_check_once(
+        datetime(2026, 10, 1, 0, 1, tzinfo=ZoneInfo("Asia/Jakarta"))
+    )
+    assert result == "PENDING_DRAIN"
+    assert archive_service.catalog.get("2026-Q3")["state"] == "PENDING_DRAIN"
+    assert archive_service.calls == []
+    assert "ARCHIVE_DRAIN_PENDING" in audit.actions
