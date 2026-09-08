@@ -4,6 +4,8 @@ import argparse
 import os
 import uvicorn
 
+from radmon.archive import ArchiveCatalog, QuarterArchiveService
+from radmon.archive_store import CentralArchiveStore
 from radmon.central_api import CentralMariaDBRepository, create_central_app
 from radmon.config import Settings
 from radmon.lan_runtime import LanRuntime
@@ -32,6 +34,22 @@ def main() -> int:
     MariaDBRepository(settings).require_schema()
 
     services = build_secure_services(settings)
+    archive_catalog = ArchiveCatalog(
+        services.security,
+        settings.archive_dir,
+        timezone_name=settings.archive_timezone,
+    )
+    archive_catalog.reconcile()
+    archive_service = None
+    if settings.archive_enabled:
+        archive_service = QuarterArchiveService(
+            CentralArchiveStore(settings),
+            archive_catalog,
+            services.audit,
+            settings.archive_dir,
+            timezone_name=settings.archive_timezone,
+        )
+
     app = create_central_app(CentralMariaDBRepository(settings), settings)
     attach_secure_routes(
         app,
@@ -41,6 +59,8 @@ def main() -> int:
         alarm_control=services.alarm_control,
         device_admin=services.device_admin,
         cookie_secure=_enabled("RADMON_WEB_COOKIE_SECURE"),
+        archive_catalog=archive_catalog,
+        archive_service=archive_service,
     )
 
     whatsapp = None
@@ -52,7 +72,12 @@ def main() -> int:
 
     lan_runtime = None
     if _enabled("RADMON_LAN_ENABLED"):
-        lan_runtime = LanRuntime(settings, services, whatsapp_dispatcher=whatsapp)
+        lan_runtime = LanRuntime(
+            settings,
+            services,
+            whatsapp_dispatcher=whatsapp,
+            archive_service=archive_service,
+        )
         lan_runtime.start()
 
     try:
