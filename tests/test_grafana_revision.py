@@ -35,6 +35,21 @@ def test_every_dashboard_has_date_organization_and_wib_update_header():
         assert update_panel["gridPos"] == {"x": 18, "y": 2, "w": 6, "h": 2}
         assert date_panel["options"]["text"]["valueSize"] < 18
         assert update_panel["options"]["text"]["valueSize"] < 18
+
+        # Header date/time must be numeric Grafana values. String-only Stat queries
+        # render as "No data" on the deployed Grafana version.
+        for panel in (date_panel, update_panel):
+            sql = panel["targets"][0]["rawSql"]
+            assert "UNIX_TIMESTAMP() * 1000" in sql
+            assert "DATE_FORMAT" not in sql
+            assert "CONCAT" not in sql
+            assert panel["options"]["reduceOptions"]["calcs"] == ["lastNotNull"]
+            assert panel["options"]["reduceOptions"]["values"] is False
+
+        assert date_panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY"
+        assert update_panel["fieldConfig"]["defaults"]["unit"] == "time:HH:mm:ss [WIB]"
+        assert dashboard["timezone"] == "browser"
+
         max_bottom = max(
             panel["gridPos"]["y"] + panel["gridPos"]["h"]
             for panel in dashboard["panels"]
