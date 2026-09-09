@@ -27,7 +27,7 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
   )
 )
-".venv\Scripts\python.exe" -c "import PySide6, pyqtgraph, mariadb, fastapi, uvicorn, reportlab, serial, httpx, dotenv, selenium" >nul 2>&1
+".venv\Scripts\python.exe" -c "import PySide6, pyqtgraph, mariadb, fastapi, uvicorn, reportlab, serial, httpx, dotenv, selenium, tzdata" >nul 2>&1
 if errorlevel 1 (
   echo Menyiapkan dependency Radiation Monitoring. Proses first run dapat memerlukan beberapa menit...
   ".venv\Scripts\python.exe" -m pip install -r requirements.txt
