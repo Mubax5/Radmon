@@ -189,7 +189,12 @@ def create_central_app(repository: CentralRepositoryProtocol, settings: Settings
 
     @app.get("/health")
     def health():
-        return {"status": "ok" if repository.ping() else "error"}
+        return {
+            "service": "radmon-central",
+            "status": "ok" if repository.ping() else "error",
+            "lan_enabled": bool(getattr(app.state, "radmon_lan_enabled", False)),
+            "lan_source_count": int(getattr(app.state, "radmon_lan_source_count", 0)),
+        }
 
     @app.post("/api/v1/measurements/batch", dependencies=[Depends(require_token)])
     def ingest(batch: IngestBatch):
