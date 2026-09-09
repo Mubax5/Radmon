@@ -87,6 +87,7 @@ def main() -> int:
             alarm_control=secure.alarm_control,
             device_admin=secure.device_admin,
             user_admin=secure.user_admin,
+            source_health=secure.source_health,
         )
     )
 
