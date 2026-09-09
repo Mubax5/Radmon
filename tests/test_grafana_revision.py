@@ -12,7 +12,7 @@ def test_measurement_time_stat_uses_numeric_epoch_for_grafana_datetime():
         sql = panel["targets"][0]["rawSql"]
         assert "UNIX_TIMESTAMP(MAX(m.dtom)) * 1000" in sql
         assert "DATE_FORMAT" not in sql
-        assert panel["fieldConfig"]["defaults"]["unit"] == "dateTimeAsLocal"
+        assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
 
 
 def test_every_dashboard_has_date_organization_and_wib_update_header():
