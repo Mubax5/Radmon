@@ -1,6 +1,6 @@
 # Radiation Monitoring
 
-Aplikasi operator Python, central LAN PC3, alarm control, Reports, dan monitoring Grafana untuk data `ipradmon`.
+RadMon adalah aplikasi operator Python, central LAN PC3, alarm control, Reports, archive, dan monitoring Grafana untuk database legacy `ipradmon`.
 
 ## Menjalankan sistem
 
@@ -16,7 +16,7 @@ Demo seluruh station/detector:
 RUN_DUMMY.bat
 ```
 
-Demo fleet tetap mencakup station `5202 / IS-1 Koridor` bersama katalog detector canonical dan menulis sampel tiap **2 detik**.
+Demo tetap mencakup `5202 / IS-1 Koridor` dan menulis sampel tiap **2 detik**.
 
 Central LAN pada PC3:
 
@@ -24,75 +24,96 @@ Central LAN pada PC3:
 RUN_LAN.bat
 ```
 
-PC3 central RadMon adalah `192.168.1.2`. `RUN_LAN.bat` menyiapkan dependency/Grafana, memastikan `central_server.py` berjalan, lalu membuka Admin dalam mode LAN. **`central_server.py` adalah satu-satunya owner background collector LAN**; desktop Admin tidak menjalankan collector kedua.
+PC3 central adalah `192.168.1.2`. `central_server.py` adalah satu-satunya owner background collector LAN; desktop Admin tidak menjalankan collector kedua.
 
-Acquisition, LAN pull, Admin, dan Grafana menargetkan refresh **2 detik**.
+## Database production
 
-## Database
-
-Database radiation memakai schema legacy `ipradmon`:
+Nama database tetap **`ipradmon`** dan runtime mengikuti schema production aktual:
 
 ```text
 device
 measurement
 recent
+vrecent
 alarm
 applog
 news
 rawdata
 ```
 
-Tidak ada perubahan schema yang diwajibkan pada database production. `measurement` tetap menjadi sumber realtime/history utama dan `recent` tetap cache/aggregate legacy untuk data aktif.
+Peran datanya:
 
-`measurement.doserate` ditampilkan sebagai **µSv/h**. Nilai `measurement.dose` yang berasal dari production/import disimpan, diarsipkan, dan dilaporkan apa adanya; collector/archive tidak menghitung ulang historical dose.
+- `measurement` = storage/history. Dipakai untuk trend, Chart, Reports, export, dan archive.
+- `recent` = snapshot/aggregate operasional satu row per detector. Field seperti `doserate`, `dose`, `lastrate`, `minrate`, `maxrate`, `avgrate`, `lastdose`, `avgdose`, `lastmea`, `lastmeasec`, dan `meacount` tetap dipakai.
+- `vrecent` = view `device LEFT JOIN recent` dan menjadi **sumber authoritative untuk monitoring realtime**.
+- `alarm` = schema legacy production `serid + dtoa` dengan `lvl`, `mvalue`, `thvalue`, `nhit`, `ack`, `pic`, `note`, `i_op`, dan `i_flag`.
+- `applog` memakai `ts, id, msg`; `news` memakai `ts, code, content`; `rawdata` memakai `serid, dtom, val`.
 
-## Central LAN / PC3
+Tidak ada perubahan schema yang diwajibkan pada tiga database source production.
 
-PC3 membaca **langsung** dari tiga primary production database yang diisi melalui `.env`. Jangan menurunkan alamat database production dari diagram/topologi lama, PC1, atau PC2.
+## Central LAN PC `.2`
 
-Contoh deployment netral:
+Tiga source production yang sudah diverifikasi dari PC `.2`:
+
+```text
+server50 -> 192.168.1.50:3306 / ipradmon
+server52 -> 192.168.1.52:3306 / ipradmon
+server38 -> 192.168.1.38:3306 / ipradmon
+```
+
+Contoh `.env` pada PC `.2`:
 
 ```env
 RADMON_CENTRAL_HOST=192.168.1.2
-RADMON_LAN_SOURCES=source-a@IP-A;source-b@IP-B;source-c@IP-C
+RADMON_DB_HOST=localhost
+RADMON_DB_NAME=ipradmon
+
+RADMON_LAN_ENABLED=1
+RADMON_LAN_SOURCES=server50@192.168.1.50;server52@192.168.1.52;server38@192.168.1.38
 RADMON_LAN_DB_PORT=3306
 RADMON_LAN_DB_USER=isi-di-env-lokal
 RADMON_LAN_DB_PASSWORD=isi-di-env-lokal
 RADMON_LAN_DB_NAME=ipradmon
 RADMON_LAN_BATCH_SIZE=1000
 RADMON_LAN_POLL_INTERVAL=2
+RADMON_LAN_OFFLINE_AFTER_FAILURES=3
 ```
 
-Credential production **tidak disimpan di Git**.
+Credential production **tidak disimpan di Git**. Gunakan akun database khusus dengan privilege minimum setelah commissioning; jangan commit password/PIN/token.
 
-### SERID production adalah authoritative
+### Alur pengambilan data
 
-Dalam LAN-central mode, identity detector berasal dari `device.serid` pada database production. Static/catalog SERID di repository tidak di-seed ke central sebelum discovery LAN dan tidak boleh mengganti **SERID production**.
-
-Checkpoint tetap disimpan per:
+Setiap source dipoll independen dengan cadence default **2 detik**. Urutan setiap cycle sengaja memprioritaskan monitoring:
 
 ```text
-source_id + production SERID
+1. SELECT vrecent
+   -> upsert central device + recent
+2. SELECT alarm baru setelah checkpoint
+   -> mirror central alarm + sidecar
+3. tarik satu batch measurement per detector
+   -> simpan central measurement sebagai history
 ```
 
-sehingga checkpoint bertahan lintas quarter. ACK juga selalu mengetahui remote SERID production asli.
+History catch-up dibatasi satu batch per detector per cycle. Jadi walaupun first sync sedang mengejar jutaan row `measurement`, pembacaan `vrecent` dan alarm tidak ditahan sampai seluruh history selesai.
 
-Jika SERID yang sama muncul dari source berbeda dengan metadata yang konflik, collector menolak silent merge. Shared SERID hanya boleh diizinkan eksplisit melalui `RADMON_SHARED_SERIDS` dan metadata station harus kompatibel.
+Jika satu server gagal, source lain tetap berjalan dan history central yang sudah tersimpan tidak dihapus.
+
+### SERID production authoritative
+
+Identity detector berasal dari `device.serid` production. Fallback catalog hanya dipakai ketika metadata DB tidak tersedia/dummy. Catalog fallback sudah mengikuti production, termasuk:
+
+```text
+3003  R. Sementasi
+5501  PSLAT
+```
+
+Checkpoint measurement tetap per `source_id + production SERID`, dan alarm checkpoint per source memakai `(dtoa, serid)`.
 
 ### Production read-only kecuali ACK
 
-Normal collector hanya membaca:
+Collector normal hanya membaca `vrecent`, `measurement`, `alarm`, dan metadata yang dibutuhkan. Source database tidak di-DELETE/TRUNCATE/DDL oleh collector.
 
-```text
-device
-measurement
-alarm
-INFORMATION_SCHEMA
-```
-
-Quarter archive, Reports, central purge, user management, dan maintenance archive **tidak pernah melakukan DELETE/TRUNCATE/DDL terhadap production DB**.
-
-Satu-satunya production write adalah ACK/Response legacy yang sudah disetujui:
+Satu-satunya write ke source adalah ACK/Response eksplisit:
 
 ```sql
 UPDATE alarm
@@ -100,65 +121,108 @@ SET ack = 1, i_op = ?, pic = ?, note = ?
 WHERE serid = ? AND dtoa = ? AND i_op IS NULL
 ```
 
-## Quarterly central archive
+## Pemantauan koneksi tiga server
 
-Active central MariaDB dirancang menyimpan **quarter kalender yang sedang berjalan**. Historical quarter dipindahkan menjadi archive terverifikasi supaya Grafana/realtime tetap ringan tetapi data regulatori tetap tersedia.
+RadMon menyimpan status koneksi source di `runtime/radmon-security.db`, bukan menambah tabel ke production `ipradmon`.
 
-Timezone quarter default:
-
-```text
-Asia/Jakarta (WIB)
-```
-
-Boundary menggunakan interval half-open `[start, next-quarter-start)`:
+Status:
 
 ```text
-Q1  1 Jan 00:00 -> 1 Apr 00:00
-Q2  1 Apr 00:00 -> 1 Jul 00:00
-Q3  1 Jul 00:00 -> 1 Oct 00:00
-Q4  1 Oct 00:00 -> 1 Jan tahun berikutnya
+CONNECTED
+DEGRADED
+OFFLINE
+RECOVERED
 ```
 
-### Safe rollover
+Metadata health mencakup host, last success/failure, last live poll, last alarm poll, last history import, error terakhir, dan consecutive failures. Default setelah 3 poll gagal berturut-turut source menjadi `OFFLINE`.
 
-Urutan otomatis pada PC3:
+Perubahan status muncul di panel **Message** pada Recent, dicatat ke audit/applog, dan tersedia melalui:
+
+```text
+GET /api/v1/control/sources/health
+```
+
+Contoh notifikasi:
+
+```text
+[SERVER DEGRADED] server52 / 192.168.1.52 - connection error
+[SERVER OFFLINE] server52 / 192.168.1.52 - connection error
+[SERVER RECOVERED] server52 / 192.168.1.52
+```
+
+## Alarm ACK / Response
+
+Alarm production diidentifikasi dengan:
+
+```text
+remote SERID + dtoa
+```
+
+Polling alarm berjalan setiap cycle LAN (default **2 detik**) dan incremental memakai checkpoint, bukan membaca seluruh history terus-menerus. Initial mirror alarm lama ditandai sebagai historical seed agar WhatsApp baru tidak mengirim ulang backlog lama.
+
+Operator/Administrator dapat mengisi:
+
+```text
+Action
+PIC
+Note
+PIN
+```
+
+ACK ditulis ke source lebih dulu. Central baru menandai acknowledged setelah source menerima update. Tidak ada perintah fisik buzzer/relay pada revisi ini.
+
+## Admin realtime
+
+Tab operator:
+
+```text
+Recent | Tabular | Chart | Reports | Alarm | Logs
+```
+
+`Recent` sekarang membaca **satu query `vrecent`** untuk seluruh station. Tidak lagi menjalankan query latest + history 10 menit per detector hanya untuk membangun current overview. `avgrate` dan stored `dose` memakai nilai aggregate dari `recent/vrecent`.
+
+Area Message pada Recent menampilkan source-health warning dan active alarm.
+
+## Grafana Monitoring TV
+
+Tombol **Monitoring** membuka Playlist:
+
+```text
+Realtime -> Trends -> Operations
+```
+
+Operations memiliki 5 variant, masing-masing 3 detector. Total generator menghasilkan 7 dashboard payload, Playlist 15 item, interval **10 detik**, dan dashboard refresh **2 detik**.
+
+Realtime/current/status membaca `vrecent`, termasuk dose rate, waktu terbaru, current highest/average, online/offline, dan kondisi Operations. Contoh waktu realtime:
+
+```sql
+SELECT UNIX_TIMESTAMP(dtom) * 1000
+FROM vrecent
+WHERE serid = ...
+```
+
+Grafana memformat numeric epoch sebagai datetime sehingga panel waktu tidak kembali menjadi `No data` karena string `DATE_FORMAT(...)`.
+
+Sparkline dan trend 3 jam tetap membaca `measurement` karena membutuhkan time series historical. Alarm Terbaru membaca field legacy `dtoa/lvl/mvalue/thvalue/nhit/i_op/pic/note`.
+
+## Reports dan archive quarterly
+
+Active central MariaDB menyimpan data operasional aktif; quarter lama dapat dipindah menjadi archive terverifikasi agar realtime tetap ringan. Timezone default `Asia/Jakarta` (WIB).
+
+Safe lifecycle:
 
 ```text
 PENDING_DRAIN
-  -> EXPORTING
-  -> VERIFYING
-  -> SEALED
-  -> PURGING
-  -> COMPLETE
+-> EXPORTING
+-> VERIFYING
+-> SEALED
+-> PURGING
+-> COMPLETE
 ```
 
-Sebelum quarter lama dihapus dari central, PC3 terlebih dahulu memastikan backlog source lama sudah di-drain sampai cutoff. Jika satu production source offline dan completeness belum bisa dibuktikan, quarter tetap `PENDING_DRAIN`; central **tidak purge** data lama.
+Sebelum purge central, backlog source sampai cutoff harus selesai, archive diverifikasi dengan row count/checksum SHA-256, lalu baru data quarter lama dihapus dari **central**. Production source tidak pernah dipurge oleh archive service.
 
-Setelah drain selesai, archive diekspor lalu **verified** memakai row count dan SHA-256. Purge central hanya boleh berjalan setelah verification sukses. Export/checksum failure mempertahankan data quarter lama di central agar dapat di-retry.
-
-Purge hanya menyentuh row quarter lama pada central:
-
-```text
-measurement
-alarm
-rawdata
-applog
-news
-```
-
-`device`, LAN checkpoint, source mapping, users, password/PIN hash, session/security sidecar, dan structured audit tidak ikut dihapus. Setelah purge, `recent` dibangun ulang dari measurement quarter aktif.
-
-### Isi paket archive
-
-Default:
-
-```text
-archives/
-  2026/
-    radmon-2026-Q3.zip
-```
-
-Isi ZIP:
+Isi ZIP antara lain:
 
 ```text
 manifest.json
@@ -169,20 +233,10 @@ alarm.csv
 rawdata.csv
 applog.csv
 news.csv
-radmon-2026-Q3.sql
+radmon-YYYY-QN.sql
 ```
 
-`manifest.json` menyimpan format version, quarter start/end, station/source inventory, source drain watermark, row count, checksum SHA-256 tiap payload, dan waktu pembuatan. ZIP final juga mempunyai SHA-256 pada archive index sidecar.
-
-`monthly-recap.csv` berisi recap per bulan dan SERID: first/last measurement, sample count, min/average/max dose rate, exact `rate_sum`, sum stored `measurement.dose`, serta count ALERT/ALARM.
-
-SQL logical restore memakai explicit column list dan tidak membawa production credential, password/PIN user, session token, atau secret lain.
-
-### Retensi 5 tahun
-
-RadMon mempertahankan minimal **5 tahun** quarterly archive (hingga 20 complete quarter untuk rolling five-year window). Automatic destructive prune archive yang lebih lama **OFF secara default**; rollover active DB tidak otomatis menghapus file regulatori lama.
-
-Folder `archives/` di-ignore Git.
+Retensi minimum default **5 tahun**. Reports dapat membaca archive **tanpa restore** SQL dan tetap memakai workflow **Preview -> Print / Export PDF / Export CSV**.
 
 Konfigurasi:
 
@@ -194,110 +248,31 @@ RADMON_ARCHIVE_MIN_RETENTION_YEARS=5
 RADMON_ARCHIVE_CHECK_INTERVAL=60
 ```
 
-## Reports: active + archive tanpa restore
-
-Reports dapat membaca quarter archive **langsung dari ZIP tanpa restore SQL** ke MariaDB. Archive catalog merekonsiliasi manifest valid pada disk dengan security/operations sidecar saat central server start.
-
-Reports tetap menggunakan workflow preview-first:
-
-1. pilih `Active` atau quarter archive, atau isi `From` / `To`;
-2. klik **Preview**;
-3. cek report;
-4. **Print**, **Export PDF**, atau **Export CSV**.
-
-Archive selector menampilkan inventory seperti:
-
-```text
-2026 Q3 · July, August, September · Complete
-2026 Q2 · April, May, June · Complete
-```
-
-Untuk range lintas quarter, repository report menggabungkan archived ZIP dengan active MariaDB, mengurutkan timestamp, dan deduplicate identity detector/time. Summary menggabungkan accumulator agar average tetap benar. Preview tetap dibatasi untuk responsivitas, sedangkan summary menggunakan full-range aggregate/recap.
-
-Archive `DAMAGED` atau checksum invalid ditampilkan sebagai error; sistem tidak diam-diam mengganti missing historical data dengan active DB.
-
-Default output report operator tetap:
-
-```text
-!REPORT!
-```
-
 ## Authentication dan authorization
-
-Admin memakai multi-user authentication.
 
 Role:
 
-- **Administrator** — monitoring, ACK/Response, user management, edit station/threshold/Tag, archive retry/admin.
-- **Operator** — monitoring/report dan ACK/Response alarm.
+- **Administrator** — monitoring, ACK/Response, user management, edit station, archive admin.
+- **Operator** — monitoring/report dan ACK/Response.
 - **Viewer** — read-only.
 
-Login memakai username + password. Aksi sensitif meminta PIN user yang sedang login.
-
-Security store default:
+Login memakai username + password; aksi sensitif meminta PIN user. Security store default:
 
 ```text
 runtime/radmon-security.db
 ```
 
-Password dan PIN disimpan sebagai salted PBKDF2-SHA256 hash. Session web memakai opaque token server-side.
-
-Bootstrap unattended opsional:
-
-```env
-RADMON_BOOTSTRAP_ADMIN_USER=
-RADMON_BOOTSTRAP_ADMIN_PASSWORD=
-RADMON_BOOTSTRAP_ADMIN_PIN=
-```
-
-Hapus bootstrap secret dari environment setelah akun dibuat.
+Password/PIN disimpan sebagai salted PBKDF2-SHA256 hash. Session web menggunakan token opaque server-side.
 
 ## Audit
 
-Login/logout, ACK, mutating Admin action, dan archive lifecycle dicatat ke structured audit sidecar. Ringkasan human-readable juga masuk central `applog`.
+Login/logout, ACK, perubahan Admin, source-health transition, dan archive lifecycle masuk structured audit. Ringkasan human-readable juga ditulis ke central `applog` production schema.
 
-Contoh action:
-
-```text
-LOGIN_SUCCESS / LOGIN_FAILED / LOGOUT
-ALARM_ACK
-DEVICE_UPDATE / DEVICE_SERID_MIGRATE
-USER_CREATE / USER_ENABLE / USER_DISABLE
-ARCHIVE_DRAIN_PENDING
-ARCHIVE_EXPORT_START / ARCHIVE_EXPORT_SUCCESS / ARCHIVE_EXPORT_FAILED
-ARCHIVE_VERIFY_SUCCESS / ARCHIVE_VERIFY_FAILED
-ARCHIVE_PURGE_START / ARCHIVE_PURGE_SUCCESS / ARCHIVE_PURGE_FAILED
-ARCHIVE_COMPLETE / ARCHIVE_MANUAL_RETRY
-```
-
-Password, PIN, token, dan secret di-redact oleh audit layer.
-
-## Alarm ACK / Response
-
-Legacy alarm identity:
-
-```text
-remote SERID + dtoa
-```
-
-Field legacy mencakup `lvl`, `mvalue`, `thvalue`, `nhit`, `ack`, `i_op`, `pic`, dan `note`.
-
-Operator/Administrator dapat memilih ACK / Response, lalu mengisi Action, PIC, Note, dan PIN. ACK write-through dilakukan ke source lebih dulu; central baru menandai acknowledged setelah source menerima update.
-
-Action awal:
-
-```text
-Confirm to Location
-Checked / Condition Normal
-Follow-up Required
-Other
-```
-
-ACK ini tidak mengirim command fisik buzzer/relay detector. Area Active Alarm tetap menampilkan alarm aktif sampai ditangani.
+Secret seperti password, PIN, token, dan credential tidak dicatat ke audit.
 
 ## Secure control API
 
-`central_server.py` menyediakan API session terautentikasi di atas central service. Endpoint utama:
+Endpoint utama:
 
 ```text
 POST /auth/login
@@ -305,6 +280,7 @@ POST /auth/logout
 GET  /auth/me
 GET  /api/v1/control/alarms
 POST /api/v1/control/alarms/{source_id}/{serid}/ack
+GET  /api/v1/control/sources/health
 POST /api/v1/control/stations/{serid}
 GET/POST /api/v1/control/users
 GET  /api/v1/control/audit
@@ -313,57 +289,9 @@ GET  /api/v1/control/archives/{quarter_id}/recap
 POST /api/v1/control/archives/{quarter_id}/retry
 ```
 
-Archive inventory/recap dapat dibaca user authenticated. Manual archive retry Administrator-only + PIN dan diaudit.
-
-Untuk akses URL di luar trusted LAN, letakkan service di belakang HTTPS/TLS reverse proxy dan set:
-
-```env
-RADMON_WEB_COOKIE_SECURE=1
-```
-
-Jangan expose MariaDB atau Grafana admin port langsung ke Internet.
-
-## Admin desktop
-
-Tab operator tetap:
-
-```text
-Recent | Tabular | Chart | Reports | Alarm | Logs
-```
-
-Fitur termasuk login gate, identitas role, Active Alarm strip, ACK/Response + PIN, user management Administrator, edit station, logout, report archive selector, dan Silk icons.
-
-### Chart
-
-Visual:
-
-- **Trend** — dose rate, optional Approx. Dose, zoom/pan/crosshair dan threshold.
-- **Status Pie** — NORMAL / ALERT / ALARM.
-- **Threshold Progress** — current / average / peak dibanding alarm threshold.
-
-## Grafana Monitoring TV
-
-Tombol **Monitoring** membuka Playlist RadMon TV:
-
-```text
-Realtime -> Trends -> Operations
-```
-
-Operations memiliki 5 variant, masing-masing 3 detector. Total generator menghasilkan 7 dashboard payload (1 Realtime + 1 Trends + 5 Operations), Playlist 15 item, interval **10 detik**, dan dashboard refresh **2 detik**.
-
-Page 1 Realtime menampilkan 15 dose-rate card menggunakan latest `measurement`. Measurement time memakai numeric epoch milliseconds:
-
-```sql
-UNIX_TIMESTAMP(MAX(m.dtom)) * 1000
-```
-
-Grafana memformatnya sebagai `dateTimeAsLocal`, menghindari panel waktu `No data` akibat string `DATE_FORMAT(...)`.
-
-Page 2 menampilkan trend 3 jam/small multiples. Page 3 Operations menampilkan status detector, kondisi operasional, count NORMAL/ALERT/ALARM/OFFLINE, dan alarm terbaru.
+Jika nanti diakses di luar trusted LAN, letakkan service di belakang HTTPS/TLS reverse proxy dan aktifkan secure cookie. Jangan expose MariaDB/Grafana admin port langsung ke Internet.
 
 ## WhatsApp alarm
-
-Dispatcher WhatsApp membaca mirrored alarm central dan hanya menandai notification sent setelah sender berhasil.
 
 Disabled by default:
 
@@ -387,7 +315,7 @@ RADMON_CENTRAL_URL=http://IP-SERVER-PUSAT:8090
 RADMON_CENTRAL_TOKEN=ganti-token
 ```
 
-Ini terpisah dari direct LAN pull PC3.
+Ini terpisah dari direct LAN pull PC `.2`.
 
 ## Struktur utama repo
 
