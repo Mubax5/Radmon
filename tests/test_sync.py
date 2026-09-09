@@ -99,6 +99,20 @@ class CentralRepo:
     def latest(self, serid): return {"serid": serid, "dtom": "2026-09-07 10:00:00", "doserate": 0.123}
 
 
+def test_central_health_identifies_runtime_and_lan_owner_state():
+    app = create_central_app(CentralRepo(), Settings())
+    app.state.radmon_lan_enabled = True
+    app.state.radmon_lan_source_count = 3
+    response = TestClient(app).get("/health")
+    assert response.status_code == 200
+    assert response.json() == {
+        "service": "radmon-central",
+        "status": "ok",
+        "lan_enabled": True,
+        "lan_source_count": 3,
+    }
+
+
 def test_central_ingest_requires_token_and_is_idempotent():
     settings = Settings(central_token="secret")
     client = TestClient(create_central_app(CentralRepo(), settings))
