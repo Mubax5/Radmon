@@ -162,7 +162,8 @@ class MainWindow(QMainWindow):
 
         self.refresh_timer = QTimer(self)
         self.refresh_timer.timeout.connect(self.refresh_current_page)
-        self.refresh_timer.start(max(250, int(self.preferences.refresh_interval * 1000)))
+        self.refresh_timer.start(2000)
+        self.refresh_timer.setInterval(max(250, int(self.preferences.refresh_interval * 1000)))
 
         self._monitoring_poll_timer = QTimer(self)
         self._monitoring_poll_timer.setInterval(250)
