@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
@@ -10,7 +10,7 @@ from radmon.status import classify_status
 
 
 class RecentPage(QWidget):
-    """Legacy-compatible multi-station overview with an embedded Message panel."""
+    """Legacy-compatible multi-station live overview backed by ``vrecent``."""
 
     stationSelected = Signal(int)
 
@@ -62,26 +62,6 @@ class RecentPage(QWidget):
         layout.addWidget(self.message_table, 0)
         self.refresh_live()
 
-    def _stations(self):
-        try:
-            stations = list(self.repository.station_configs())
-        except Exception:
-            stations = [self.repository.station_config(self.settings.serid)]
-        if not stations:
-            stations = [self.repository.station_config(self.settings.serid)]
-        return stations
-
-    @staticmethod
-    def _history_metrics(rows) -> tuple[float | None, float | None]:
-        rates = [float(row["doserate"]) for row in rows if row.get("doserate") is not None]
-        average = (sum(rates) / len(rates)) if rates else None
-        stored_dose = None
-        for row in reversed(rows):
-            if row.get("dose") is not None:
-                stored_dose = float(row["dose"])
-                break
-        return average, stored_dose
-
     @staticmethod
     def _text_time(value) -> str:
         if hasattr(value, "strftime"):
@@ -104,44 +84,40 @@ class RecentPage(QWidget):
 
     def refresh_live(self) -> None:
         now = datetime.now()
-        stations = self._stations()
-        self.table.setRowCount(len(stations))
-        errors: list[str] = []
+        try:
+            rows = list(self.repository.live_rows())
+        except Exception as exc:
+            self.table.setRowCount(0)
+            self.last_error = f"Recent load error: {exc}"
+            return
 
-        for row_index, station in enumerate(stations):
+        self.table.setRowCount(len(rows))
+        errors: list[str] = []
+        for row_index, row in enumerate(rows):
             try:
-                reading = self.repository.latest_reading(station.serid)
-                measured_at = reading.measured_at
-                dose_rate = reading.dose_rate
+                serid = int(row["serid"])
+                measured_at = row.get("dtom")
+                dose_rate = float(row["doserate"]) if row.get("doserate") is not None else None
+                warnlevel = float(row.get("warnlevel") or 0)
+                alarmlevel = float(row.get("alarmlevel") or 0)
+                maxidlemin = int(row.get("maxidlemin") or 30)
+                average = float(row["avgrate"]) if row.get("avgrate") is not None else None
+                stored_dose = float(row["dose"]) if row.get("dose") is not None else None
                 status = classify_status(
                     dose_rate,
                     measured_at,
                     now,
-                    station.warnlevel,
-                    station.alarmlevel,
-                    station.maxidlemin,
+                    warnlevel,
+                    alarmlevel,
+                    maxidlemin,
                 )
-                try:
-                    history = self.repository.measurement_history(
-                        now - timedelta(minutes=10),
-                        now,
-                        serid=station.serid,
-                        limit=300,
-                    )
-                except Exception:
-                    history = []
-                average, stored_dose = self._history_metrics(history)
             except Exception as exc:
-                measured_at = None
-                dose_rate = None
-                average = None
-                stored_dose = None
-                status = None
-                errors.append(f"{station.serid}: {exc}")
+                errors.append(f"row {row_index}: {exc}")
+                continue
 
-            station_item = QTableWidgetItem(station.room)
-            station_item.setData(Qt.UserRole, station.serid)
-            if int(station.serid) == int(self.settings.serid):
+            station_item = QTableWidgetItem(str(row.get("name") or serid))
+            station_item.setData(Qt.UserRole, serid)
+            if serid == int(self.settings.serid):
                 font = QFont(station_item.font())
                 font.setBold(True)
                 station_item.setFont(font)
@@ -149,18 +125,18 @@ class RecentPage(QWidget):
             values = [
                 station_item,
                 QTableWidgetItem(self._text_time(measured_at)),
-                QTableWidgetItem("" if dose_rate is None else f"{float(dose_rate):.2f}"),
+                QTableWidgetItem("" if dose_rate is None else f"{dose_rate:.2f}"),
                 QTableWidgetItem("" if average is None else f"{average:.2f}"),
                 QTableWidgetItem("" if stored_dose is None else f"{stored_dose:.7f}"),
-                QTableWidgetItem(f"{station.warnlevel:g}"),
-                QTableWidgetItem(f"{station.alarmlevel:g}"),
-                QTableWidgetItem("●" if status is not None else "—"),
+                QTableWidgetItem(f"{warnlevel:g}"),
+                QTableWidgetItem(f"{alarmlevel:g}"),
+                QTableWidgetItem("●"),
             ]
             for column, item in enumerate(values):
                 self.table.setItem(row_index, column, item)
 
             alarm_item = self.table.item(row_index, 7)
-            if status is not None and alarm_item is not None:
+            if alarm_item is not None:
                 color = {
                     "NORMAL": QColor("#25c83a"),
                     "ALERT": QColor("#e6a700"),
