@@ -94,7 +94,7 @@ def test_page_one_keeps_dose_as_main_focus_with_separate_short_sparkline_and_sma
         sql = panel["targets"][0]["rawSql"]
         assert "UNIX_TIMESTAMP(MAX(m.dtom)) * 1000" in sql
         assert "DATE_FORMAT" not in sql
-        assert panel["fieldConfig"]["defaults"]["unit"] == "dateTimeAsLocal"
+        assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
 
 
 def test_page_two_uses_readable_building_small_multiples_and_has_no_operations_table():
