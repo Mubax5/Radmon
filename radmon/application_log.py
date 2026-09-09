@@ -22,8 +22,8 @@ class MariaApplicationLogWriter:
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "INSERT INTO applog (dtom, msg) VALUES (?, ?)",
-                    (at or datetime.now(), str(message)[:4000]),
+                    "INSERT INTO applog (ts, id, msg) VALUES (?, ?, ?)",
+                    (at or datetime.now(), 0, str(message)[:4000]),
                 )
             connection.commit()
         except Exception:
