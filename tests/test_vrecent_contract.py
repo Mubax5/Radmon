@@ -12,8 +12,8 @@ def test_production_station_ids_match_live_databases():
 
 
 def test_live_monitoring_sql_uses_vrecent_not_latest_measurement_scan():
-    repository = Path("radmon/repository.py").read_text(encoding="utf-8")
-    grafana = Path("radmon/grafana_tv.py").read_text(encoding="utf-8")
+    repository = Path("radmon/repository_revision.py").read_text(encoding="utf-8")
+    grafana = Path("radmon/grafana_revision.py").read_text(encoding="utf-8")
     recent_page = Path("radmon/admin/recent_page.py").read_text(encoding="utf-8")
 
     assert "FROM vrecent" in repository
@@ -22,7 +22,7 @@ def test_live_monitoring_sql_uses_vrecent_not_latest_measurement_scan():
 
 
 def test_production_schema_columns_are_the_runtime_contract():
-    repository = Path("radmon/repository.py").read_text(encoding="utf-8")
+    repository = Path("radmon/repository_revision.py").read_text(encoding="utf-8")
     assert '"vrecent"' in repository
     assert '"dtoa"' in repository
     assert '"lvl"' in repository
