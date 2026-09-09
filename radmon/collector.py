@@ -46,15 +46,28 @@ class SerialCollector:
             timeout=min(self.settings.serial_timeout, 2.0),
         )
 
-    def run_forever(self, stop_event: Any | None = None) -> None:
+    @staticmethod
+    def _sleep(stop_event: Any | None, seconds: float) -> None:
+        if stop_event is not None:
+            stop_event.wait(seconds)
+        else:
+            time.sleep(seconds)
+
+    def run_forever(self, stop_event: Any | None = None, pause_event: Any | None = None) -> None:
         stop = stop_event
         LOGGER.info("starting detector collector port=%s baud=%s station=%s", self.settings.serial_port, self.settings.baudrate, self.settings.station_label)
         while stop is None or not stop.is_set():
+            if pause_event is not None and pause_event.is_set():
+                self._sleep(stop, 0.2)
+                continue
+
             serial_port = None
             try:
                 serial_port = self._open_serial()
                 LOGGER.info("serial connected: %s", self.settings.serial_port)
-                while stop is None or not stop.is_set():
+                while (stop is None or not stop.is_set()) and not (
+                    pause_event is not None and pause_event.is_set()
+                ):
                     raw_bytes = serial_port.readline()
                     if not raw_bytes:
                         continue
@@ -69,10 +82,7 @@ class SerialCollector:
                 return
             except Exception as exc:
                 LOGGER.exception("collector connection/acquisition error: %s", exc)
-                if stop is not None:
-                    stop.wait(2.0)
-                else:
-                    time.sleep(2.0)
+                self._sleep(stop, 2.0)
             finally:
                 if serial_port is not None:
                     try:
