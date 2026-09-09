@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PySide6.QtCore import QDateTime
-from PySide6.QtPrintSupport import QPrintDialog, QPrinter
+from PySide6.QtPrintSupport import QPageSetupDialog, QPrintDialog, QPrintPreviewDialog, QPrinter
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from .period_dialog import PeriodSelectionDialog
 
 
 class ReportsPage(QWidget):
@@ -37,6 +39,7 @@ class ReportsPage(QWidget):
         self.archive_catalog = archive_catalog
         self.last_error: str | None = None
         self.preview_ready = False
+        self._printer = QPrinter(QPrinter.HighResolution)
 
         self.start = QDateTimeEdit(QDateTime.currentDateTime().addDays(-1))
         self.end = QDateTimeEdit(QDateTime.currentDateTime())
@@ -54,6 +57,8 @@ class ReportsPage(QWidget):
         self._populate_archives()
         self.archive_selector.currentIndexChanged.connect(self._archive_selection_changed)
 
+        period_button = QPushButton("Select period...")
+        period_button.clicked.connect(self.select_period)
         preview_button = QPushButton("Preview")
         preview_button.clicked.connect(self.build_preview)
         self.print_button = QPushButton("Print")
@@ -75,6 +80,7 @@ class ReportsPage(QWidget):
         controls.addWidget(QLabel("To"))
         controls.addWidget(self.end)
         controls.addWidget(self.live)
+        controls.addWidget(period_button)
         controls.addWidget(preview_button)
         controls.addWidget(self.print_button)
         controls.addWidget(self.pdf_button)
@@ -143,6 +149,20 @@ class ReportsPage(QWidget):
     def range(self):
         return self.start.dateTime().toPython(), self.end.dateTime().toPython()
 
+    def select_period(self) -> None:
+        start, end = self.range()
+        dialog = PeriodSelectionDialog(start, end, parent=self)
+        if not dialog.exec():
+            return
+        start, end, _grouping = dialog.selection()
+        self.live.setChecked(False)
+        self.archive_selector.setCurrentIndex(0)
+        self.start.setDateTime(QDateTime(start))
+        self.end.setDateTime(QDateTime(end))
+        self.preview_ready = False
+        self.print_button.setEnabled(False)
+        self.pdf_button.setEnabled(False)
+
     def _report_directory(self) -> Path:
         directory = Path(self.settings.report_dir).resolve()
         directory.mkdir(parents=True, exist_ok=True)
@@ -178,13 +198,24 @@ class ReportsPage(QWidget):
         if self.live.isChecked():
             self.end.setDateTime(QDateTime.currentDateTime())
 
+    def printer_setup(self) -> None:
+        QPageSetupDialog(self._printer, self).exec()
+
+    def print_preview(self) -> None:
+        if not self.preview_ready:
+            self.build_preview()
+        if not self.preview_ready:
+            return
+        dialog = QPrintPreviewDialog(self._printer, self)
+        dialog.paintRequested.connect(lambda printer: self.preview.document().print_(printer))
+        dialog.exec()
+
     def print_report(self) -> None:
         if not self.preview_ready:
             return
-        printer = QPrinter(QPrinter.HighResolution)
-        dialog = QPrintDialog(printer, self)
+        dialog = QPrintDialog(self._printer, self)
         if dialog.exec():
-            self.preview.document().print_(printer)
+            self.preview.document().print_(self._printer)
 
     def export_pdf(self) -> None:
         if not self.preview_ready:
@@ -205,3 +236,6 @@ class ReportsPage(QWidget):
             QMessageBox.information(self, "CSV exported", str(path))
         except Exception as exc:
             QMessageBox.critical(self, "Export error", str(exc))
+
+    def save_as(self) -> None:
+        self.export_pdf()
