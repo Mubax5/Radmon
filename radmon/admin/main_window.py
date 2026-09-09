@@ -148,6 +148,13 @@ class MainWindow(QMainWindow):
         self._build_menus()
         self._build_toolbar()
 
+        # Station selection can refresh the current page while the sidebar is
+        # still being constructed.  The monitoring poll timer therefore must
+        # exist before _build_station_sidebar() triggers that first refresh.
+        self._monitoring_poll_timer = QTimer(self)
+        self._monitoring_poll_timer.setInterval(250)
+        self._monitoring_poll_timer.timeout.connect(self._open_monitoring_if_ready)
+
         sidebar = self._build_station_sidebar()
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(sidebar)
@@ -164,10 +171,6 @@ class MainWindow(QMainWindow):
         self.refresh_timer.timeout.connect(self.refresh_current_page)
         self.refresh_timer.start(2000)
         self.refresh_timer.setInterval(max(250, int(self.preferences.refresh_interval * 1000)))
-
-        self._monitoring_poll_timer = QTimer(self)
-        self._monitoring_poll_timer.setInterval(250)
-        self._monitoring_poll_timer.timeout.connect(self._open_monitoring_if_ready)
 
         self._start_grafana_bootstrap()
         self.refresh_current_page()
