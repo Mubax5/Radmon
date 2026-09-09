@@ -55,14 +55,32 @@ if errorlevel 1 echo [RadMon] Grafana belum berhasil start; Admin akan menampilk
 exit /b 0
 
 :central
-".venv\Scripts\python.exe" -c "import socket; s=socket.socket(); s.settimeout(.5); r=s.connect_ex(('127.0.0.1',8090)); s.close(); raise SystemExit(0 if r == 0 else 1)" >nul 2>&1
+call :central_ready
 if not errorlevel 1 exit /b 0
+call :port_open
+if not errorlevel 1 (
+  echo [RadMon] Port 8090 sudah dipakai, tetapi bukan central LAN RadMon yang sehat dan aktif.
+  echo [RadMon] Tutup proses lama/konflik pada port 8090 lalu jalankan RUN_LAN.bat lagi.
+  pause
+  exit /b 1
+)
 echo [RadMon] Menjalankan central collector/API tunggal di port 8090...
 start "RadMon Central" "%~dp0.venv\Scripts\python.exe" "%~dp0central_server.py" --host 0.0.0.0 --port 8090
 for /L %%I in (1,1,30) do (
-  ".venv\Scripts\python.exe" -c "import socket; s=socket.socket(); s.settimeout(.5); r=s.connect_ex(('127.0.0.1',8090)); s.close(); raise SystemExit(0 if r == 0 else 1)" >nul 2>&1 && exit /b 0
+  call :central_ready
+  if not errorlevel 1 exit /b 0
   timeout /t 1 /nobreak >nul
 )
-echo [RadMon] Central server belum siap di port 8090.
+echo [RadMon] Central server belum siap sebagai owner LAN di port 8090.
 pause
 exit /b 1
+
+:central_ready
+".venv\Scripts\python.exe" -c "import json, urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=1.0)); raise SystemExit(0 if d.get('service') == 'radmon-central' and d.get('status') == 'ok' and d.get('lan_enabled') is True else 1)" >nul 2>&1
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:port_open
+".venv\Scripts\python.exe" -c "import socket; s=socket.socket(); s.settimeout(.5); r=s.connect_ex(('127.0.0.1',8090)); s.close(); raise SystemExit(0 if r == 0 else 1)" >nul 2>&1
+if errorlevel 1 exit /b 1
+exit /b 0
