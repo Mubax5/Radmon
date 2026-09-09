@@ -28,7 +28,7 @@ class DeviceAdminService:
 
     @staticmethod
     def _validate(changes: dict[str, Any]) -> None:
-        unknown = set(changes) - _ALLOWED_FIELDS
+        unknown = set(changes) - _ALLOWED_FIELDS - {"serid"}
         if unknown:
             raise ValueError("field station tidak diizinkan: " + ", ".join(sorted(unknown)))
         warn = float(changes.get("warnlevel") or 0)
