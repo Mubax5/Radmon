@@ -128,6 +128,7 @@ def main() -> int:
         log_path,
         source=args.source,
         archive_catalog=archive_catalog,
+        runtime=runtime,
     )
     install_window_security(window)
 
