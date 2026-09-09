@@ -65,14 +65,30 @@ class LanRuntime:
         while not self.stop_event.is_set():
             result = aggregator.run_source_once(source)
             if result.error:
-                LOGGER.warning("LAN source=%s error=%s", source.source_id, result.error)
-            elif result.inserted_measurements or result.mirrored_alarms:
-                LOGGER.info(
-                    "LAN source=%s measurements=%s alarms=%s",
+                state = self.services.source_health.record_failure(source, result.error)
+                LOGGER.warning(
+                    "LAN source=%s host=%s state=%s error=%s",
                     source.source_id,
-                    result.inserted_measurements,
-                    result.mirrored_alarms,
+                    source.host,
+                    state["state"],
+                    result.error,
                 )
+            else:
+                state = self.services.source_health.record_success(
+                    source,
+                    live=True,
+                    alarm=True,
+                    history=True,
+                )
+                if result.inserted_measurements or result.mirrored_alarms or state.get("transition_message"):
+                    LOGGER.info(
+                        "LAN source=%s host=%s state=%s measurements=%s alarms=%s",
+                        source.source_id,
+                        source.host,
+                        state["state"],
+                        result.inserted_measurements,
+                        result.mirrored_alarms,
+                    )
             self.stop_event.wait(self.interval)
 
     def _run_whatsapp(self) -> None:
@@ -207,7 +223,7 @@ class LanRuntime:
             self._thread("radmon-whatsapp", self._run_whatsapp)
         if self.archive_service is not None:
             self._thread("radmon-quarter-archive", self._run_archive_lifecycle)
-        LOGGER.info("LAN runtime started sources=%s", len(self.services.sources))
+        LOGGER.info("LAN runtime started sources=%s interval=%ss", len(self.services.sources), self.interval)
 
     def stop(self) -> None:
         self.stop_event.set()
