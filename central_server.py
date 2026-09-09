@@ -50,7 +50,10 @@ def main() -> int:
             timezone_name=settings.archive_timezone,
         )
 
+    lan_enabled = _enabled("RADMON_LAN_ENABLED")
     app = create_central_app(CentralMariaDBRepository(settings), settings)
+    app.state.radmon_lan_enabled = lan_enabled
+    app.state.radmon_lan_source_count = len(services.sources) if lan_enabled else 0
     attach_secure_routes(
         app,
         security=services.security,
@@ -72,7 +75,7 @@ def main() -> int:
         )
 
     lan_runtime = None
-    if _enabled("RADMON_LAN_ENABLED"):
+    if lan_enabled:
         lan_runtime = LanRuntime(
             settings,
             services,
