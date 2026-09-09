@@ -225,7 +225,7 @@ def test_realtime_measurement_time_uses_numeric_epoch_for_grafana_datetime():
         sql = panel["targets"][0]["rawSql"]
         assert "UNIX_TIMESTAMP(MAX(m.dtom)) * 1000" in sql
         assert "DATE_FORMAT" not in sql
-        assert panel["fieldConfig"]["defaults"]["unit"] == "dateTimeAsLocal"
+        assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
         assert panel["options"]["text"]["valueSize"] <= 12
 
 
