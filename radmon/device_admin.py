@@ -26,6 +26,41 @@ class DeviceAdminService:
         self.repository = repository
         self.audit = audit
 
+    @staticmethod
+    def _validate(changes: dict[str, Any]) -> None:
+        unknown = set(changes) - _ALLOWED_FIELDS
+        if unknown:
+            raise ValueError("field station tidak diizinkan: " + ", ".join(sorted(unknown)))
+        warn = float(changes.get("warnlevel") or 0)
+        alarm = float(changes.get("alarmlevel") or 0)
+        if warn < 0 or alarm < 0 or (alarm > 0 and warn > alarm):
+            raise ValueError("threshold tidak valid: Alert harus <= Alarm")
+        if int(changes.get("maxidlemin") or 0) < 1:
+            raise ValueError("max idle minimal 1 menit")
+
+    def create_station(
+        self,
+        identity: UserIdentity,
+        pin: str,
+        serid: int,
+        values: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.security.require_sensitive(identity, "edit_station", pin)
+        if int(serid) <= 0:
+            raise ValueError("Tag/SERID tidak valid")
+        self._validate(values)
+        target = f"station:{int(serid)}"
+        try:
+            after = self.repository.create_device(int(serid), values)
+        except Exception as exc:
+            self.audit.record(
+                "DEVICE_CREATE", identity, "station", target,
+                after=values, success=False, reason=str(exc)
+            )
+            raise
+        self.audit.record("DEVICE_CREATE", identity, "station", target, after=after)
+        return after
+
     def update_station(
         self,
         identity: UserIdentity,
@@ -34,20 +69,12 @@ class DeviceAdminService:
         changes: dict[str, Any],
     ) -> dict[str, Any]:
         self.security.require_sensitive(identity, "edit_station", pin)
-        unknown = set(changes) - _ALLOWED_FIELDS
-        if unknown:
-            raise ValueError("field station tidak diizinkan: " + ", ".join(sorted(unknown)))
         before = self.repository.get_device(int(serid))
         if not before:
             raise ValueError("station tidak ditemukan")
         merged = dict(before)
         merged.update(changes)
-        warn = float(merged.get("warnlevel") or 0)
-        alarm = float(merged.get("alarmlevel") or 0)
-        if warn < 0 or alarm < 0 or (alarm > 0 and warn > alarm):
-            raise ValueError("threshold tidak valid: Alert harus <= Alarm")
-        if int(merged.get("maxidlemin") or 0) < 1:
-            raise ValueError("max idle minimal 1 menit")
+        self._validate(merged)
         target = f"station:{serid}"
         try:
             after = self.repository.update_device(int(serid), changes)
@@ -126,6 +153,49 @@ FROM device WHERE serid = ?
             return dict(row) if isinstance(row, dict) else dict(zip(keys, row))
         finally:
             connection.close()
+
+    def create_device(self, serid: int, values: dict[str, Any]) -> dict[str, Any]:
+        fields = dict(values)
+        unknown = set(fields) - _ALLOWED_FIELDS
+        if unknown:
+            raise ValueError("field station tidak diizinkan: " + ", ".join(sorted(unknown)))
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM device WHERE serid = ?", (int(serid),))
+                if cursor.fetchone() is not None:
+                    raise ValueError("Tag/SERID sudah digunakan")
+                cursor.execute(
+                    """
+INSERT INTO device
+  (serid, name, location, description, warnlevel, alarmlevel, maxidlemin, unit,
+   audiopath, hwaddress, hwtype)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""",
+                    (
+                        int(serid),
+                        fields.get("name") or f"Station {int(serid)}",
+                        fields.get("location") or "",
+                        fields.get("description") or "",
+                        float(fields.get("warnlevel") or 0),
+                        float(fields.get("alarmlevel") or 0),
+                        int(fields.get("maxidlemin") or 30),
+                        fields.get("unit") or "µSv/h",
+                        fields.get("audiopath") or "",
+                        fields.get("hwaddress") or "",
+                        fields.get("hwtype") or "detector",
+                    ),
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        current = self.get_device(serid)
+        if current is None:
+            raise RuntimeError("station tidak ditemukan setelah create")
+        return current
 
     def update_device(self, serid: int, changes: dict[str, Any]) -> dict[str, Any]:
         if not changes:
