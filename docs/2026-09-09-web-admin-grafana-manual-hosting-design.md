@@ -168,17 +168,18 @@ This keeps deployment on a Windows PC simple and allows the FastAPI server to ow
 
 The UI code and API remain logically separated so the desktop fallback and web UI both call the same service layer rather than duplicating business rules.
 
-## 8. Suggested hosted routes
+## 8. Hosted routes
 
-The public reverse proxy exposes one origin. The application may internally use routes such as:
+The public reverse proxy exposes one origin. The application uses routes along these lines:
 
 ```text
 GET  /                       redirect to /login or /app
 GET  /login                  fullscreen login page
 GET  /app                    protected fullscreen web Admin
-GET  /manual/installation    protected or deployment-appropriate manual HTML
-GET  /manual/user            protected or deployment-appropriate manual HTML
+GET  /manual/installation    authenticated installation manual HTML
+GET  /manual/user            authenticated user manual HTML
 GET  /monitoring/...         authenticated Grafana proxy path
+GET  /auth/proxy-check       reverse-proxy session authorization check
 
 POST /auth/login
 POST /auth/logout
@@ -187,6 +188,8 @@ GET  /auth/me
 GET  /api/v1/control/...
 POST /api/v1/control/...
 ```
+
+Both hosted manual routes require a valid RadMon session because the manuals may contain deployment and operational information. Desktop Help may still open the same HTML files locally on PC3 without going through HTTP.
 
 Existing secure API endpoints remain the starting point. Additional read endpoints are added only where the web UI needs data that currently exists only through desktop repositories, for example recent measurements, station detail, tabular history, report data, and logs.
 
@@ -216,9 +219,15 @@ Total operational detector coverage is exactly 15 rows across the three variants
 
 Operations pages must use the detector identity represented in the central `device` dataset and must not reintroduce SERIDs from the discarded physical-topology drawing.
 
-The ordering must be deterministic. A stable sort such as location/name/SERID or another explicitly tested production order is acceptable, but the same detector must not move between Operations pages merely because measurements refresh.
+The approved page order is **ascending production/central SERID**. This is deliberately independent of dose value, alarm state, name edits, or measurement refresh, so a detector does not move between Operations pages while the system is running.
 
-Each page receives exactly five detector rows under normal 15-detector operation.
+For the approved 15-detector deployment baseline:
+
+```text
+Page 1/3 = first 5 SERIDs ascending
+Page 2/3 = next 5 SERIDs ascending
+Page 3/3 = final 5 SERIDs ascending
+```
 
 If the central device inventory is not exactly 15, the dashboard must surface the actual inventory safely rather than inventing detectors. Tests for the approved deployment baseline remain 15 detectors / 3 pages / 5 rows each.
 
@@ -403,9 +412,11 @@ Grafana may retain anonymous Viewer behavior only on a private/loopback integrat
 
 External users must not reach anonymous Grafana directly.
 
-`/monitoring` from the hosted origin must pass through an authentication boundary tied to a valid RadMon session or equivalent reverse-proxy authorization check.
+The Caddy `/monitoring` route uses a forward-auth style check against RadMon, conceptually `GET /auth/proxy-check`, which returns success only for a valid RadMon session. Only after that check succeeds is the request proxied to the internal Grafana endpoint.
 
 A Viewer may view monitoring. Operator and Administrator may also view it. Grafana administrative privileges are not granted through RadMon application roles merely because a user can view the dashboards.
+
+The internal Grafana port remains bound/private according to deployment policy and is not a public bypass around `/monitoring`.
 
 ## 19. Reverse proxy and TLS
 
@@ -494,7 +505,7 @@ Examples:
 
 New hosting-related settings should be explicit environment/configuration values rather than hard-coded deployment secrets.
 
-Conceptually:
+The FastAPI application is private behind the local reverse proxy by default:
 
 ```env
 RADMON_WEB_HOST=127.0.0.1
@@ -517,7 +528,7 @@ It must:
 
 - terminate HTTPS or integrate with the institution's TLS termination model;
 - proxy RadMon application/API traffic to the private FastAPI port;
-- protect/proxy the Grafana path;
+- use RadMon forward-auth/session validation before proxying `/monitoring` to Grafana;
 - avoid exposing Grafana admin endpoints unintentionally;
 - preserve WebSocket/streaming headers where Grafana requires them;
 - set appropriate security headers;
@@ -549,50 +560,53 @@ Implementation is not complete until automated tests cover at minimum:
 2. exactly three Operations dashboard variants are generated;
 3. Operations baseline covers 15 detectors as 5 rows x 3 pages;
 4. page titles read `Page 1/3`, `Page 2/3`, `Page 3/3`;
-5. playlist order is Realtime, Trends, Operations 1/3, Operations 2/3, Operations 3/3;
-6. playlist interval remains 10s;
-7. Grafana dashboard refresh remains 2s;
-8. date/time stat `valueSize` is 28;
-9. the eight approved auto-fit summary stats omit fixed `text.valueSize`;
-10. date/time SQL/render contract cannot regress to the previously observed `No data` condition;
-11. Grafana payloads remain valid JSON and fit the supported layout bounds.
+5. Operations page membership is stable and ordered by ascending SERID;
+6. playlist order is Realtime, Trends, Operations 1/3, Operations 2/3, Operations 3/3;
+7. playlist interval remains 10s;
+8. Grafana dashboard refresh remains 2s;
+9. date/time stat `valueSize` is 28;
+10. the eight approved auto-fit summary stats omit fixed `text.valueSize`;
+11. date/time SQL/render contract cannot regress to the previously observed `No data` condition;
+12. Grafana payloads remain valid JSON and fit the supported layout bounds.
 
 ### Web authentication/security
 
-12. unauthenticated `/app` access is redirected/rejected into login flow;
-13. valid login creates a usable session;
-14. expired/revoked session returns user to login;
-15. Viewer cannot perform Operator/Admin actions;
-16. Operator can perform ACK only through the approved role/PIN path;
-17. Administrator can access management operations;
-18. state-changing browser requests enforce CSRF/same-origin protection;
-19. secrets never appear in web payloads/static JS/manual assets;
-20. `/monitoring` cannot be reached externally without a valid RadMon authorization boundary.
+13. unauthenticated `/app` access is redirected/rejected into login flow;
+14. valid login creates a usable session;
+15. expired/revoked session returns user to login;
+16. Viewer cannot perform Operator/Admin actions;
+17. Operator can perform ACK only through the approved role/PIN path;
+18. Administrator can access management operations;
+19. state-changing browser requests enforce CSRF/same-origin protection;
+20. secrets never appear in web payloads/static JS/manual assets;
+21. `/auth/proxy-check` rejects absent/invalid sessions;
+22. `/monitoring` cannot be reached externally without a valid RadMon authorization boundary;
+23. hosted manual routes require authentication.
 
 ### Web Admin
 
-21. the fullscreen application shell exposes the legacy menu/tab structure;
-22. station navigation and selected-station detail work;
-23. Recent/Tabular/Chart/Reports/Alarm/Logs use the central service/data path;
-24. web Reports can reach archived and active data without SQL restore;
-25. CSV/PDF/print behavior works through browser-safe flows;
-26. server-side permissions are enforced independently of UI visibility.
+24. the fullscreen application shell exposes the legacy menu/tab structure;
+25. station navigation and selected-station detail work;
+26. Recent/Tabular/Chart/Reports/Alarm/Logs use the central service/data path;
+27. web Reports can reach archived and active data without SQL restore;
+28. CSV/PDF/print behavior works through browser-safe flows;
+29. server-side permissions are enforced independently of UI visibility.
 
 ### Manuals
 
-27. desktop Help points to HTML manuals rather than `.md` files;
-28. hosted manual routes serve the same manual content;
-29. all referenced screenshot files exist;
-30. screenshots used by manuals are produced from actual rendered RadMon/Grafana pages, not mock-image assets;
-31. HTML has no broken local asset links;
-32. manual screenshots do not contain known failure-state markers used by the capture tests.
+30. desktop Help points to HTML manuals rather than `.md` files;
+31. hosted manual routes serve the same manual content;
+32. all referenced screenshot files exist;
+33. screenshots used by manuals are produced from actual rendered RadMon/Grafana pages, not mock-image assets;
+34. HTML has no broken local asset links;
+35. manual screenshots do not contain known failure-state markers used by the capture tests.
 
 ### Regression
 
-33. full existing test suite remains green;
-34. Python compile validation remains green;
-35. Grafana payload validation remains green;
-36. launchers continue to function and desktop Admin remains available.
+36. full existing test suite remains green;
+37. Python compile validation remains green;
+38. Grafana payload validation remains green;
+39. launchers continue to function and desktop Admin remains available.
 
 ## 29. Documentation screenshot capture strategy
 
@@ -634,6 +648,7 @@ This feature is complete when all of the following are true:
 
 - Operations displays three pages of five detectors each for the 15-detector deployment baseline;
 - Operations uses the approved visual template structure;
+- Operations detector membership is stable by ascending SERID;
 - all Grafana date/time values use font size 28 and no longer regress to `No data`;
 - the eight specified summary panels auto-fit without fixed `valueSize`;
 - TV playlist rotates through five unique dashboards in the approved order;
@@ -644,6 +659,6 @@ This feature is complete when all of the following are true:
 - desktop Admin remains usable locally on PC3;
 - only one LAN collector exists in hosted operation;
 - external access goes through HTTPS reverse proxy rather than directly to database/Grafana/FastAPI ports;
-- Grafana external viewing is protected by a RadMon authorization boundary;
+- Grafana external viewing is protected by a RadMon authorization boundary using the shared RadMon session;
 - no production DB mutation is introduced outside the existing ACK contract;
 - all regression tests, compile checks, and Grafana validation pass on `main`.
