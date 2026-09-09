@@ -7,6 +7,7 @@ from PySide6.QtCore import QDateTime
 from PySide6.QtWidgets import QCheckBox, QDateTimeEdit, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from radmon.reports import ReportService
+from .period_dialog import PeriodSelectionDialog
 
 
 class TabularPage(QWidget):
@@ -26,12 +27,17 @@ class TabularPage(QWidget):
         self.limit = QSpinBox()
         self.limit.setRange(10, 100000)
         self.limit.setValue(1000)
+        period = QPushButton("Select period...")
+        period.clicked.connect(self.select_period)
         export = QPushButton("Export CSV")
         export.clicked.connect(self.export_csv)
         controls = QHBoxLayout()
         for label, widget in (("From", self.start), ("To", self.end), ("Limit", self.limit)):
             controls.addWidget(QLabel(label)); controls.addWidget(widget)
-        controls.addWidget(self.live); controls.addWidget(export); controls.addStretch(1)
+        controls.addWidget(self.live)
+        controls.addWidget(period)
+        controls.addWidget(export)
+        controls.addStretch(1)
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["SERID", "Measurement", "Dose rate", "Dose", "Prev interval", "Stat"])
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -40,6 +46,17 @@ class TabularPage(QWidget):
 
     def range(self):
         return self.start.dateTime().toPython(), self.end.dateTime().toPython()
+
+    def select_period(self) -> None:
+        start, end = self.range()
+        dialog = PeriodSelectionDialog(start, end, parent=self)
+        if not dialog.exec():
+            return
+        start, end, _grouping = dialog.selection()
+        self.live.setChecked(False)
+        self.start.setDateTime(QDateTime(start))
+        self.end.setDateTime(QDateTime(end))
+        self.refresh_live()
 
     def refresh_live(self) -> None:
         if self.live.isChecked():
@@ -63,7 +80,11 @@ class TabularPage(QWidget):
         filename, _ = QFileDialog.getSaveFileName(self, "Export CSV", f"measurement-{self.settings.serid}.csv", "CSV (*.csv)")
         if filename:
             try:
+                self.report_service.settings = self.settings
                 path = self.report_service.export_csv(start, end, Path(filename))
                 QMessageBox.information(self, "CSV exported", str(path))
             except Exception as exc:
                 QMessageBox.critical(self, "Export error", str(exc))
+
+    def save_as(self) -> None:
+        self.export_csv()
