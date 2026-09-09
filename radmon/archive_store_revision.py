@@ -1,8 +1,6 @@
 """Production schema compatibility for quarterly archive reads/purges."""
 from __future__ import annotations
 
-from datetime import datetime
-
 
 def apply() -> None:
     from . import archive_store as module
@@ -23,8 +21,9 @@ def apply() -> None:
     original_monthly_recap_rows = module.CentralArchiveStore.monthly_recap_rows
 
     def monthly_recap_rows(self, quarter):
-        # Reuse the stable measurement aggregation implementation, but present
-        # legacy production alarm rows under the semantic keys it expects.
+        # Present production legacy alarm rows under the semantic keys used by
+        # the stable recap implementation. Keeping the old aliases accepted as
+        # input also preserves deterministic unit tests and older archives.
         original_table_rows = self.table_rows
 
         def compatible_rows(table, selected_quarter, *, chunk_size=5000):
@@ -34,8 +33,11 @@ def apply() -> None:
                 return
             for row in rows:
                 item = dict(row)
-                item["dtom"] = item.get("dtoa")
-                item["type"] = "ALARM" if int(item.get("lvl") or 0) >= 2 else "ALERT"
+                item["dtom"] = item.get("dtoa") or item.get("dtom")
+                if "lvl" in item and item.get("lvl") is not None:
+                    item["type"] = "ALARM" if int(item.get("lvl") or 0) >= 2 else "ALERT"
+                else:
+                    item["type"] = str(item.get("type") or "ALERT").upper()
                 yield item
 
         self.table_rows = compatible_rows
