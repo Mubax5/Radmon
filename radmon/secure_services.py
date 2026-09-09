@@ -23,8 +23,8 @@ class SecureServices:
     alarm_control: AlarmControlService
     device_admin: DeviceAdminService
     user_admin: UserAdminService
-    source_health: SourceHealthService
     sources: dict[str, LanSource]
+    source_health: SourceHealthService | None = None
 
 
 def security_db_path(settings) -> Path:
@@ -96,6 +96,6 @@ def build_secure_services(settings) -> SecureServices:
         alarm_control=alarm_control,
         device_admin=device_admin,
         user_admin=user_admin,
-        source_health=source_health,
         sources=sources,
+        source_health=source_health,
     )
