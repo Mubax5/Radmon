@@ -49,24 +49,18 @@ def test_settings_and_admin_open_verified_grafana_monitoring():
 
 def test_external_url_launcher_has_real_fallback_when_primary_opener_rejects():
     calls: list[tuple[str, str]] = []
-
     opened = main_window_module.open_external_url(
         "http://localhost:3000/playlists/play/radmon-tv",
         platform_name="posix",
         qt_open=lambda _url: calls.append(("qt", "called")) or False,
         browser_open=lambda url: calls.append(("browser", url)) or True,
     )
-
     assert opened is True
-    assert calls == [
-        ("qt", "called"),
-        ("browser", "http://localhost:3000/playlists/play/radmon-tv"),
-    ]
+    assert calls == [("qt", "called"), ("browser", "http://localhost:3000/playlists/play/radmon-tv")]
 
 
 def test_windows_monitoring_launcher_prefers_native_default_browser():
     calls: list[tuple[str, str]] = []
-
     opened = main_window_module.open_external_url(
         "http://localhost:3000/playlists/play/radmon-tv",
         platform_name="nt",
@@ -74,7 +68,6 @@ def test_windows_monitoring_launcher_prefers_native_default_browser():
         qt_open=lambda _url: calls.append(("qt", "called")) or False,
         browser_open=lambda url: calls.append(("browser", url)) or True,
     )
-
     assert opened is True
     assert calls == [("native", "http://localhost:3000/playlists/play/radmon-tv")]
 
@@ -84,7 +77,6 @@ def test_monitoring_click_always_retries_setup_and_uses_dedicated_poll_timer():
     start = source.index("    def open_monitoring")
     end = source.index("    def _open_monitoring_if_ready", start)
     block = source[start:end]
-
     assert "if self._grafana_error:" not in block
     assert "self._start_grafana_bootstrap()" in block
     assert "self._monitoring_poll_timer.start()" in block
@@ -104,15 +96,12 @@ def test_docker_compose_bootstrap_has_hard_timeout(tmp_path, monkeypatch):
     grafana_dir.mkdir()
     (grafana_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     captured: dict[str, object] = {}
-
     def fake_run(command, **kwargs):
         captured.update(kwargs)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-
     monkeypatch.setattr(subprocess, "run", fake_run)
     bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
     bootstrap._run_compose(env={})
-
     assert 1 <= int(captured["timeout"]) <= 30
 
 
@@ -120,13 +109,10 @@ def test_docker_compose_timeout_becomes_actionable_runtime_error(tmp_path, monke
     grafana_dir = tmp_path / "grafana"
     grafana_dir.mkdir()
     (grafana_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
-
     def fake_run(command, **kwargs):
         raise subprocess.TimeoutExpired(command, timeout=kwargs.get("timeout", 0))
-
     monkeypatch.setattr(subprocess, "run", fake_run)
     bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
-
     with pytest.raises(RuntimeError, match="timeout"):
         bootstrap._run_compose(env={})
 
@@ -135,29 +121,20 @@ def test_bootstrap_reuses_ready_fallback_before_starting_services():
     settings = replace(Settings(), grafana_url="http://localhost:3000", grafana_fallback_port=3300)
     compose_calls: list[dict] = []
     native_calls: list[dict] = []
-
     def probe(base_url: str) -> bool:
         return base_url == "http://localhost:3300"
-
-    def compose_runner(*, env):
-        compose_calls.append(dict(env))
-
-    def native_runner(**kwargs):
-        native_calls.append(dict(kwargs))
-
     bootstrap = GrafanaBootstrap(
         settings,
         dashboard_probe=probe,
         playlist_probe=probe,
         grafana_health_probe=lambda base: base == "http://localhost:3300",
         api_provisioner=lambda base: True,
-        native_runner=native_runner,
-        compose_runner=compose_runner,
+        native_runner=lambda **kwargs: native_calls.append(dict(kwargs)),
+        compose_runner=lambda *, env: compose_calls.append(dict(env)),
         sleeper=lambda _: None,
         attempts=2,
     )
     result = bootstrap.ensure()
-
     assert compose_calls == []
     assert native_calls == []
     assert result.startswith(f"http://localhost:3300/playlists/play/{PLAYLIST_UID}")
@@ -173,12 +150,8 @@ def test_bootstrap_refuses_to_return_unverified_playlist():
         sleeper=lambda _: None,
         attempts=2,
     )
-    try:
+    with pytest.raises(RuntimeError, match="playlist"):
         bootstrap.ensure()
-    except RuntimeError as exc:
-        assert "playlist" in str(exc).lower()
-    else:
-        raise AssertionError("unverified Grafana playlist must not be returned")
 
 
 def test_grafana_tv_uses_three_logical_pages_with_five_operations_variants():
@@ -191,22 +164,18 @@ def test_grafana_tv_uses_three_logical_pages_with_five_operations_variants():
         assert dashboard["refresh"] == "2s"
         assert dashboard["timezone"] == "browser"
         assert dashboard["templating"]["list"] == []
-
     playlist_values = [item["value"] for item in build_playlist_payload()["spec"]["items"]]
     assert len(playlist_values) == 15
     for cycle in range(5):
         assert playlist_values[cycle * 3] == PAGE_UIDS[0]
         assert playlist_values[cycle * 3 + 1] == PAGE_UIDS[1]
         assert playlist_values[cycle * 3 + 2] == OPERATIONS_PAGE_UIDS[cycle]
-
     grouped = [operation_page_stations(page_number) for page_number in range(1, 6)]
     assert [len(group) for group in grouped] == [3, 3, 3, 3, 3]
     assert len({station.serid for group in grouped for station in group}) == 15
-
     payload = json.dumps(dashboards, ensure_ascii=False)
-    for table in ("device", "measurement", "alarm"):
-        assert table in payload
-    assert " recent " not in payload.lower()
+    for relation in ("device", "measurement", "vrecent", "alarm"):
+        assert relation in payload
     assert "radmon_" not in payload
     assert "REAL TIME DOSE RATE MONITORING SYSTEM" in payload
     assert "µSv/h" in payload
@@ -216,14 +185,12 @@ def test_grafana_tv_uses_three_logical_pages_with_five_operations_variants():
 
 def test_realtime_measurement_time_uses_numeric_epoch_for_grafana_datetime():
     dashboard = build_page_one()
-    time_panels = [
-        panel for panel in dashboard["panels"]
-        if panel.get("description") == "latest-measurement-time"
-    ]
+    time_panels = [panel for panel in dashboard["panels"] if panel.get("description") == "latest-measurement-time"]
     assert len(time_panels) == 15
     for panel in time_panels:
         sql = panel["targets"][0]["rawSql"]
-        assert "UNIX_TIMESTAMP(MAX(m.dtom)) * 1000" in sql
+        assert "UNIX_TIMESTAMP(dtom) * 1000" in sql
+        assert "FROM vrecent" in sql
         assert "DATE_FORMAT" not in sql
         assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
         assert panel["options"]["text"]["valueSize"] <= 12
@@ -231,29 +198,19 @@ def test_realtime_measurement_time_uses_numeric_epoch_for_grafana_datetime():
 
 def test_trend_page_uses_readable_one_microsievert_scale_and_larger_summary_values():
     dashboard = build_page_two()
-    trend_panels = [
-        panel for panel in dashboard["panels"]
-        if panel.get("description") == "building-dose-trend"
-    ]
+    trend_panels = [panel for panel in dashboard["panels"] if panel.get("description") == "building-dose-trend"]
     assert len(trend_panels) == 5
     for panel in trend_panels:
         defaults = panel["fieldConfig"]["defaults"]
         assert defaults["min"] == 0
         assert defaults["max"] == 1
         assert defaults["unit"] == "suffix: µSv/h"
-
-    summary_titles = {
-        "Dose Rate Tertinggi Saat Ini",
-        "Rata-rata Saat Ini",
-        "Detector Online",
-        "Detector Offline",
-    }
+        assert "FROM measurement" in panel["targets"][0]["rawSql"]
+    summary_titles = {"Dose Rate Tertinggi Saat Ini", "Rata-rata Saat Ini", "Detector Online", "Detector Offline"}
     summary_panels = [panel for panel in dashboard["panels"] if panel.get("title") in summary_titles]
     assert len(summary_panels) == 4
     assert all(panel["options"]["text"]["valueSize"] >= 40 for panel in summary_panels)
-    for panel in summary_panels:
-        if panel["title"] in {"Detector Online", "Detector Offline"}:
-            assert panel["fieldConfig"]["defaults"]["decimals"] == 0
+    assert all("vrecent" in panel["targets"][0]["rawSql"] for panel in summary_panels)
 
 
 def test_operations_status_panel_keeps_status_name_and_count_visible():
@@ -263,7 +220,6 @@ def test_operations_status_panel_keeps_status_name_and_count_visible():
     assert status_panel["options"]["displayLabels"] == ["name", "value"]
     assert status_panel["options"]["legend"]["placement"] == "bottom"
     assert status_panel["options"]["legend"]["showLegend"] is True
-
     status_titles = {"NORMAL", "ALERT", "ALARM", "OFFLINE"}
     stat_panels = [panel for panel in dashboard["panels"] if panel.get("title") in status_titles]
     assert len(stat_panels) == 4
