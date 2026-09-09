@@ -2,10 +2,26 @@
 
 __version__ = "0.1.0"
 
+# Runtime compatibility patches are intentionally isolated from the older
+# implementation modules.  Importing any radmon submodule activates the
+# production ipradmon contract before application services are constructed.
+from .repository_revision import apply as _apply_repository_revision
+
+_apply_repository_revision()
+del _apply_repository_revision
+
+from .lan_revision import apply as _apply_lan_revision
+
+_apply_lan_revision()
+del _apply_lan_revision
+
+from .remote_alarm_revision import apply as _apply_remote_alarm_revision
+
+_apply_remote_alarm_revision()
+del _apply_remote_alarm_revision
+
 # Keep the Grafana compatibility patches small and isolated from the
-# legacy-compatible dashboard builder. Importing any ``radmon`` submodule
-# activates the revised header/timestamp helpers and makes an already-running
-# Grafana refresh its stored dashboards before the playlist is reused.
+# legacy-compatible dashboard builder.
 from .grafana_revision import apply as _apply_grafana_revision
 
 _apply_grafana_revision()
