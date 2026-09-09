@@ -46,17 +46,9 @@ CREATE TABLE IF NOT EXISTS source_health (
         if row is None:
             return None
         keys = (
-            "source_id",
-            "host",
-            "state",
-            "last_success",
-            "last_failure",
-            "last_live_poll",
-            "last_alarm_poll",
-            "last_history_import",
-            "last_error",
-            "consecutive_failures",
-            "updated_at",
+            "source_id", "host", "state", "last_success", "last_failure",
+            "last_live_poll", "last_alarm_poll", "last_history_import",
+            "last_error", "consecutive_failures", "updated_at",
         )
         item = dict(zip(keys, row))
         item["consecutive_failures"] = int(item.get("consecutive_failures") or 0)
@@ -90,7 +82,9 @@ FROM source_health ORDER BY source_id
     def _emit_transition(self, item: dict[str, Any], previous: str | None) -> dict[str, Any]:
         state = str(item["state"])
         message = None
-        if previous is not None and state != previous:
+        # RECOVERED is the operator-facing recovery transition. The next healthy
+        # poll silently normalizes the stored state back to CONNECTED.
+        if previous is not None and state != previous and not (previous == "RECOVERED" and state == "CONNECTED"):
             message = f"[SERVER {state}] {item['source_id']} / {item['host']}"
             if item.get("last_error") and state in {"DEGRADED", "OFFLINE"}:
                 message += f" - {item['last_error']}"
@@ -99,14 +93,7 @@ FROM source_health ORDER BY source_id
             self.transition_sink(dict(item))
         return item
 
-    def record_success(
-        self,
-        source,
-        *,
-        live: bool,
-        alarm: bool,
-        history: bool,
-    ) -> dict[str, Any]:
+    def record_success(self, source, *, live: bool, alarm: bool, history: bool) -> dict[str, Any]:
         current = self.get(source.source_id)
         previous = str(current["state"]) if current else None
         at = self.now().astimezone(timezone.utc).isoformat()
@@ -130,17 +117,9 @@ ON CONFLICT(source_id) DO UPDATE SET
   updated_at = excluded.updated_at
 """,
                 (
-                    source.source_id,
-                    source.host,
-                    state,
-                    at,
-                    at if live else None,
-                    at if alarm else None,
-                    at if history else None,
-                    at,
-                    1 if live else 0,
-                    1 if alarm else 0,
-                    1 if history else 0,
+                    source.source_id, source.host, state, at,
+                    at if live else None, at if alarm else None, at if history else None, at,
+                    1 if live else 0, 1 if alarm else 0, 1 if history else 0,
                 ),
             )
         item = self.get(source.source_id)
