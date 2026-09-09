@@ -61,6 +61,7 @@ def main() -> int:
         cookie_secure=_enabled("RADMON_WEB_COOKIE_SECURE"),
         archive_catalog=archive_catalog,
         archive_service=archive_service,
+        source_health=services.source_health,
     )
 
     whatsapp = None
