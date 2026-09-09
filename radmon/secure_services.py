@@ -11,6 +11,7 @@ from .device_admin import DeviceAdminService, MariaDeviceAdminRepository
 from .lan import LanSource, RemoteMariaDBSource, parse_lan_sources
 from .remote_alarm import AlarmControlService, RemoteAlarmMirror
 from .security import SecurityStore
+from .source_health import SourceHealthService
 from .user_admin import UserAdminService
 
 
@@ -22,6 +23,7 @@ class SecureServices:
     alarm_control: AlarmControlService
     device_admin: DeviceAdminService
     user_admin: UserAdminService
+    source_health: SourceHealthService
     sources: dict[str, LanSource]
 
 
@@ -36,6 +38,29 @@ def build_secure_services(settings) -> SecureServices:
     audit = AuditTrail(security, logger)
     mirror = RemoteAlarmMirror(security)
     sources = {source.source_id: source for source in parse_lan_sources()}
+
+    def health_transition(item: dict[str, Any]) -> None:
+        audit.record(
+            "SOURCE_HEALTH_TRANSITION",
+            None,
+            "lan_source",
+            str(item.get("source_id") or "unknown"),
+            after={
+                "state": item.get("state"),
+                "host": item.get("host"),
+                "last_error": item.get("last_error"),
+                "message": item.get("transition_message"),
+            },
+            success=str(item.get("state")) not in {"DEGRADED", "OFFLINE"},
+            reason=str(item.get("last_error") or "") or None,
+            source=str(item.get("source_id") or "central"),
+        )
+
+    source_health = SourceHealthService(
+        security,
+        offline_after_failures=int(os.getenv("RADMON_LAN_OFFLINE_AFTER_FAILURES", "3")),
+        transition_sink=health_transition,
+    )
 
     def remote_factory(source_id: str) -> Any:
         source = sources.get(source_id)
@@ -71,5 +96,6 @@ def build_secure_services(settings) -> SecureServices:
         alarm_control=alarm_control,
         device_admin=device_admin,
         user_admin=user_admin,
+        source_health=source_health,
         sources=sources,
     )
