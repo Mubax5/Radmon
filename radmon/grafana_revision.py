@@ -1,8 +1,7 @@
-"""Compatibility patch for the generated Grafana TV payloads.
+"""Focused compatibility adjustments for generated Grafana TV payloads.
 
-Kept separate from the large dashboard generator so the timestamp regression and
-shared header can be tested independently. ``apply()`` replaces only the two
-small generator helpers involved in this revision.
+The legacy dashboard generator stays intact while this module applies small,
+well-tested display fixes used by the deployed Grafana version.
 """
 from __future__ import annotations
 
@@ -35,10 +34,6 @@ def apply() -> None:
             ),
         }
 
-        # Grafana Stat reliably reduces numeric fields, while the deployed
-        # version renders the previous string-only CONCAT/DATE_FORMAT query as
-        # "No data". Use one numeric Unix epoch scalar for both header panels
-        # and let Grafana format it in the browser-local (WIB on the deployment PC) timezone.
         date_panel = tv._panel(3, "stat", "", 0, 2, 6, 2)
         date_panel["description"] = "header-date-wib"
         date_panel["targets"] = [tv._target("""
@@ -78,8 +73,6 @@ SELECT UNIX_TIMESTAMP() * 1000 AS value
             "textMode": "value",
             "wideLayout": True,
         }
-        # Keep title + organization first for compatibility with existing
-        # payload tests, while grid positions render date-left/org-center/time-right.
         return [title, organization, date_panel, update_panel]
 
     def time_stat(panel_id, station, x, y, w, h=1):
@@ -91,7 +84,7 @@ FROM measurement m
 WHERE m.serid = {station.serid}
 """)]
         panel["fieldConfig"] = {
-            "defaults": {"unit": "dateTimeAsLocal", "decimals": 0},
+            "defaults": {"unit": "time:DD/MM/YYYY HH:mm:ss", "decimals": 0},
             "overrides": [],
         }
         panel["options"] = {
@@ -106,5 +99,30 @@ WHERE m.serid = {station.serid}
         }
         return panel
 
+    original_page_three = tv.build_page_three
+
+    def build_page_three(page_number: int = 1) -> dict[str, Any]:
+        dashboard = original_page_three(page_number)
+        status_panel = next(
+            panel for panel in dashboard["panels"]
+            if panel.get("title") == "Status Detector"
+        )
+        operations_panel = next(
+            panel for panel in dashboard["panels"]
+            if panel.get("description") == "operational-condition"
+        )
+
+        # Give the donut and its bottom legend equal half-screen width so both
+        # status names and integer counts remain visible at 1920x1080.
+        status_panel["gridPos"]["w"] = 12
+        operations_panel["gridPos"]["x"] = 12
+        operations_panel["gridPos"]["w"] = 12
+        status_panel["options"]["displayLabels"] = ["name", "value"]
+        status_panel["options"]["legend"].update(
+            {"displayMode": "table", "placement": "bottom", "showLegend": True, "values": ["value"]}
+        )
+        return dashboard
+
     tv._header_panels = header_panels
     tv._time_stat = time_stat
+    tv.build_page_three = build_page_three
