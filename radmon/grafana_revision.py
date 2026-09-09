@@ -35,25 +35,25 @@ def apply() -> None:
             ),
         }
 
+        # Grafana Stat reliably reduces numeric fields, while the deployed
+        # version renders the previous string-only CONCAT/DATE_FORMAT query as
+        # "No data". Use one numeric Unix epoch scalar for both header panels
+        # and let Grafana format it in the browser-local (WIB on the deployment PC) timezone.
         date_panel = tv._panel(3, "stat", "", 0, 2, 6, 2)
         date_panel["description"] = "header-date-wib"
         date_panel["targets"] = [tv._target("""
-SELECT CONCAT(
-  CASE DAYOFWEEK(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00'))
-    WHEN 1 THEN 'Minggu' WHEN 2 THEN 'Senin' WHEN 3 THEN 'Selasa'
-    WHEN 4 THEN 'Rabu' WHEN 5 THEN 'Kamis' WHEN 6 THEN 'Jumat'
-    ELSE 'Sabtu' END,
-  ', ',
-  DATE_FORMAT(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00'), '%d/%m/%Y')
-) AS value
+SELECT UNIX_TIMESTAMP() * 1000 AS value
 """)]
-        date_panel["fieldConfig"] = {"defaults": {"unit": "none"}, "overrides": []}
+        date_panel["fieldConfig"] = {
+            "defaults": {"unit": "time:DD/MM/YYYY", "decimals": 0},
+            "overrides": [],
+        }
         date_panel["options"] = {
             "colorMode": "none",
             "graphMode": "none",
             "justifyMode": "center",
             "orientation": "horizontal",
-            "reduceOptions": {"calcs": [], "fields": "", "values": True},
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False},
             "text": {"valueSize": 12},
             "textMode": "value",
             "wideLayout": True,
@@ -62,19 +62,18 @@ SELECT CONCAT(
         update_panel = tv._panel(4, "stat", "", 18, 2, 6, 2)
         update_panel["description"] = "header-update-wib"
         update_panel["targets"] = [tv._target("""
-SELECT CONCAT(
-  'Update ',
-  DATE_FORMAT(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00'), '%H:%i:%s'),
-  ' WIB'
-) AS value
+SELECT UNIX_TIMESTAMP() * 1000 AS value
 """)]
-        update_panel["fieldConfig"] = {"defaults": {"unit": "none"}, "overrides": []}
+        update_panel["fieldConfig"] = {
+            "defaults": {"unit": "time:HH:mm:ss [WIB]", "decimals": 0},
+            "overrides": [],
+        }
         update_panel["options"] = {
             "colorMode": "none",
             "graphMode": "none",
             "justifyMode": "center",
             "orientation": "horizontal",
-            "reduceOptions": {"calcs": [], "fields": "", "values": True},
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False},
             "text": {"valueSize": 12},
             "textMode": "value",
             "wideLayout": True,
