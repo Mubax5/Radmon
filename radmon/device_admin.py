@@ -7,7 +7,16 @@ from .security import SecurityStore, UserIdentity
 
 
 _ALLOWED_FIELDS = {
-    "name", "location", "description", "warnlevel", "alarmlevel", "maxidlemin", "unit"
+    "name",
+    "location",
+    "description",
+    "warnlevel",
+    "alarmlevel",
+    "maxidlemin",
+    "unit",
+    "audiopath",
+    "hwaddress",
+    "hwtype",
 }
 
 
@@ -101,7 +110,8 @@ class MariaDeviceAdminRepository:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-SELECT serid, name, location, description, warnlevel, alarmlevel, maxidlemin, unit
+SELECT serid, name, location, description, warnlevel, alarmlevel, maxidlemin, unit,
+       audiopath, hwaddress, hwtype
 FROM device WHERE serid = ?
 """,
                     (int(serid),),
@@ -109,7 +119,10 @@ FROM device WHERE serid = ?
                 row = cursor.fetchone()
             if row is None:
                 return None
-            keys = ("serid", "name", "location", "description", "warnlevel", "alarmlevel", "maxidlemin", "unit")
+            keys = (
+                "serid", "name", "location", "description", "warnlevel", "alarmlevel",
+                "maxidlemin", "unit", "audiopath", "hwaddress", "hwtype",
+            )
             return dict(row) if isinstance(row, dict) else dict(zip(keys, row))
         finally:
             connection.close()
@@ -121,6 +134,9 @@ FROM device WHERE serid = ?
                 raise ValueError("station tidak ditemukan")
             return current
         fields = list(changes)
+        unknown = set(fields) - _ALLOWED_FIELDS
+        if unknown:
+            raise ValueError("field station tidak diizinkan: " + ", ".join(sorted(unknown)))
         sql = "UPDATE device SET " + ", ".join(f"{field} = ?" for field in fields) + " WHERE serid = ?"
         connection = self._connect()
         try:
