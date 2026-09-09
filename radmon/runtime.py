@@ -79,8 +79,26 @@ class ApplicationRuntime:
         self.alarm_service = alarm_service
         self.source = source
         self.stop_event = threading.Event()
+        self.pause_event = threading.Event()
         self.threads: list[threading.Thread] = []
         self._dummy_fleet: DummyFleet | None = None
+
+    @property
+    def is_paused(self) -> bool:
+        return self.pause_event.is_set()
+
+    def pause(self) -> None:
+        self.pause_event.set()
+        LOGGER.info("local acquisition paused source=%s", self.source)
+
+    def resume(self) -> None:
+        self.pause_event.clear()
+        LOGGER.info("local acquisition resumed source=%s", self.source)
+
+    def _wait_until_resumed(self) -> bool:
+        while self.pause_event.is_set() and not self.stop_event.is_set():
+            self.stop_event.wait(0.2)
+        return not self.stop_event.is_set()
 
     def _thread(self, name: str, target: Any) -> None:
         thread = threading.Thread(name=name, target=target, daemon=True)
@@ -114,6 +132,8 @@ class ApplicationRuntime:
             mode=self.settings.dummy_mode,
         )
         while not self.stop_event.is_set():
+            if self.pause_event.is_set() and not self._wait_until_resumed():
+                break
             try:
                 count = self._dummy_fleet.step()
                 LOGGER.debug(
@@ -172,7 +192,10 @@ class ApplicationRuntime:
             for collector in collectors:
                 self._thread(
                     f"radmon-detector-{collector.settings.serid}",
-                    lambda active=collector: active.run_forever(self.stop_event),
+                    lambda active=collector: active.run_forever(
+                        self.stop_event,
+                        self.pause_event,
+                    ),
                 )
 
         if (
@@ -195,6 +218,7 @@ class ApplicationRuntime:
 
     def stop(self) -> None:
         self.stop_event.set()
+        self.pause_event.clear()
         for thread in self.threads:
             thread.join(timeout=3.0)
         LOGGER.info("runtime stopped")
