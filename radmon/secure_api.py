@@ -57,6 +57,7 @@ def attach_secure_routes(
     cookie_secure: bool = False,
     archive_catalog: Any | None = None,
     archive_service: Any | None = None,
+    source_health: Any | None = None,
 ) -> FastAPI:
     def current_user(request: Request) -> UserIdentity:
         identity = security.session_user(request.cookies.get(SESSION_COOKIE))
@@ -119,6 +120,12 @@ def attach_secure_routes(
     @app.get("/api/v1/control/alarms")
     def alarms(identity: UserIdentity = Depends(current_user)):
         return alarm_mirror.list_alarms(limit=500)
+
+    @app.get("/api/v1/control/sources/health")
+    def sources_health(identity: UserIdentity = Depends(current_user)):
+        if source_health is None:
+            return []
+        return source_health.list_states()
 
     @app.post("/api/v1/control/alarms/{source_id}/{serid}/ack")
     def ack_alarm(
