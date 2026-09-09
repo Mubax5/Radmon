@@ -5,7 +5,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QDockWidget, QLabel, QToolBar, QMessageBox
+from PySide6.QtWidgets import QLabel, QToolBar, QMessageBox
 
 from .audit import AuditTrail
 from .security import Role, SecurityStore, UserIdentity
@@ -39,11 +39,9 @@ def _format_active_alarm(item: dict[str, Any]) -> str:
     threshold = item.get("threshold")
     measured_text = "-" if measured is None else f"{float(measured):.3f} µSv/h"
     threshold_text = "-" if threshold is None else f"{float(threshold):.3f} µSv/h"
-    when = item.get("event_time")
-    when_text = when.strftime("%d/%m/%Y %H:%M:%S") if hasattr(when, "strftime") else str(when or "-")
     return (
-        f"<b>{item.get('level', 'ALARM')}</b> · source {item.get('source_id')} · "
-        f"ID {item.get('serid')} · {measured_text} / threshold {threshold_text} · {when_text}"
+        f"{item.get('level', 'ALARM')} · source {item.get('source_id')} · "
+        f"ID {item.get('serid')} · {measured_text} / threshold {threshold_text}"
     )
 
 
@@ -58,22 +56,20 @@ def install_window_security(window) -> None:
     user_label.setObjectName("securityIdentityLabel")
     window.statusBar().addPermanentWidget(user_label)
 
-    dock = QDockWidget("Active Alarm", window)
-    dock.setObjectName("activeAlarmDock")
-    dock.setAllowedAreas(Qt.BottomDockWidgetArea)
-    alarm_label = QLabel("Tidak ada alarm aktif.")
-    alarm_label.setObjectName("activeAlarmMessage")
-    alarm_label.setTextFormat(Qt.RichText)
-    alarm_label.setMargin(6)
-    dock.setWidget(alarm_label)
-    window.addDockWidget(Qt.BottomDockWidgetArea, dock)
-
     def refresh_alarm_strip() -> None:
+        recent_page = getattr(window, "recent_page", None)
+        if recent_page is None or not hasattr(recent_page, "set_message_rows"):
+            return
         try:
-            rows = context.alarm_mirror.list_alarms(active_only=True, limit=1)
-            alarm_label.setText(_format_active_alarm(rows[0]) if rows else "Tidak ada alarm aktif.")
+            rows = context.alarm_mirror.list_alarms(active_only=True, limit=20)
+            recent_page.set_message_rows(
+                [
+                    (item.get("event_time"), _format_active_alarm(item))
+                    for item in rows
+                ]
+            )
         except Exception as exc:
-            alarm_label.setText(f"Alarm status unavailable: {exc}")
+            recent_page.set_message_rows([(None, f"Alarm status unavailable: {exc}")])
 
     timer = QTimer(window)
     timer.setInterval(2000)
@@ -98,14 +94,23 @@ def install_window_security(window) -> None:
                 station = context.device_admin.repository.get_device(window.settings.serid)
                 if station is None:
                     raise RuntimeError("station tidak ditemukan")
-                dialog = StationAdminDialog(context.device_admin, context.identity, station, window)
+                dialog = StationAdminDialog(
+                    context.device_admin,
+                    context.identity,
+                    station,
+                    window,
+                    source=getattr(window, "source", "detector"),
+                )
                 if dialog.exec():
                     selected = window.station_tree.currentItem()
                     current = context.device_admin.repository.get_device(dialog.serid.value())
                     if selected is not None and current is not None:
                         selected.setText(0, str(current.get("name") or current["serid"]))
                         selected.setData(0, Qt.UserRole, int(current["serid"]))
-                    window.refresh_current_page()
+                    if hasattr(window, "reload_station_sidebar"):
+                        window.reload_station_sidebar(select_serid=dialog.serid.value())
+                    else:
+                        window.refresh_current_page()
             except Exception as exc:
                 QMessageBox.warning(window, "Edit Station", str(exc))
 
