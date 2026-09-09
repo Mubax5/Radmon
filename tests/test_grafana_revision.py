@@ -1,7 +1,7 @@
 from radmon.grafana_tv import build_dashboard_payloads
 
 
-def test_measurement_time_stat_uses_numeric_epoch_for_grafana_datetime():
+def test_measurement_time_stat_uses_numeric_epoch_from_vrecent():
     page1 = build_dashboard_payloads()[0]
     timestamp = [
         panel for panel in page1["panels"]
@@ -10,7 +10,8 @@ def test_measurement_time_stat_uses_numeric_epoch_for_grafana_datetime():
     assert len(timestamp) == 15
     for panel in timestamp:
         sql = panel["targets"][0]["rawSql"]
-        assert "UNIX_TIMESTAMP(MAX(m.dtom)) * 1000" in sql
+        assert "UNIX_TIMESTAMP(dtom) * 1000" in sql
+        assert "FROM vrecent" in sql
         assert "DATE_FORMAT" not in sql
         assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
 
@@ -36,8 +37,6 @@ def test_every_dashboard_has_date_organization_and_wib_update_header():
         assert date_panel["options"]["text"]["valueSize"] < 18
         assert update_panel["options"]["text"]["valueSize"] < 18
 
-        # Header date/time must be numeric Grafana values. String-only Stat queries
-        # render as "No data" on the deployed Grafana version.
         for panel in (date_panel, update_panel):
             sql = panel["targets"][0]["rawSql"]
             assert "UNIX_TIMESTAMP() * 1000" in sql
