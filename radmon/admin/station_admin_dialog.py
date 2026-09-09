@@ -31,19 +31,21 @@ class StationAdminDialog(QDialog):
         parent=None,
         *,
         source: str = "detector",
+        is_new: bool = False,
     ) -> None:
         super().__init__(parent)
         self.device_admin = device_admin
         self.identity = identity
         self.station = dict(station)
         self.source = source
-        self.setWindowTitle("Station properties")
+        self.is_new = bool(is_new)
+        self.setWindowTitle("New station..." if self.is_new else "Station properties")
         self.setWindowIcon(silk_icon("feed"))
         self.setMinimumWidth(430)
 
         self.serid = QSpinBox()
         self.serid.setRange(1, 2_147_483_647)
-        self.serid.setValue(int(station["serid"]))
+        self.serid.setValue(max(1, int(station.get("serid") or 1)))
         if source == "lan":
             self.serid.setEnabled(False)
             self.serid.setToolTip("LAN SERID is authoritative from the production device table.")
@@ -125,19 +127,8 @@ class StationAdminDialog(QDialog):
         if filename:
             self.audio_path.setText(filename)
 
-    def _save(self) -> None:
-        if self.warn.value() > self.alarm.value() and self.alarm.value() > 0:
-            QMessageBox.warning(self, "Station properties", "Low Threshold harus <= High Threshold.")
-            return
-        pin, ok = PinDialog.get_pin(
-            self,
-            title="PIN Administrator",
-            message="Perubahan konfigurasi station adalah aksi sensitif.",
-        )
-        if not ok:
-            return
-        old_serid = int(self.station["serid"])
-        changes = {
+    def _values(self) -> dict:
+        return {
             "name": self.name.text().strip(),
             "location": self.location.text().strip(),
             "description": self.description.toPlainText().strip(),
@@ -149,11 +140,40 @@ class StationAdminDialog(QDialog):
             "hwaddress": self.hw_address.text().strip(),
             "hwtype": self.hw_type.text().strip() or "detector",
         }
+
+    def _save(self) -> None:
+        if self.warn.value() > self.alarm.value() and self.alarm.value() > 0:
+            QMessageBox.warning(self, "Station properties", "Low Threshold harus <= High Threshold.")
+            return
+        if self.source == "lan" and self.is_new:
+            QMessageBox.warning(
+                self,
+                "New station",
+                "LAN station dibuat dari device.serid production dan tidak boleh dibuat manual.",
+            )
+            return
+        pin, ok = PinDialog.get_pin(
+            self,
+            title="PIN Administrator",
+            message="Perubahan konfigurasi station adalah aksi sensitif.",
+        )
+        if not ok:
+            return
+        values = self._values()
         try:
-            self.device_admin.update_station(self.identity, pin, old_serid, changes)
-            new_serid = self.serid.value()
-            if self.source != "lan" and new_serid != old_serid:
-                self.device_admin.migrate_serid(self.identity, pin, old_serid, new_serid)
+            if self.is_new:
+                self.device_admin.create_station(
+                    self.identity,
+                    pin,
+                    self.serid.value(),
+                    values,
+                )
+            else:
+                old_serid = int(self.station["serid"])
+                self.device_admin.update_station(self.identity, pin, old_serid, values)
+                new_serid = self.serid.value()
+                if self.source != "lan" and new_serid != old_serid:
+                    self.device_admin.migrate_serid(self.identity, pin, old_serid, new_serid)
         except Exception as exc:
             QMessageBox.warning(self, "Station properties", str(exc))
             return
