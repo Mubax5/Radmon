@@ -20,6 +20,7 @@ class SecurityContext:
     alarm_control: Any
     device_admin: Any
     user_admin: Any
+    source_health: Any | None = None
 
 
 _context: SecurityContext | None = None
@@ -45,6 +46,14 @@ def _format_active_alarm(item: dict[str, Any]) -> str:
     )
 
 
+def _format_source_health(item: dict[str, Any]) -> str:
+    state = str(item.get("state") or "UNKNOWN")
+    message = f"[SERVER {state}] {item.get('source_id')} / {item.get('host')}"
+    if item.get("last_error") and state in {"DEGRADED", "OFFLINE"}:
+        message += f" - {item['last_error']}"
+    return message
+
+
 def install_window_security(window) -> None:
     context = get_context()
     if context is None:
@@ -60,16 +69,20 @@ def install_window_security(window) -> None:
         recent_page = getattr(window, "recent_page", None)
         if recent_page is None or not hasattr(recent_page, "set_message_rows"):
             return
+        message_rows: list[tuple[object, str]] = []
         try:
+            if context.source_health is not None:
+                for item in context.source_health.list_states():
+                    if str(item.get("state")) != "CONNECTED":
+                        message_rows.append((item.get("updated_at"), _format_source_health(item)))
             rows = context.alarm_mirror.list_alarms(active_only=True, limit=20)
-            recent_page.set_message_rows(
-                [
-                    (item.get("event_time"), _format_active_alarm(item))
-                    for item in rows
-                ]
+            message_rows.extend(
+                (item.get("event_time"), _format_active_alarm(item))
+                for item in rows
             )
+            recent_page.set_message_rows(message_rows[:30])
         except Exception as exc:
-            recent_page.set_message_rows([(None, f"Alarm status unavailable: {exc}")])
+            recent_page.set_message_rows([(None, f"Monitoring status unavailable: {exc}")])
 
     timer = QTimer(window)
     timer.setInterval(2000)
