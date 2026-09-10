@@ -126,6 +126,26 @@ ON CONFLICT(source_id) DO UPDATE SET
         assert item is not None
         return self._emit_transition(item, previous)
 
+    def record_history_import(self, source) -> dict[str, Any]:
+        """Record backfill progress without changing live connectivity state."""
+        current = self.get(source.source_id)
+        if current is None:
+            return self.record_success(source, live=False, alarm=False, history=True)
+        at = self.now().astimezone(timezone.utc).isoformat()
+        with self.store._connection() as connection:
+            connection.execute(
+                """
+UPDATE source_health
+SET host = ?, last_history_import = ?, updated_at = ?
+WHERE source_id = ?
+""",
+                (source.host, at, at, source.source_id),
+            )
+        item = self.get(source.source_id)
+        assert item is not None
+        item["transition_message"] = None
+        return item
+
     def record_failure(self, source, error: str) -> dict[str, Any]:
         current = self.get(source.source_id)
         previous = str(current["state"]) if current else None
