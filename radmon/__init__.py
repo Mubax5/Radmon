@@ -47,12 +47,6 @@ from .production_integration_compat_revision import apply as _apply_production_i
 _apply_production_integration_compat_revision()
 del _apply_production_integration_compat_revision
 
-# PBKDF2 output remains fully compatible, with rare plaintext-looking encoded
-# substrings rejected so stored secrets remain unambiguous in audits/tests.
-from .security_encoding_revision import apply as _apply_security_encoding_revision
-_apply_security_encoding_revision()
-del _apply_security_encoding_revision
-
 # Production DATETIME values are WIB wall-clock values. Apply this last so all
 # generated Grafana queries use explicit WIB-to-UTC epoch conversion.
 from .grafana_wib_revision import apply as _apply_grafana_wib_revision
