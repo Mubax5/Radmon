@@ -1,6 +1,8 @@
 from datetime import datetime
+from types import SimpleNamespace
 
 from radmon.lan import LanAggregator, LanCheckpointStore, LanSource, parse_lan_sources
+from radmon.lan_runtime import LanRuntime
 from radmon.remote_alarm import RemoteAlarmMirror
 from radmon.security import SecurityStore
 
@@ -64,8 +66,20 @@ class FakeRemote:
             "meacount": len(self.rows),
         }]
 
+    def devices(self):
+        return [{
+            "serid": 5201,
+            "name": "IS-1",
+            "location": "Gd.52",
+            "warnlevel": 23,
+            "alarmlevel": 25,
+            "maxidlemin": 30,
+            "unit": "µSv/h",
+            "description": "prod",
+        }]
+
     def measurements_after(self, serid, after, limit):
-        return [row for row in self.rows if after is None or row["dtom"] > after][:limit]
+        return [row for row in self.rows if row["serid"] == serid and (after is None or row["dtom"] > after)][:limit]
 
     def alarms_after(self, checkpoint, limit=500):
         rows = sorted(self._alarms, key=lambda row: (row["dtoa"], row["serid"]))
@@ -199,3 +213,89 @@ def test_one_offline_source_does_not_define_other_source_result(tmp_path):
     results = aggregator.run_sources_once([bad, good])
     assert results[0].error == "offline"
     assert results[1].error is None
+
+
+def test_live_poll_never_imports_measurement_history(tmp_path):
+    store = SecurityStore(tmp_path / "security.db")
+    checkpoints = LanCheckpointStore(store)
+    source = LanSource("gd52", "192.168.1.52", 3306, "u", "p", "ipradmon")
+    rows = [
+        {"serid": 5201, "dtom": datetime(2026, 9, 8, 14, 0, second), "doserate": 1.0, "dose": 0.001, "previnterval": 2, "stat": 0}
+        for second in range(5)
+    ]
+    central = FakeCentral()
+    aggregator = LanAggregator(central, checkpoints, remote_factory=lambda value: FakeRemote(value, rows), batch_size=2)
+
+    result = aggregator.run_live_once(source)
+
+    assert result.error is None
+    assert result.live_stations == 1
+    assert result.inserted_measurements == 0
+    assert 5201 in central.live
+    assert central.measurements == {}
+    assert checkpoints.load("gd52", 5201) is None
+
+
+class MultiStationRemote:
+    def __init__(self, source, rows):
+        self.source = source
+        self.rows = rows
+
+    def devices(self):
+        return [
+            {"serid": 5201, "name": "IS-1", "location": "Gd.52", "warnlevel": 23, "alarmlevel": 25, "maxidlemin": 30, "unit": "µSv/h", "description": "prod"},
+            {"serid": 5202, "name": "IS-1 Koridor", "location": "Gd.52", "warnlevel": 8, "alarmlevel": 10, "maxidlemin": 30, "unit": "µSv/h", "description": "prod"},
+        ]
+
+    def measurements_after(self, serid, after, limit):
+        return [
+            row for row in self.rows
+            if row["serid"] == serid and (after is None or row["dtom"] > after)
+        ][:limit]
+
+
+def test_backfill_step_imports_only_one_selected_detector_batch(tmp_path):
+    store = SecurityStore(tmp_path / "security.db")
+    checkpoints = LanCheckpointStore(store)
+    source = LanSource("gd52", "192.168.1.52", 3306, "u", "p", "ipradmon")
+    rows = []
+    for serid in (5201, 5202):
+        rows.extend([
+            {"serid": serid, "dtom": datetime(2026, 9, 8, 14, 0, second), "doserate": 1.0, "dose": 0.001, "previnterval": 2, "stat": 0}
+            for second in range(3)
+        ])
+    central = FakeCentral()
+    aggregator = LanAggregator(central, checkpoints, remote_factory=lambda value: MultiStationRemote(value, rows), batch_size=2)
+
+    result = aggregator.run_backfill_once(source, station_index=1)
+
+    assert result.error is None
+    assert result.backfill_serid == 5202
+    assert result.inserted_measurements == 2
+    assert {serid for serid, _ in central.measurements} == {5202}
+    assert checkpoints.load("gd52", 5202) == datetime(2026, 9, 8, 14, 0, 1)
+    assert checkpoints.load("gd52", 5201) is None
+
+
+def test_runtime_starts_separate_live_and_backfill_workers(monkeypatch, tmp_path):
+    monkeypatch.setenv("RADMON_LAN_POLL_INTERVAL", "2")
+    monkeypatch.setenv("RADMON_BACKFILL_ENABLED", "1")
+    monkeypatch.setenv("RADMON_BACKFILL_BATCH_SIZE", "500")
+    monkeypatch.setenv("RADMON_BACKFILL_INTERVAL", "2")
+    source = LanSource("gd50", "192.168.1.50", 3306, "u", "p", "ipradmon")
+    services = SimpleNamespace(
+        security=SecurityStore(tmp_path / "security.db"),
+        sources={"gd50": source},
+        source_health=SimpleNamespace(),
+    )
+    runtime = LanRuntime(object(), services)
+    names = []
+    runtime._thread = lambda name, target: names.append(name)
+
+    runtime.start()
+
+    assert runtime.interval == 2.0
+    assert runtime.backfill_enabled is True
+    assert runtime.backfill_batch_size == 500
+    assert runtime.backfill_interval == 2.0
+    assert names == ["radmon-lan-live-gd50", "radmon-lan-backfill-gd50"]
