@@ -56,10 +56,12 @@ Tidak ada perubahan schema yang diwajibkan pada tiga database source production.
 Tiga source production yang sudah diverifikasi dari PC `.2`:
 
 ```text
-server50 -> 192.168.1.50:3306 / ipradmon
-server52 -> 192.168.1.52:3306 / ipradmon
-server38 -> 192.168.1.38:3306 / ipradmon
+gd50 -> 192.168.1.50:3306 / ipradmon
+gd52 -> 192.168.1.52:3306 / ipradmon
+gd38 -> 192.168.1.38:3306 / ipradmon
 ```
+
+Nama sebelum `@` adalah `source_id` internal RadMon dan harus unik/stabil; alamat setelah `@` adalah host MariaDB yang benar-benar dihubungi.
 
 Contoh `.env` pada PC `.2`:
 
@@ -69,34 +71,59 @@ RADMON_DB_HOST=localhost
 RADMON_DB_NAME=ipradmon
 
 RADMON_LAN_ENABLED=1
-RADMON_LAN_SOURCES=server50@192.168.1.50;server52@192.168.1.52;server38@192.168.1.38
+RADMON_LAN_SOURCES=gd50@192.168.1.50;gd52@192.168.1.52;gd38@192.168.1.38
 RADMON_LAN_DB_PORT=3306
 RADMON_LAN_DB_USER=isi-di-env-lokal
 RADMON_LAN_DB_PASSWORD=isi-di-env-lokal
 RADMON_LAN_DB_NAME=ipradmon
-RADMON_LAN_BATCH_SIZE=1000
+
 RADMON_LAN_POLL_INTERVAL=2
 RADMON_LAN_OFFLINE_AFTER_FAILURES=3
+
+RADMON_BACKFILL_ENABLED=1
+RADMON_BACKFILL_BATCH_SIZE=500
+RADMON_BACKFILL_INTERVAL=2
+
+RADMON_LAN_BATCH_SIZE=1000
 ```
 
 Credential production **tidak disimpan di Git**. Gunakan akun database khusus dengan privilege minimum setelah commissioning; jangan commit password/PIN/token.
 
 ### Alur pengambilan data
 
-Setiap source dipoll independen dengan cadence default **2 detik**. Urutan setiap cycle sengaja memprioritaskan monitoring:
+Pengambilan data dibagi menjadi dua worker independen per source.
+
+Realtime worker berjalan default setiap **2 detik**:
 
 ```text
 1. SELECT vrecent
    -> upsert central device + recent
 2. SELECT alarm baru setelah checkpoint
    -> mirror central alarm + sidecar
-3. tarik satu batch measurement per detector
-   -> simpan central measurement sebagai history
 ```
 
-History catch-up dibatasi satu batch per detector per cycle. Jadi walaupun first sync sedang mengejar jutaan row `measurement`, pembacaan `vrecent` dan alarm tidak ditahan sampai seluruh history selesai.
+History backfill berjalan terpisah di background:
 
-Jika satu server gagal, source lain tetap berjalan dan history central yang sudah tersimpan tidak dihapus.
+```text
+1. pilih satu detector pada source secara round-robin
+2. tarik maksimal RADMON_BACKFILL_BATCH_SIZE row measurement
+3. simpan ke central measurement
+4. simpan checkpoint source_id + production SERID
+5. giliran berikutnya pindah ke detector berikutnya
+```
+
+Dengan default `500`, tiap source hanya menarik maksimal 500 row history per giliran. Untuk tiga source berarti maksimal sekitar 1500 row per giliran, bukan 5000 row per source seperti collector lama. Setelah restart, posisi history setiap detector dilanjutkan dari checkpoint yang tersimpan; data yang sudah masuk tidak diambil ulang.
+
+`RADMON_LAN_BATCH_SIZE` dipertahankan untuk operasi maintenance/archive drain dan bukan ukuran normal staged backfill.
+
+Jika satu server gagal, source lain tetap berjalan dan history central yang sudah tersimpan tidak dihapus. Kegagalan backfill tidak mengubah state realtime secara palsu; konektivitas `CONNECTED/DEGRADED/OFFLINE/RECOVERED` ditentukan oleh worker realtime, sementara `last_history_import` hanya mencatat progres history.
+
+Contoh log:
+
+```text
+[LIVE] source=gd50 host=192.168.1.50 state=CONNECTED stations=5 alarms_new=0
+[BACKFILL] source=gd50 serid=3000 inserted=500 checkpoint=2026-06-22 13:02:14
+```
 
 ### SERID production authoritative
 
@@ -145,9 +172,9 @@ GET /api/v1/control/sources/health
 Contoh notifikasi:
 
 ```text
-[SERVER DEGRADED] server52 / 192.168.1.52 - connection error
-[SERVER OFFLINE] server52 / 192.168.1.52 - connection error
-[SERVER RECOVERED] server52 / 192.168.1.52
+[SERVER DEGRADED] gd52 / 192.168.1.52 - connection error
+[SERVER OFFLINE] gd52 / 192.168.1.52 - connection error
+[SERVER RECOVERED] gd52 / 192.168.1.52
 ```
 
 ## Alarm ACK / Response
@@ -158,7 +185,7 @@ Alarm production diidentifikasi dengan:
 remote SERID + dtoa
 ```
 
-Polling alarm berjalan setiap cycle LAN (default **2 detik**) dan incremental memakai checkpoint, bukan membaca seluruh history terus-menerus. Initial mirror alarm lama ditandai sebagai historical seed agar WhatsApp baru tidak mengirim ulang backlog lama.
+Polling alarm berjalan setiap cycle LAN realtime (default **2 detik**) dan incremental memakai checkpoint, bukan membaca seluruh history terus-menerus. Initial mirror alarm lama ditandai sebagai historical seed agar WhatsApp baru tidak mengirim ulang backlog lama.
 
 Operator/Administrator dapat mengisi:
 
