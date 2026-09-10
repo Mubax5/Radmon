@@ -291,12 +291,10 @@ def test_desktop_tree_has_source_grouping_helper_and_manuals_use_html():
 
     grouping = getattr(main_window, "group_stations_by_source", None)
     assert callable(grouping)
-
-    module_text = Path("radmon/admin/main_window.py").read_text(encoding="utf-8")
-    assert 'docs/manual/installation.html' in module_text
-    assert 'docs/manual/user-manual.html' in module_text
-    assert Path("docs/manual/installation.html").is_file()
-    assert Path("docs/manual/user-manual.html").is_file()
+    assert main_window.INSTALLATION_MANUAL_PATH == "docs/manual/installation.html"
+    assert main_window.USER_MANUAL_PATH == "docs/manual/user-manual.html"
+    assert Path(main_window.INSTALLATION_MANUAL_PATH).is_file()
+    assert Path(main_window.USER_MANUAL_PATH).is_file()
 
 
 def test_grouping_uses_source_mapping_not_serid_ranges():
@@ -326,11 +324,12 @@ def test_grafana_live_status_uses_database_threshold_columns_not_catalog_literal
     assert "FROM vrecent" in sql
 
 
-def test_live_collector_revision_inserts_current_vrecent_sample_into_measurement():
-    text = Path("radmon/lan_revision.py").read_text(encoding="utf-8")
-    assert "INSERT IGNORE INTO measurement" in text
-    live_section = text.split("def upsert_live_rows", 1)[1].split("def import_measurements", 1)[0]
-    assert "INSERT IGNORE INTO measurement" in live_section
+def test_live_collector_inserts_current_vrecent_sample_into_measurement():
+    import inspect
+    from radmon.lan import MariaCentralStore
+
+    source = inspect.getsource(MariaCentralStore.upsert_live_rows)
+    assert "INSERT IGNORE INTO measurement" in source
 
 
 def test_offline_status_is_not_sticky_after_new_measurement():
