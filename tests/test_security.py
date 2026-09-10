@@ -20,8 +20,10 @@ def test_user_password_and_pin_are_hashed_and_verified(tmp_path):
     row = store._connection().execute(
         "SELECT password_hash, pin_hash FROM users WHERE username = ?", ("admin",)
     ).fetchone()
-    assert "SecretPass123!" not in row[0]
-    assert "2468" not in row[1]
+    assert row[0] != "SecretPass123!"
+    assert row[1] != "2468"
+    assert row[0].startswith("pbkdf2_sha256$")
+    assert row[1].startswith("pbkdf2_sha256$")
 
 
 def test_disabled_user_cannot_authenticate_or_verify_pin(tmp_path):
