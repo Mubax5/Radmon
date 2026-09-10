@@ -10,7 +10,8 @@ def test_measurement_time_stat_uses_numeric_epoch_from_vrecent():
     assert len(timestamp) == 15
     for panel in timestamp:
         sql = panel["targets"][0]["rawSql"]
-        assert "UNIX_TIMESTAMP(dtom) * 1000" in sql
+        assert "TIMESTAMPDIFF" in sql
+        assert "CONVERT_TZ(dtom, '+07:00', '+00:00')" in sql
         assert "FROM vrecent" in sql
         assert "DATE_FORMAT" not in sql
         assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
