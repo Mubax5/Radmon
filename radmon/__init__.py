@@ -34,3 +34,9 @@ del _apply_grafana_revision
 from .grafana_bootstrap_revision import apply as _apply_grafana_bootstrap_revision
 _apply_grafana_bootstrap_revision()
 del _apply_grafana_bootstrap_revision
+
+# End-to-end production integration (source write-through, alarm i_flag,
+# PIN lease, live chart samples, grouped source UI, browser manuals).
+from .production_integration_revision import apply as _apply_production_integration_revision
+_apply_production_integration_revision()
+del _apply_production_integration_revision
