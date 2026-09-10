@@ -13,6 +13,13 @@ from .quarters import Quarter, quarter_for, quarters_overlapping
 LOGGER = logging.getLogger(__name__)
 
 
+def _enabled(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class LanRuntime:
     """Pull production LAN databases into central ipradmon and own archive rollover."""
 
@@ -31,8 +38,18 @@ class LanRuntime:
         self.archive_service = archive_service
         self.stop_event = threading.Event()
         self.threads: list[threading.Thread] = []
+
+        # Realtime always owns vrecent + alarm polling and must stay lightweight.
         self.interval = max(0.5, float(os.getenv("RADMON_LAN_POLL_INTERVAL", "2")))
+
+        # Keep the legacy batch setting for archive drain/maintenance behavior.
         self.batch_size = max(1, int(os.getenv("RADMON_LAN_BATCH_SIZE", "1000")))
+
+        # Historical measurement catch-up is intentionally independent from realtime.
+        self.backfill_enabled = _enabled("RADMON_BACKFILL_ENABLED", True)
+        self.backfill_batch_size = max(1, int(os.getenv("RADMON_BACKFILL_BATCH_SIZE", "500")))
+        self.backfill_interval = max(0.5, float(os.getenv("RADMON_BACKFILL_INTERVAL", "2")))
+
         configured_archive_interval = getattr(settings, "archive_check_interval", 60.0)
         self.archive_check_interval = max(
             5.0,
@@ -51,23 +68,23 @@ class LanRuntime:
         thread.start()
         self.threads.append(thread)
 
-    def _aggregator(self) -> LanAggregator:
+    def _aggregator(self, batch_size: int | None = None) -> LanAggregator:
         return LanAggregator(
             self.central,
             self.checkpoints,
             remote_factory=lambda item: RemoteMariaDBSource(item),
             alarm_mirror=self.services.alarm_mirror,
-            batch_size=self.batch_size,
+            batch_size=self.batch_size if batch_size is None else max(1, int(batch_size)),
         )
 
-    def _run_source(self, source) -> None:
+    def _run_live_source(self, source) -> None:
         aggregator = self._aggregator()
         while not self.stop_event.is_set():
-            result = aggregator.run_source_once(source)
+            result = aggregator.run_live_once(source)
             if result.error:
                 state = self.services.source_health.record_failure(source, result.error)
                 LOGGER.warning(
-                    "LAN source=%s host=%s state=%s error=%s",
+                    "[LIVE] source=%s host=%s state=%s error=%s",
                     source.source_id,
                     source.host,
                     state["state"],
@@ -78,18 +95,49 @@ class LanRuntime:
                     source,
                     live=True,
                     alarm=True,
-                    history=True,
+                    history=False,
                 )
-                if result.inserted_measurements or result.mirrored_alarms or state.get("transition_message"):
-                    LOGGER.info(
-                        "LAN source=%s host=%s state=%s measurements=%s alarms=%s",
-                        source.source_id,
-                        source.host,
-                        state["state"],
-                        result.inserted_measurements,
-                        result.mirrored_alarms,
-                    )
+                LOGGER.info(
+                    "[LIVE] source=%s host=%s state=%s stations=%s alarms_new=%s",
+                    source.source_id,
+                    source.host,
+                    state["state"],
+                    result.live_stations,
+                    result.mirrored_alarms,
+                )
             self.stop_event.wait(self.interval)
+
+    def _run_backfill_source(self, source) -> None:
+        aggregator = self._aggregator(self.backfill_batch_size)
+        station_index = 0
+        while not self.stop_event.is_set():
+            result = aggregator.run_backfill_once(source, station_index=station_index)
+            station_index += 1
+            if result.error:
+                LOGGER.warning(
+                    "[BACKFILL] source=%s host=%s error=%s",
+                    source.source_id,
+                    source.host,
+                    result.error,
+                )
+            elif result.backfill_serid is not None:
+                if result.inserted_measurements > 0:
+                    self.services.source_health.record_history_import(source)
+                    LOGGER.info(
+                        "[BACKFILL] source=%s serid=%s inserted=%s checkpoint=%s",
+                        source.source_id,
+                        result.backfill_serid,
+                        result.inserted_measurements,
+                        result.checkpoint,
+                    )
+                else:
+                    LOGGER.debug(
+                        "[BACKFILL] source=%s serid=%s caught_up checkpoint=%s",
+                        source.source_id,
+                        result.backfill_serid,
+                        result.checkpoint,
+                    )
+            self.stop_event.wait(self.backfill_interval)
 
     def _run_whatsapp(self) -> None:
         while not self.stop_event.is_set():
@@ -218,12 +266,27 @@ class LanRuntime:
 
     def start(self) -> None:
         for source in self.services.sources.values():
-            self._thread(f"radmon-lan-{source.source_id}", lambda active=source: self._run_source(active))
+            self._thread(
+                f"radmon-lan-live-{source.source_id}",
+                lambda active=source: self._run_live_source(active),
+            )
+            if self.backfill_enabled:
+                self._thread(
+                    f"radmon-lan-backfill-{source.source_id}",
+                    lambda active=source: self._run_backfill_source(active),
+                )
         if self.whatsapp_dispatcher is not None:
             self._thread("radmon-whatsapp", self._run_whatsapp)
         if self.archive_service is not None:
             self._thread("radmon-quarter-archive", self._run_archive_lifecycle)
-        LOGGER.info("LAN runtime started sources=%s interval=%ss", len(self.services.sources), self.interval)
+        LOGGER.info(
+            "LAN runtime started sources=%s live_interval=%ss backfill=%s backfill_batch=%s backfill_interval=%ss",
+            len(self.services.sources),
+            self.interval,
+            "enabled" if self.backfill_enabled else "disabled",
+            self.backfill_batch_size,
+            self.backfill_interval,
+        )
 
     def stop(self) -> None:
         self.stop_event.set()
