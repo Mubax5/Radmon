@@ -63,12 +63,15 @@ def test_page_one_live_values_and_times_use_vrecent_but_sparkline_keeps_measurem
         assert panel["fieldConfig"]["defaults"]["unit"] == "suffix: µSv/h"
     for panel in spark:
         assert panel["type"] == "timeseries"
-        assert "FROM measurement" in panel["targets"][0]["rawSql"]
-        assert "$__timeFilter(m.dtom)" in panel["targets"][0]["rawSql"]
+        sql = panel["targets"][0]["rawSql"]
+        assert "FROM measurement" in sql
+        assert "CONVERT_TZ(m.dtom, '+07:00', '+00:00')" in sql
+        assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
     for panel in timestamp:
         sql = panel["targets"][0]["rawSql"]
         assert "FROM vrecent" in sql
-        assert "UNIX_TIMESTAMP(dtom) * 1000" in sql
+        assert "TIMESTAMPDIFF" in sql
+        assert "CONVERT_TZ(dtom, '+07:00', '+00:00')" in sql
         assert "DATE_FORMAT" not in sql
         assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
 
@@ -81,7 +84,8 @@ def test_page_two_historical_trends_keep_measurement_and_live_summary_uses_vrece
     for panel in trends:
         sql = panel["targets"][0]["rawSql"]
         assert "FROM measurement" in sql
-        assert "$__timeFilter(m.dtom)" in sql
+        assert "CONVERT_TZ(m.dtom, '+07:00', '+00:00')" in sql
+        assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
     summaries = {
         panel.get("title"): panel
         for panel in page2["panels"]
