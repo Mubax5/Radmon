@@ -46,3 +46,9 @@ del _apply_production_integration_revision
 from .production_integration_compat_revision import apply as _apply_production_integration_compat_revision
 _apply_production_integration_compat_revision()
 del _apply_production_integration_compat_revision
+
+# PBKDF2 output remains fully compatible, with rare plaintext-looking encoded
+# substrings rejected so stored secrets remain unambiguous in audits/tests.
+from .security_encoding_revision import apply as _apply_security_encoding_revision
+_apply_security_encoding_revision()
+del _apply_security_encoding_revision
