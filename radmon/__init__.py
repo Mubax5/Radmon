@@ -41,11 +41,17 @@ from .production_integration_revision import apply as _apply_production_integrat
 _apply_production_integration_revision()
 del _apply_production_integration_revision
 
-# Narrow compatibility guards applied last so legacy test/adaptor contracts do
-# not weaken the deployed RemoteMariaDBSource production path.
+# Narrow compatibility guards ensure legacy/synthetic adapters do not weaken
+# the deployed RemoteMariaDBSource production path.
 from .production_integration_compat_revision import apply as _apply_production_integration_compat_revision
 _apply_production_integration_compat_revision()
 del _apply_production_integration_compat_revision
+
+# Explicit LAN enablement gates source writes, desktop logout revokes sensitive
+# elevation, and active alarm state is reconciled against each source.
+from .production_safety_revision import apply as _apply_production_safety_revision
+_apply_production_safety_revision()
+del _apply_production_safety_revision
 
 # Production DATETIME values are WIB wall-clock values. Apply this last so all
 # generated Grafana queries use explicit WIB-to-UTC epoch conversion.
