@@ -40,3 +40,9 @@ del _apply_grafana_bootstrap_revision
 from .production_integration_revision import apply as _apply_production_integration_revision
 _apply_production_integration_revision()
 del _apply_production_integration_revision
+
+# Narrow compatibility guards applied last so legacy test/adaptor contracts do
+# not weaken the deployed RemoteMariaDBSource production path.
+from .production_integration_compat_revision import apply as _apply_production_integration_compat_revision
+_apply_production_integration_compat_revision()
+del _apply_production_integration_compat_revision
