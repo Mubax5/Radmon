@@ -18,6 +18,7 @@ LIVE_KEYS = (
 class LivePullResult:
     source_id: str
     live_stations: int = 0
+    inserted_measurements: int = 0
     mirrored_alarms: int = 0
     error: str | None = None
 
