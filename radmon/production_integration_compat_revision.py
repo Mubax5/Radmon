@@ -13,6 +13,7 @@ def apply() -> None:
     _patch_sensitive_pin_semantics()
     _patch_optional_alarm_state_adapter()
     _patch_alarm_control_adapter_compatibility()
+    _patch_lan_station_dialog_identity_fields()
 
 
 def _patch_sensitive_pin_semantics() -> None:
@@ -147,3 +148,106 @@ def _patch_alarm_control_adapter_compatibility() -> None:
         return after
 
     module.AlarmControlService.ack = ack
+
+
+def _patch_lan_station_dialog_identity_fields() -> None:
+    """Replace the earlier LAN dialog wrapper with the real widget names.
+
+    The base dialog already makes SERID read-only in LAN mode. This copy keeps
+    that behavior and additionally disables hardware source identity fields.
+    """
+    try:
+        from PySide6.QtWidgets import (
+            QDialogButtonBox,
+            QDoubleSpinBox,
+            QFileDialog,
+            QFormLayout,
+            QHBoxLayout,
+            QLineEdit,
+            QPlainTextEdit,
+            QPushButton,
+            QSpinBox,
+            QTabWidget,
+            QVBoxLayout,
+            QWidget,
+        )
+        from .admin import station_admin_dialog as module
+    except Exception:
+        return
+
+    def init(
+        self,
+        device_admin,
+        identity,
+        station: dict,
+        parent=None,
+        *,
+        source: str = "detector",
+        is_new: bool = False,
+    ) -> None:
+        module.QDialog.__init__(self, parent)
+        self.device_admin = device_admin
+        self.identity = identity
+        self.station = dict(station)
+        self.source = source
+        self.is_new = bool(is_new)
+        self.setWindowTitle("New station..." if self.is_new else "Station properties")
+        self.setWindowIcon(module.silk_icon("feed"))
+        self.setMinimumWidth(430)
+
+        self.serid = QSpinBox()
+        self.serid.setRange(1, 2_147_483_647)
+        self.serid.setValue(max(1, int(station.get("serid") or 1)))
+        if source == "lan":
+            self.serid.setEnabled(False)
+            self.serid.setToolTip("LAN SERID is authoritative from the production device table.")
+
+        self.name = QLineEdit(str(station.get("name") or ""))
+        self.location = QLineEdit(str(station.get("location") or ""))
+        self.description = QPlainTextEdit(str(station.get("description") or ""))
+        self.description.setMaximumHeight(90)
+
+        self.warn = QDoubleSpinBox()
+        self.warn.setRange(0, 1_000_000)
+        self.warn.setDecimals(6)
+        self.warn.setValue(float(station.get("warnlevel") or 0))
+        self.alarm = QDoubleSpinBox()
+        self.alarm.setRange(0, 1_000_000)
+        self.alarm.setDecimals(6)
+        self.alarm.setValue(float(station.get("alarmlevel") or 0))
+        self.maxidle = QSpinBox()
+        self.maxidle.setRange(1, 1440)
+        self.maxidle.setValue(int(station.get("maxidlemin") or 30))
+
+        self.audio_path = QLineEdit(str(station.get("audiopath") or ""))
+        audio_browse = QPushButton("...")
+        audio_browse.clicked.connect(self._choose_audio)
+        audio_row = QWidget()
+        audio_layout = QHBoxLayout(audio_row)
+        audio_layout.setContentsMargins(0, 0, 0, 0)
+        audio_layout.addWidget(self.audio_path, 1)
+        audio_layout.addWidget(audio_browse)
+
+        self.hw_type = QLineEdit(str(station.get("hwtype") or "detector"))
+        self.hw_address = QLineEdit(str(station.get("hwaddress") or ""))
+        self.unit = QLineEdit(str(station.get("unit") or "µSv/h"))
+        if source == "lan":
+            self.hw_type.setEnabled(False)
+            self.hw_address.setEnabled(False)
+            self.hw_type.setToolTip("Identity hardware dikelola oleh source LAN.")
+            self.hw_address.setToolTip("Identity hardware dikelola oleh source LAN.")
+
+        tabs = QTabWidget()
+        tabs.addTab(self._attributes_tab(), "Attributes")
+        tabs.addTab(self._alarm_tab(audio_row), "Alarm")
+        tabs.addTab(self._hardware_tab(), "Hardware")
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(tabs)
+        layout.addWidget(buttons)
+
+    module.StationAdminDialog.__init__ = init
