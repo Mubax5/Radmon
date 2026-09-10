@@ -1,6 +1,7 @@
 """Production LAN collector behavior for the deployed ipradmon schema."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -11,6 +12,23 @@ LIVE_KEYS = (
     "minrate", "maxrate", "avgrate", "lastdose", "mindose", "maxdose",
     "avgdose", "lastmea", "lastmeasec", "meacount", "firstmea",
 )
+
+
+@dataclass(slots=True)
+class LivePullResult:
+    source_id: str
+    live_stations: int = 0
+    mirrored_alarms: int = 0
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class BackfillPullResult:
+    source_id: str
+    backfill_serid: int | None = None
+    inserted_measurements: int = 0
+    checkpoint: datetime | None = None
+    error: str | None = None
 
 
 def apply() -> None:
@@ -211,15 +229,12 @@ ON DUPLICATE KEY UPDATE
         finally:
             connection.close()
 
-    def run_source_once(self, source):
-        result = lan.PullResult(source.source_id)
+    def run_live_once(self, source):
+        result = LivePullResult(source.source_id)
         try:
             remote = self.remote_factory(source)
-
-            # Live state is authoritative and always processed first.
             raw_live = remote.live_rows()
             mapped_live: list[dict[str, Any]] = []
-            station_pairs: list[tuple[int, int]] = []
             for row in raw_live:
                 remote_serid = int(row["serid"])
                 central_serid = self.checkpoints.store.resolve_station(source.source_id, remote_serid)
@@ -227,11 +242,10 @@ ON DUPLICATE KEY UPDATE
                 item["_remote_serid"] = remote_serid
                 item["serid"] = central_serid
                 mapped_live.append(item)
-                station_pairs.append((remote_serid, central_serid))
             if hasattr(self.central, "upsert_live_rows"):
                 self.central.upsert_live_rows(source.source_id, mapped_live)
+            result.live_stations = len(mapped_live)
 
-            # Alarm polling is incremental and precedes history catch-up.
             alarm_checkpoint = self.checkpoints.load_alarm(source.source_id)
             raw_alarms = remote.alarms_after(alarm_checkpoint, 500)
             historical_seed = alarm_checkpoint is None
@@ -251,22 +265,49 @@ ON DUPLICATE KEY UPDATE
             if raw_alarms:
                 last_alarm = raw_alarms[-1]
                 self.checkpoints.save_alarm(source.source_id, last_alarm["dtoa"], int(last_alarm["serid"]))
-
-            # History uses one bounded batch per detector per cycle, so millions
-            # of old rows never block the next 2-second live/alarm poll.
-            for remote_serid, central_serid in station_pairs:
-                after = self.checkpoints.load(source.source_id, remote_serid)
-                remote_rows = remote.measurements_after(remote_serid, after, self.batch_size)
-                if not remote_rows:
-                    continue
-                central_rows = [dict(row, serid=central_serid) for row in remote_rows]
-                result.inserted_measurements += int(self.central.import_measurements(source.source_id, central_rows))
-                last_time = remote_rows[-1].get("dtom")
-                if not isinstance(last_time, datetime):
-                    raise ValueError("remote measurement time tidak valid")
-                self.checkpoints.save(source.source_id, remote_serid, last_time)
         except Exception as exc:
             result.error = str(exc)
+        return result
+
+    def run_backfill_once(self, source, station_index: int = 0):
+        result = BackfillPullResult(source.source_id)
+        try:
+            remote = self.remote_factory(source)
+            devices = sorted(remote.devices(), key=lambda row: int(row["serid"]))
+            if not devices:
+                return result
+            selected = devices[int(station_index) % len(devices)]
+            remote_serid, central_serid = self._ensure_device(source, selected)
+            result.backfill_serid = remote_serid
+            after = self.checkpoints.load(source.source_id, remote_serid)
+            result.checkpoint = after
+            remote_rows = remote.measurements_after(remote_serid, after, self.batch_size)
+            if not remote_rows:
+                return result
+            central_rows = [dict(row, serid=central_serid) for row in remote_rows]
+            result.inserted_measurements = int(
+                self.central.import_measurements(source.source_id, central_rows)
+            )
+            last_time = remote_rows[-1].get("dtom")
+            if not isinstance(last_time, datetime):
+                raise ValueError("remote measurement time tidak valid")
+            self.checkpoints.save(source.source_id, remote_serid, last_time)
+            result.checkpoint = last_time
+        except Exception as exc:
+            result.error = str(exc)
+        return result
+
+    def run_source_once(self, source):
+        """Compatibility helper: one live/alarm poll plus one detector backfill step."""
+        result = lan.PullResult(source.source_id)
+        live_result = run_live_once(self, source)
+        result.mirrored_alarms = live_result.mirrored_alarms
+        if live_result.error:
+            result.error = live_result.error
+            return result
+        backfill_result = run_backfill_once(self, source, 0)
+        result.inserted_measurements = backfill_result.inserted_measurements
+        result.error = backfill_result.error
         return result
 
     lan.RemoteMariaDBSource.live_rows = live_rows
@@ -277,4 +318,6 @@ ON DUPLICATE KEY UPDATE
     lan.MariaCentralStore.upsert_live_rows = upsert_live_rows
     lan.MariaCentralStore.import_measurements = import_measurements
     lan.MariaCentralStore.mirror_alarm_events = mirror_alarm_events
+    lan.LanAggregator.run_live_once = run_live_once
+    lan.LanAggregator.run_backfill_once = run_backfill_once
     lan.LanAggregator.run_source_once = run_source_once
