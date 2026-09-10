@@ -189,21 +189,22 @@ def test_realtime_measurement_time_uses_numeric_epoch_for_grafana_datetime():
     assert len(time_panels) == 15
     for panel in time_panels:
         sql = panel["targets"][0]["rawSql"]
-        assert "UNIX_TIMESTAMP(dtom) * 1000" in sql
+        assert "TIMESTAMPDIFF" in sql
+        assert "CONVERT_TZ(dtom, '+07:00', '+00:00')" in sql
         assert "FROM vrecent" in sql
         assert "DATE_FORMAT" not in sql
         assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
         assert panel["options"]["text"]["valueSize"] <= 12
 
 
-def test_trend_page_uses_readable_one_microsievert_scale_and_larger_summary_values():
+def test_trend_page_auto_scales_above_one_microsievert_and_keeps_large_summaries():
     dashboard = build_page_two()
     trend_panels = [panel for panel in dashboard["panels"] if panel.get("description") == "building-dose-trend"]
     assert len(trend_panels) == 5
     for panel in trend_panels:
         defaults = panel["fieldConfig"]["defaults"]
         assert defaults["min"] == 0
-        assert defaults["max"] == 1
+        assert "max" not in defaults
         assert defaults["unit"] == "suffix: µSv/h"
         assert "FROM measurement" in panel["targets"][0]["rawSql"]
     summary_titles = {"Dose Rate Tertinggi Saat Ini", "Rata-rata Saat Ini", "Detector Online", "Detector Offline"}
