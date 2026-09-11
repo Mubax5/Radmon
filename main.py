@@ -38,8 +38,7 @@ def main() -> int:
     lock = SingleInstanceLock(settings.single_instance_port)
     if not lock.acquire():
         QMessageBox.critical(
-            None,
-            "Radiation Monitoring",
+            None, "Radiation Monitoring",
             "Radiation Monitoring sudah berjalan. Tutup aplikasi yang aktif sebelum membuka mode lain.",
         )
         return 2
@@ -88,6 +87,8 @@ def main() -> int:
             device_admin=secure.device_admin,
             user_admin=secure.user_admin,
             source_health=secure.source_health,
+            alarm_policy=secure.alarm_policy,
+            alarm_suppression=secure.alarm_suppression,
         )
     )
 
@@ -111,25 +112,15 @@ def main() -> int:
         )
         report_service = ReportService(report_repository, settings)
     else:
-        report_service = ReportService(
-            repository,
-            settings,
-            summary_reader=active_summary_reader,
-        )
+        report_service = ReportService(repository, settings, summary_reader=active_summary_reader)
 
     runtime = None
     if args.source != "lan":
         runtime = ApplicationRuntime(repository, settings, alarm_service, args.source)
 
     window = MainWindow(
-        repository,
-        report_service,
-        alarm_service,
-        settings,
-        log_path,
-        source=args.source,
-        archive_catalog=archive_catalog,
-        runtime=runtime,
+        repository, report_service, alarm_service, settings, log_path,
+        source=args.source, archive_catalog=archive_catalog, runtime=runtime,
     )
     install_window_security(window)
 
