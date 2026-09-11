@@ -34,6 +34,12 @@ def main() -> int:
     MariaDBRepository(settings).require_schema()
 
     services = build_secure_services(settings)
+    # Runtime policy status is projected only to the central database. Restore
+    # persisted policy state before any LAN worker can evaluate/notify a fresh
+    # alarm; the policy notification gate reopens after the first live cycle.
+    services.runtime_status_projector.ensure_schema()
+    services.alarm_policy.restore_and_reconcile_current_state()
+
     archive_catalog = ArchiveCatalog(
         services.security,
         settings.archive_dir,
