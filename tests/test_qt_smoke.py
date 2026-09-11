@@ -16,7 +16,7 @@ from PySide6.QtPrintSupport import QPrinter
 from PySide6.QtWidgets import QApplication
 
 from radmon.admin.chart_page import ChartPage
-from radmon.admin.icons import silk_icon
+from radmon.admin.icons import app_icon
 from radmon.admin.reports_page import ReportsPage
 from radmon.config import Settings
 from radmon.reports import ReportService
@@ -56,10 +56,13 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-def test_silk_qicons_load_from_vendored_pngs():
+def test_semantic_tabler_qicons_load_from_vendored_svgs():
     app()
-    for name in ("clock", "table", "chart_line", "report", "lock", "monitor"):
-        assert not silk_icon(name).isNull()
+    for slot in (
+        "recent", "tabular", "chart", "reports", "alarm", "monitoring",
+        "station_group", "detector", "suppress_alarm",
+    ):
+        assert not app_icon(slot).isNull(), slot
 
 
 def test_chart_page_constructs_and_refreshes_offscreen():
