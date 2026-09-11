@@ -8,29 +8,57 @@ from typing import Any
 
 
 class WhatsAppAlarmDispatcher:
-    def __init__(self, mirror, sender, *, now=None) -> None:
-        self.mirror = mirror
+    """Dispatch operator-facing policy ALARMs exactly once.
+
+    The legacy raw-mirror fallback remains for old adapters/tests, but central
+    runtime wiring passes AlarmPolicyService and therefore never sends directly
+    from source/backfill alarm rows.
+    """
+
+    def __init__(self, policy, sender, *, now=None) -> None:
+        self.policy = policy
         self.sender = sender
         self.now = now or datetime.now
 
     @staticmethod
     def _message(item: dict[str, Any]) -> str:
-        when = item.get("event_time")
+        when = item.get("surfaced_at", item.get("event_time"))
         when_text = when.strftime("%Y-%m-%d %H:%M:%S") if hasattr(when, "strftime") else str(when)
         measured = item.get("measured_value")
         threshold = item.get("threshold")
         measured_text = "-" if measured is None else f"{float(measured):.2f}"
         threshold_text = "-" if threshold is None else f"{float(threshold):.2f}"
+        trigger_index = item.get("trigger_index")
+        trigger = f" #{int(trigger_index)}" if trigger_index is not None else ""
+        source = item.get("source_id") or "central"
         return (
-            f"[{item.get('source_id')}] Alarm RadMon {when_text} WIB, "
-            f"{item.get('level')} [serid:{item.get('serid')}]: "
-            f"{measured_text} uSv/h > {threshold_text} uSv/h, "
-            f"{int(item.get('hit_count') or 0)} time(s)"
+            f"[{source}] ALARM RadMon{trigger} {when_text} WIB, "
+            f"[serid:{item.get('serid')}]: {measured_text} µSv/h >= "
+            f"{threshold_text} µSv/h"
         )
 
-    def run_once(self) -> int:
+    def _run_policy_once(self) -> int:
         sent = 0
-        for item in reversed(self.mirror.list_alarms(limit=500)):
+        for item in self.policy.list_events(
+            active_only=True, notify_pending_only=True, limit=500
+        ):
+            if str(item.get("kind")) != "ALARM":
+                continue
+            if str(item.get("status")) != "ACTIVE":
+                continue
+            if item.get("notification_sent_at") is not None:
+                continue
+            try:
+                self.sender.send(self._message(item))
+            except Exception:
+                continue
+            self.policy.mark_notification_sent(str(item["event_id"]), self.now())
+            sent += 1
+        return sent
+
+    def _run_legacy_once(self) -> int:
+        sent = 0
+        for item in reversed(self.policy.list_alarms(limit=500)):
             if item.get("level") not in {"ALERT", "ALARM"}:
                 continue
             if item.get("notification_sent_at") is not None:
@@ -39,14 +67,16 @@ class WhatsAppAlarmDispatcher:
                 self.sender.send(self._message(item))
             except Exception:
                 continue
-            self.mirror.mark_notification_sent(
-                str(item["source_id"]),
-                int(item["serid"]),
-                item["event_time"],
-                self.now(),
+            self.policy.mark_notification_sent(
+                str(item["source_id"]), int(item["serid"]), item["event_time"], self.now(),
             )
             sent += 1
         return sent
+
+    def run_once(self) -> int:
+        if hasattr(self.policy, "list_events"):
+            return self._run_policy_once()
+        return self._run_legacy_once()
 
 
 class SeleniumWhatsAppSender:
