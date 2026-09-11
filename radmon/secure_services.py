@@ -5,11 +5,15 @@ import os
 from pathlib import Path
 from typing import Any
 
+from .alarm_policy import AlarmPolicyService
+from .alarm_policy_store import AlarmPolicyStore
+from .alarm_suppression import AlarmSuppressionService
 from .application_log import MariaApplicationLogWriter
 from .audit import AuditTrail
 from .device_admin import DeviceAdminService, MariaDeviceAdminRepository
 from .lan import LanSource, RemoteMariaDBSource, parse_lan_sources
 from .remote_alarm import AlarmControlService, RemoteAlarmMirror
+from .runtime_status import RuntimeStatusProjector
 from .security import SecurityStore
 from .source_health import SourceHealthService
 from .user_admin import UserAdminService
@@ -25,6 +29,10 @@ class SecureServices:
     user_admin: UserAdminService
     sources: dict[str, LanSource]
     source_health: SourceHealthService | None = None
+    alarm_policy_store: AlarmPolicyStore | None = None
+    alarm_policy: AlarmPolicyService | None = None
+    alarm_suppression: AlarmSuppressionService | None = None
+    runtime_status_projector: RuntimeStatusProjector | None = None
 
 
 def security_db_path(settings) -> Path:
@@ -36,7 +44,14 @@ def build_secure_services(settings) -> SecureServices:
     security = SecurityStore(security_db_path(settings))
     logger = MariaApplicationLogWriter(settings)
     audit = AuditTrail(security, logger)
+
+    policy_store = AlarmPolicyStore(security)
+    policy_store.ensure_schema()
+    projector = RuntimeStatusProjector(settings)
+    policy = AlarmPolicyService(policy_store, audit, projector=projector)
+
     mirror = RemoteAlarmMirror(security)
+    mirror.policy_store = policy_store
     sources = {source.source_id: source for source in parse_lan_sources()}
 
     def health_transition(item: dict[str, Any]) -> None:
@@ -74,6 +89,17 @@ def build_secure_services(settings) -> SecureServices:
         audit,
         remote_factory=remote_factory,
     )
+    alarm_control.policy_store = policy_store
+    alarm_control.policy = policy
+
+    suppression = AlarmSuppressionService(
+        security,
+        policy_store,
+        policy,
+        audit,
+        alarm_control=alarm_control,
+    )
+
     device_admin = DeviceAdminService(
         security,
         MariaDeviceAdminRepository(settings),
@@ -98,4 +124,8 @@ def build_secure_services(settings) -> SecureServices:
         user_admin=user_admin,
         sources=sources,
         source_health=source_health,
+        alarm_policy_store=policy_store,
+        alarm_policy=policy,
+        alarm_suppression=suppression,
+        runtime_status_projector=projector,
     )
