@@ -19,7 +19,10 @@ def apply() -> None:
 
         def assign(item) -> None:
             serid = item.data(0, Qt.UserRole)
-            item.setIcon(0, app_icon("detector" if serid is not None else "station_group"))
+            if serid is not None:
+                item.setIcon(0, app_icon("detector"))
+            else:
+                item.setIcon(0, app_icon("station_group"))
             for index in range(item.childCount()):
                 assign(item.child(index))
 
