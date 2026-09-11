@@ -96,9 +96,6 @@ def install_window_security(window) -> None:
                     if str(item.get("state")) != "CONNECTED":
                         message_rows.append((item.get("updated_at"), _format_source_health(item)))
             if context.alarm_policy is not None:
-                # Audible/operator alarm strip contains only active policy ALARM
-                # events. SUPPRESSED/LOCKED states are rendered as status rows
-                # and never masquerade as a new alarm.
                 rows = context.alarm_policy.list_events(active_only=True, limit=20)
                 message_rows.extend(
                     (item.get("surfaced_at"), _format_active_alarm(item))
@@ -180,7 +177,7 @@ def install_window_security(window) -> None:
     ):
         from .admin.suppression_dialog import SuppressionDialog
 
-        suppress_action = QAction(app_icon("alarm_response"), "Suppress Alarm...", window)
+        suppress_action = QAction(app_icon("suppress_alarm"), "Suppress Alarm...", window)
 
         def open_suppression() -> None:
             try:
