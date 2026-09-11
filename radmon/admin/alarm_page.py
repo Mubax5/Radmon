@@ -33,7 +33,7 @@ class AlarmPage(QWidget):
         "Underlying",
         "Threshold",
         "Dose rate",
-        "Trigger",
+        "Hit count",
         "Action Time",
         "PIC",
         "Action",
@@ -71,11 +71,11 @@ class AlarmPage(QWidget):
         can_operate = bool(
             context and context.identity.role in {Role.ADMINISTRATOR, Role.OPERATOR}
         )
-        self.ack_button = QPushButton(app_icon("alarm_response"), "ACK / Response")
+        self.ack_button = QPushButton(app_icon("alarm"), "ACK / Response")
         self.ack_button.clicked.connect(self._ack_selected)
         self.ack_button.setEnabled(can_operate)
 
-        self.suppress_button = QPushButton(app_icon("alarm_response"), "Suppress Alarm...")
+        self.suppress_button = QPushButton(app_icon("suppress_alarm"), "Suppress Alarm...")
         self.suppress_button.clicked.connect(self._suppress_alarm)
         self.suppress_button.setEnabled(
             bool(can_operate and context and context.alarm_suppression is not None)
