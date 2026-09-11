@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from ..security import UserIdentity
 from .auth_dialogs import PinDialog
-from .icons import silk_icon
+from .icons import app_icon
 
 
 class StationAdminDialog(QDialog):
@@ -40,7 +40,7 @@ class StationAdminDialog(QDialog):
         self.source = source
         self.is_new = bool(is_new)
         self.setWindowTitle("New station..." if self.is_new else "Station properties")
-        self.setWindowIcon(silk_icon("feed"))
+        self.setWindowIcon(app_icon("station_properties"))
         self.setMinimumWidth(430)
 
         self.serid = QSpinBox()
