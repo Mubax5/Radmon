@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from ..security import UserIdentity
 from .auth_dialogs import PinDialog
-from .icons import app_icon
+from .icons import app_icon, silk_icon
 
 
 class StationAdminDialog(QDialog):
