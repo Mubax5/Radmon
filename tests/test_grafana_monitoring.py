@@ -176,7 +176,10 @@ def test_grafana_tv_uses_three_logical_pages_with_five_operations_variants():
     payload = json.dumps(dashboards, ensure_ascii=False)
     for relation in ("device", "measurement", "vrecent", "alarm"):
         assert relation in payload
-    assert "radmon_" not in payload
+    assert "radmon_runtime_status" in payload
+    # The runtime-status table is the only intentional central radmon_* SQL
+    # relation. Keep rejecting accidental reintroduction of older radmon_* views.
+    assert "radmon_" not in payload.replace("radmon_runtime_status", "")
     assert "REAL TIME DOSE RATE MONITORING SYSTEM" in payload
     assert "µSv/h" in payload
     assert "Dose Rate · Gedung" in payload
