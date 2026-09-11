@@ -21,7 +21,7 @@ from ..secure_context import get_context
 from ..security import Role
 from .alarm_response_dialog import AlarmResponseDialog
 from .auth_dialogs import PinDialog
-from .icons import silk_icon
+from .icons import app_icon
 
 
 class AlarmPage(QWidget):
@@ -64,7 +64,7 @@ class AlarmPage(QWidget):
         self.table.setHorizontalHeaderLabels(self.HEADERS)
         self.table.horizontalHeader().setStretchLastSection(True)
 
-        self.ack_button = QPushButton(silk_icon("lock"), "ACK / Response")
+        self.ack_button = QPushButton(app_icon("alarm"), "ACK / Response")
         self.ack_button.clicked.connect(self._ack_selected)
         context = get_context()
         self.ack_button.setEnabled(
