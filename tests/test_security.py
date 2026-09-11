@@ -47,6 +47,13 @@ def test_role_permission_matrix(tmp_path):
     assert store.role_allows(Role.VIEWER, "view")
 
 
+def test_suppress_alarm_permission_matrix(tmp_path):
+    store = SecurityStore(tmp_path / "security.db")
+    assert store.role_allows(Role.ADMINISTRATOR, "suppress_alarm")
+    assert store.role_allows(Role.OPERATOR, "suppress_alarm")
+    assert not store.role_allows(Role.VIEWER, "suppress_alarm")
+
+
 def test_session_is_opaque_and_expires(tmp_path):
     now = datetime(2026, 9, 8, 7, 0, tzinfo=timezone.utc)
     store = SecurityStore(tmp_path / "security.db", now=lambda: now)
@@ -69,4 +76,14 @@ def test_sensitive_permission_requires_role_and_pin(tmp_path):
     with pytest.raises(SecurityError):
         store.require_sensitive(identity, "manage_users", "1357")
     with pytest.raises(SecurityError):
+        store.require_sensitive(identity, "ack_alarm", "0000")
+
+
+def test_explicit_wrong_pin_is_rejected_even_with_active_lease(tmp_path):
+    store = SecurityStore(tmp_path / "security.db")
+    store.create_user("op", "Operator", Role.OPERATOR, "Password123!", "1357")
+    identity = store.authenticate("op", "Password123!")
+    store.require_sensitive(identity, "ack_alarm", "1357")
+    assert store.sensitive_lease_active(identity)
+    with pytest.raises(SecurityError, match="PIN"):
         store.require_sensitive(identity, "ack_alarm", "0000")
