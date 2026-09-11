@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QLabel, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
+from radmon.secure_context import get_context
 from radmon.status import classify_status
 
 
@@ -82,6 +83,15 @@ class RecentPage(QWidget):
             self.message_table.setItem(row_index, 0, QTableWidgetItem(self._text_time(when)))
             self.message_table.setItem(row_index, 1, QTableWidgetItem(str(message)))
 
+    def _policy_snapshot(self, serid: int) -> dict | None:
+        context = get_context()
+        if context is None or context.alarm_policy is None:
+            return None
+        try:
+            return context.alarm_policy.get_policy(int(serid))
+        except Exception:
+            return None
+
     def refresh_live(self) -> None:
         now = datetime.now()
         try:
@@ -97,6 +107,7 @@ class RecentPage(QWidget):
             try:
                 serid = int(row["serid"])
                 measured_at = row.get("dtom")
+                # The real dose is always rendered, including while SUPPRESSED.
                 dose_rate = float(row["doserate"]) if row.get("doserate") is not None else None
                 warnlevel = float(row.get("warnlevel") or 0)
                 alarmlevel = float(row.get("alarmlevel") or 0)
@@ -104,12 +115,7 @@ class RecentPage(QWidget):
                 average = float(row["avgrate"]) if row.get("avgrate") is not None else None
                 stored_dose = float(row["dose"]) if row.get("dose") is not None else None
                 status = classify_status(
-                    dose_rate,
-                    measured_at,
-                    now,
-                    warnlevel,
-                    alarmlevel,
-                    maxidlemin,
+                    dose_rate, measured_at, now, warnlevel, alarmlevel, maxidlemin,
                 )
             except Exception as exc:
                 errors.append(f"row {row_index}: {exc}")
@@ -137,14 +143,31 @@ class RecentPage(QWidget):
 
             alarm_item = self.table.item(row_index, 7)
             if alarm_item is not None:
+                snapshot = self._policy_snapshot(serid)
+                effective = status.value
+                tooltip = effective
+                if snapshot and snapshot.get("suppressed"):
+                    effective = "SUPPRESSED"
+                    tooltip = (
+                        f"SUPPRESSED · underlying={snapshot.get('underlying_dose_status') or status.value} · "
+                        f"PIC={snapshot.get('suppression_pic') or '-'} · "
+                        f"Reason={snapshot.get('suppression_reason') or '-'} · "
+                        f"Until={self._text_time(snapshot.get('suppression_expires_at')) or '-'} · "
+                        f"Dose={'' if dose_rate is None else f'{dose_rate:.2f} µSv/h'}"
+                    )
+                elif snapshot and snapshot.get("retrigger_locked"):
+                    tooltip = f"RETRIGGER LOCKED · underlying={snapshot.get('underlying_dose_status') or status.value}"
+
                 color = {
                     "NORMAL": QColor("#25c83a"),
                     "ALERT": QColor("#e6a700"),
                     "ALARM": QColor("#d92525"),
                     "OFFLINE": QColor("#777777"),
-                }[status.value]
+                    "SUPPRESSED": QColor("#6750a4"),
+                }.get(effective, QColor("#777777"))
                 alarm_item.setForeground(color)
                 alarm_item.setTextAlignment(Qt.AlignCenter)
-                alarm_item.setToolTip(status.value)
+                alarm_item.setText("S" if effective == "SUPPRESSED" else "●")
+                alarm_item.setToolTip(tooltip)
 
         self.last_error = None if not errors else "Recent load partial error: " + "; ".join(errors[:3])
