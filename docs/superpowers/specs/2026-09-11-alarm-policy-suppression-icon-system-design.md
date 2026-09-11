@@ -1,80 +1,79 @@
 # RadMon Alarm Policy, Suppression, and Icon System Design
 
-Date: 2026-09-11
-Status: Approved design, pending implementation plan
+Date: 2026-09-11  
+Status: Approved design, pending implementation plan  
 Target branch: `main`
 
 ## 1. Purpose
 
-This design adds a central alarm-policy layer for RadMon, introduces timed detector-level alarm suppression with strict auditability and anti-spam behavior, and replaces the current reused Silk icons with a coherent Tabler Outline icon system where each major feature has a distinct semantic icon.
+This design adds a central alarm-policy layer for RadMon, timed detector-level alarm suppression with strict auditability and anti-spam behavior, and a coherent Tabler Outline icon system where distinct visible features/commands use distinct semantic icons.
 
-The production source databases at `192.168.1.50`, `192.168.1.52`, and `192.168.1.38` remain legacy-compatible. No schema migration is performed on those source databases. The central PC at `192.168.1.2` remains the policy owner and the authoritative place for operator-facing alarm state.
+The production source databases at `192.168.1.50`, `192.168.1.52`, and `192.168.1.38` stay legacy-compatible. No source schema migration is allowed. The central PC at `192.168.1.2` is the policy owner for operator-facing alarm behavior.
 
 ## 2. Non-goals
 
-This work does not change detector firmware, detector-side acquisition logic, physical buzzer/relay behavior, or the production source schema. It does not delete source alarm history. It does not provide indefinite suppression. It does not make suppression hide the real dose rate or underlying dose condition.
+This work does not change detector firmware, source-side acquisition logic, physical buzzer/relay control, or the production source schema. It does not delete source alarm history. It does not provide indefinite suppression. It does not hide the actual dose rate or underlying dose condition.
 
-## 3. Baseline architecture
+## 3. Current production contract
 
-RadMon currently pulls source measurements and legacy alarm rows into the central service. Realtime monitoring is based on central `recent`/`vrecent`; legacy alarm rows are mirrored into the central runtime/security SQLite database and operator responses are written back to the corresponding source alarm row by setting legacy response fields while preserving `ack`.
-
-The existing source-side alarm contract remains:
+RadMon pulls measurements and legacy alarm rows from the three production sources. Central realtime monitoring uses `recent`/`vrecent`. Source alarm rows use the legacy `alarm` fields:
 
 - key: `serid + dtoa`
 - fields: `lvl`, `mvalue`, `thvalue`, `nhit`, `ack`, `pic`, `note`, `i_op`, `i_flag`
-- operator response write-through: set `i_op`, `pic`, `note`, transition `i_flag 0 -> 1`, preserve `ack`
+- response write-through: set `i_op`, `pic`, `note`, transition `i_flag 0 -> 1`, preserve `ack`
 
-The central service continues to isolate source failures so one source going offline does not stop the other sources.
+Source failures remain isolated: one source being unavailable must not stop the other sources.
 
-## 4. Central alarm-policy owner
+## 4. Central policy ownership
 
-The central service becomes the single owner of operator-facing alarm policy. Source systems may continue creating legacy alarm rows exactly as they do today, but the central policy decides whether a source event becomes visible to operators, produces sound or notification, is suppressed, is coalesced as a duplicate, or is blocked because the detector has reached its retrigger limit.
+The central service becomes the single policy owner for operator-facing alarms. Source systems may continue creating legacy rows exactly as they do today, but central decides whether an event:
 
-This avoids modifying the three old production systems while still making desktop Admin, future authenticated web UI, notifications, and Grafana consistent.
+- becomes visible to operators
+- plays alarm sound
+- sends notification
+- is coalesced as a duplicate
+- is suppressed
+- is blocked by retrigger lock
 
-The policy applies to HIGH/ALARM threshold events. WARN/ALERT status remains visible as dose status but does not consume the three-alarm retrigger budget.
+This policy applies to HIGH/ALARM threshold events. WARN/ALERT remains visible as dose status but does not consume the three-alarm retrigger budget.
 
-## 5. Alarm episode state machine
-
-Each central detector has one persistent alarm-policy state.
-
-### 5.1 Dose states
+## 5. Dose-state and reset rule
 
 Dose classification remains:
 
-- `NORMAL`: dose rate is below the detector LOW/WARN threshold.
-- `ALERT`: dose rate is at or above LOW/WARN but below HIGH/ALARM.
-- `ALARM`: dose rate is at or above HIGH/ALARM.
-- `OFFLINE`: normal RadMon stale/offline rules apply.
+- `NORMAL`: dose rate `< LOW/WARN`
+- `ALERT`: dose rate `>= LOW/WARN` and `< HIGH/ALARM`
+- `ALARM`: dose rate `>= HIGH/ALARM`
+- `OFFLINE`: existing stale/offline rule
 
-A detector is considered recovered for policy-reset purposes only when it reaches `NORMAL`, not merely when it falls below HIGH/ALARM.
+The alarm-policy episode resets only when dose returns to `NORMAL`, meaning below LOW/WARN. Falling below HIGH while still at/above LOW/WARN does not reset it.
 
 Example with LOW/WARN = 100 and HIGH/ALARM = 150:
 
 - `155` -> ALARM
-- `120` -> ALERT, alarm episode is not reset
-- `99` -> NORMAL, alarm episode is reset
+- `120` -> ALERT, policy episode remains active
+- `99` -> NORMAL, counter and lock reset
 
-### 5.2 Maximum three alarms per abnormal episode burst
+## 6. Three-alarm retrigger rule
 
-A detector may surface at most three operator-facing ALARM events in a burst before it enters `RETRIGGER_LOCKED`.
-
-The three events are total events, not one initial event plus three retries:
+A detector may surface at most three operator-facing ALARM events in a burst:
 
 1. ALARM #1
 2. ALARM #2
 3. ALARM #3
-4. any further ALARM attempt is blocked until NORMAL
+4. further qualifying events are blocked until NORMAL
 
-Only one operator-facing ALARM may be active for a detector at a time. Repeated source rows while that same operator-facing alarm remains active are coalesced and do not increment the counter.
+After #3 is surfaced, the detector enters `RETRIGGER_LOCKED` immediately. The third alarm itself still remains a real operator-facing alarm and may require PIC response; only later alarms are blocked.
 
-A retrigger becomes eligible after the prior operator-facing alarm has been responded to/silenced by a PIC and a new qualifying HIGH/ALARM event is observed.
+Only one operator-facing ALARM can be active for a detector at a time. Repeated source rows while the same operator-facing alarm is still active are coalesced and do not increment the counter.
 
-### 5.3 Rolling five-minute burst window
+A retrigger becomes eligible only after the previous operator-facing alarm has been responded to/silenced by a PIC and a new qualifying HIGH/ALARM event is observed.
 
-The five-minute window starts at ALARM #1 of the current burst.
+## 7. Rolling five-minute burst window
 
-Example:
+The five-minute window is anchored to ALARM #1 of the current burst.
+
+Example reaching lock:
 
 ```text
 00:00  #1
@@ -82,55 +81,45 @@ Example:
 00:04  #3 -> RETRIGGER_LOCKED
 ```
 
-After #3 is surfaced, the detector remains locked regardless of how much time passes. Only NORMAL resets the lock.
+After #3, time no longer unlocks the detector. Only dose returning below LOW/WARN unlocks it.
 
-If #3 is not reached inside the five-minute window, the next eligible event after the original window expires starts a new burst at #1:
+If #3 is not reached before the window expires, the next eligible alarm starts a new burst at #1:
 
 ```text
 00:00  #1
 00:03  #2
-00:07  #1 of a new burst
+00:07  #1 of new burst
 ```
 
-The burst window is therefore anchored to the first event of that burst rather than extended by every event.
+Boundary rule: an eligible event with `event_time - window_started_at <= 5 minutes` stays in the current burst; greater than five minutes starts a new burst.
 
-### 5.4 Normal reset
-
-When the current dose falls below LOW/WARN:
-
-- `trigger_count` becomes 0
-- `window_started_at` is cleared
-- `retrigger_locked` becomes false
-- any stale active-event pointer is cleared after normal response/recovery processing
-- the next future HIGH event is ALARM #1
-
-The reset is persisted so central restart does not resurrect an old lock after a confirmed normal recovery.
-
-## 6. Timed alarm suppression
+## 8. Timed suppression
 
 Suppression is per detector and always time-bounded.
 
-### 6.1 Required input
+### 8.1 Required input
 
 Starting suppression requires:
 
 - authenticated Administrator or Operator
 - sensitive-operation PIN
 - detector
-- duration greater than zero
+- duration
 - PIC
 - reason
 - checkbox `Aktifkan kembali otomatis saat laju dosis kembali NORMAL`
 
-The UI provides presets of 5, 15, 30, and 60 minutes plus a custom duration. Custom duration is limited to 1 minute through 24 hours. There is no indefinite option.
+Duration presets are 5, 15, 30, and 60 minutes plus custom duration. Custom duration is 1 minute through 24 hours. There is no indefinite mode.
 
-PIC defaults to the signed-in user's display name but remains visible and may be adjusted when the actual responsible PIC differs. The immutable authenticated username is always stored separately as `started_by` so audit identity cannot be spoofed by editing the PIC field.
+PIC is prefilled from the signed-in user's display name and remains editable when the actual responsible PIC differs. The authenticated username is always stored separately as immutable `started_by` for audit integrity.
 
-### 6.2 Suppression states
+The auto-resume checkbox defaults to checked. The operator may uncheck it if suppression must remain active for the full selected duration.
 
-While a suppression session is active, the detector's operator-facing policy state is `SUPPRESSED`.
+### 8.2 SUPPRESSED presentation
 
-The UI must never imply that `SUPPRESSED` means the radiation level is safe. It must show both suppression state and underlying dose condition, for example:
+During an active session, the effective policy status is `SUPPRESSED`.
+
+`SUPPRESSED` must be visually prominent and must never imply safe dose. The UI always exposes the actual dose rate and underlying dose condition. Example:
 
 ```text
 SUPPRESSED
@@ -141,58 +130,56 @@ Reason: Calibration
 Remaining: 12:34
 ```
 
-If the detector is currently ALERT or NORMAL, that underlying condition is shown in the same way.
+### 8.3 Auto-resume on NORMAL
 
-### 6.3 Automatic end on NORMAL
+If the checkbox is checked, suppression ends immediately when dose becomes `NORMAL` (`< LOW/WARN`) with end reason `AUTO_NORMAL`.
 
-If `auto_resume_on_normal` is checked, suppression ends immediately when dose becomes `NORMAL` (below LOW/WARN). End reason is `AUTO_NORMAL`.
+If the checkbox is unchecked, suppression remains active until expiry even if dose becomes NORMAL. The alarm episode itself still resets on NORMAL, but the suppression session continues until its timer expires.
 
-If the checkbox is not checked, suppression remains active until its expiry even if the dose becomes normal in the meantime. The alarm episode is still reset when NORMAL is observed, but the suppression session continues until expiry.
+### 8.4 Expiry
 
-### 6.4 Timed expiry
+At `expires_at`, suppression ends with reason `EXPIRED`.
 
-When `expires_at` is reached, suppression ends with reason `EXPIRED`.
+If dose is still HIGH/ALARM at expiry, central immediately creates a new operator-facing ALARM #1. It does not wait silently for a future source alarm row. This may be a central-policy synthetic event and does not require inserting a new source alarm row.
 
-If the dose is still HIGH/ALARM at that moment, the central policy immediately creates a new central operator-facing ALARM #1 rather than waiting silently for a future source row. This event may be central-policy-originated and does not require inserting a new legacy row into the source database.
+### 8.5 Starting suppression during an active alarm
 
-### 6.5 Starting suppression while an alarm is active
+If suppression starts while a detector already has an active operator-facing alarm, the active alarm is responded to/silenced with the suppression PIC and reason. If a matching active source row exists, normal legacy write-through is performed. The original alarm remains in history as the pre-suppression alarm.
 
-If suppression starts while the detector already has an active operator-facing alarm, that active alarm is responded to/silenced using the suppression PIC and reason. If it maps to an active source row, RadMon writes the normal legacy response fields to that source row. The original alarm remains in history as the pre-suppression alarm; it is not deleted or relabeled.
+## 9. Suppression anti-spam contract
 
-## 7. Suppression anti-spam contract
+The user-visible rule is strict: **at most one operator-facing `SUPPRESSED` event per detector per suppression session**.
 
-The user-visible contract is strict: at most one operator-facing `SUPPRESSED` alarm event is created per suppression session per detector.
+The first qualifying HIGH/ALARM source event during the session may create that single `SUPPRESSED` event. It is immediately auto-silenced by policy and records suppression PIC/reason.
 
-The first qualifying HIGH/ALARM source event observed during an active suppression session may create that single `SUPPRESSED` policy event. It is immediately auto-silenced by policy and records the suppression PIC and reason.
+Every later HIGH/ALARM source event in the same session:
 
-Every later HIGH/ALARM source event in the same suppression session:
-
-- remains eligible to exist in raw source history
-- remains eligible to be mirrored centrally for traceability
-- is not exposed as another operator-facing alarm row
+- may remain in raw source history
+- may remain mirrored centrally for traceability
+- does not create another operator-facing row
 - does not play sound
-- does not send WhatsApp or another notification
-- does not increment the three-alarm retrigger counter
-- is written back to the source as silenced (`i_flag = 1`) when possible
+- does not notify
+- does not increment the three-alarm counter
+- is written back as source-silenced (`i_flag = 1`) when possible
 
-The suppression session therefore cannot spam the operator even if a source produces many legacy alarm rows.
+The one-event rule must be enforced by persistence uniqueness/transaction logic, not only by in-memory checks.
 
-A database-level uniqueness guard must enforce the one-visible-suppressed-event rule; it must not rely only on an in-memory `if` statement.
+## 10. Raw alarm mirror vs operator-facing events
 
-## 8. Raw alarm mirror vs operator-facing policy events
+Raw traceability and operator-facing alarm state are separate.
 
-Raw source traceability and operator-facing alarms are separated.
+### 10.1 `remote_alarm_state`
 
-### 8.1 `remote_alarm_state`
+The existing raw mirror remains the representation of source alarm rows. Add policy metadata as needed:
 
-The existing `remote_alarm_state` remains the raw mirrored representation of source alarm rows. It can receive additional policy metadata fields such as:
+```text
+policy_decision
+suppression_id
+operator_visible
+policy_event_id
+```
 
-- `policy_decision`
-- `suppression_id`
-- `operator_visible`
-- `policy_event_id`
-
-Possible decisions include:
+Policy decisions include:
 
 - `ACTIVE`
 - `COALESCED_DUPLICATE`
@@ -200,13 +187,11 @@ Possible decisions include:
 - `SUPPRESSED_DUPLICATE`
 - `RETRIGGER_LOCKED`
 
-This preserves source evidence without forcing every source row into the operator-facing Alarm page.
+Raw mirrored rows are not deleted simply because they are hidden from the operator-facing Alarm page.
 
-### 8.2 `alarm_policy_event`
+### 10.2 `alarm_policy_event`
 
-A new central SQLite table represents operator-facing alarm events and central synthetic events.
-
-Required fields:
+A new central SQLite table contains operator-facing and central synthetic policy events:
 
 ```text
 event_id TEXT PRIMARY KEY
@@ -230,15 +215,17 @@ reason TEXT
 notification_sent_at TEXT
 ```
 
-A partial/conditional uniqueness rule, or equivalent transactional guard, enforces at most one `kind = SUPPRESSED` policy event per `suppression_id`.
+Requirements:
 
-Central synthetic events use a deterministic `event_key` so a restart or repeated evaluation cannot create duplicates.
+- deterministic `event_key` prevents duplicates across polling/restart
+- one `SUPPRESSED` policy event per `suppression_id` is enforced transactionally
+- synthetic expiry alarms use deterministic keys as well
 
-## 9. Persistent policy tables
+## 11. Persistent alarm-policy state
 
-All canonical policy state is stored in the existing central runtime/security SQLite database. It is not stored in the source MariaDB schemas.
+Canonical policy state lives in the existing central runtime/security SQLite database.
 
-### 9.1 `alarm_policy_state`
+### 11.1 `alarm_policy_state`
 
 ```text
 serid INTEGER PRIMARY KEY
@@ -253,11 +240,11 @@ updated_at TEXT NOT NULL
 
 Constraints:
 
-- `trigger_count` is limited to 0..3
+- `trigger_count` is 0..3
 - `retrigger_locked = 1` requires `trigger_count = 3`
-- state is updated atomically per detector
+- updates are atomic per detector
 
-### 9.2 `alarm_suppression`
+### 11.2 `alarm_suppression`
 
 ```text
 suppression_id TEXT PRIMARY KEY
@@ -275,20 +262,18 @@ created_at TEXT NOT NULL
 updated_at TEXT NOT NULL
 ```
 
-Only one active suppression may exist for a detector. A uniqueness/index rule must prevent concurrent active sessions.
+Only one active suppression may exist per detector. Persistence must prevent overlapping active sessions.
 
-End reasons include:
+Allowed normal end reasons:
 
 - `AUTO_NORMAL`
 - `EXPIRED`
 
-No normal operator path provides indefinite suppression or an un-audited force-disable mode.
+There is no ordinary operator path for indefinite suppression or un-audited force-disable.
 
-## 10. Central MariaDB runtime projection for Grafana
+## 12. Grafana runtime projection
 
-Grafana reads MariaDB and cannot directly join to the central SQLite policy database. The canonical state therefore stays in SQLite, while the central service publishes a small current-state projection to the MariaDB on PC `.2`.
-
-The central-only table is:
+Grafana reads MariaDB, not central SQLite, so canonical SQLite policy state is projected into a small central-only MariaDB table on PC `.2`:
 
 ```text
 radmon_runtime_status
@@ -304,13 +289,13 @@ underlying_dose_status VARCHAR(16) NOT NULL
 updated_at DATETIME NOT NULL
 ```
 
-This is not created on `.50`, `.52`, or `.38`.
+This table is never created on `.50`, `.52`, or `.38`.
 
-The projection is rebuilt/upserted from canonical policy state and current `vrecent`. If projection update fails, policy enforcement continues from SQLite and the failure is logged/audited; Grafana may briefly show stale policy status but the alarm engine must not depend on this projection.
+Projection is rebuilt/upserted from canonical policy state plus current central `vrecent`. Projection failure must not disable policy enforcement; it only affects Grafana freshness and is logged/audited.
 
 Grafana joins `vrecent` to `radmon_runtime_status`.
 
-Visual priority is:
+Effective visual priority:
 
 1. `OFFLINE`
 2. `SUPPRESSED`
@@ -318,35 +303,35 @@ Visual priority is:
 4. `ALERT`
 5. `NORMAL`
 
-When `SUPPRESSED`, Grafana still shows the actual dose rate and `underlying_dose_status`.
+When SUPPRESSED, actual dose and `underlying_dose_status` remain visible.
 
-## 11. Operator response behavior
+## 13. Operator response behavior
 
 Operator response remains a sensitive action.
 
-For source-backed operator-facing events, responding writes through to the legacy source row when that row exists:
+For source-backed policy events, response writes:
 
-- set `i_op`
-- set `pic`
-- set `note`
-- transition `i_flag 0 -> 1`
-- preserve `ack`
+- `i_op`
+- `pic`
+- `note`
+- `i_flag: 0 -> 1`
+- preserves `ack`
 
-For central-policy synthetic events that have no source row, response is central-only. If a later source row corresponds to the same still-active policy condition, the central policy must not create another operator-facing event; it may auto-apply the already-recorded response/suppression decision to that source row.
+For central synthetic events with no source row, response is central-only. If a later source row matches the same already-resolved policy condition, it must not create a new operator-facing event; central may auto-apply the existing response/suppression decision to that source row.
 
-Every response is recorded in the central audit trail.
+Every response is audited.
 
-## 12. Permissions and audit
+## 14. Permissions and audit
 
-Roles:
+Role behavior:
 
-- Administrator: view, respond to alarms, start suppression
-- Operator: view, respond to alarms, start suppression
+- Administrator: view, respond, suppress
+- Operator: view, respond, suppress
 - Viewer: view only
 
-Suppression uses a dedicated permission such as `suppress_alarm`; both Administrator and Operator receive it. Viewer does not.
+Add dedicated permission `suppress_alarm` to Administrator and Operator only.
 
-Sensitive PIN validation follows the existing sensitive-operation security path. The existing short sensitive-operation lease may apply, but an explicitly supplied wrong PIN must still be rejected according to the current security contract.
+Suppression uses existing sensitive-operation PIN handling. Explicitly supplied wrong PIN is rejected even if a short sensitive-operation lease is currently active.
 
 Audit actions include at minimum:
 
@@ -361,13 +346,11 @@ Audit actions include at minimum:
 - `SUPPRESSION_SOURCE_SILENCE_FAILED`
 - `ALARM_RESPONSE`
 
-Audit records include actor, role, detector, source where applicable, before/after state, success, and failure reason.
+Audit captures actor, role, detector, source when applicable, before/after state, success, and failure reason.
 
-## 13. API surface
+## 15. API surface
 
-The authenticated central API gains policy-oriented endpoints while preserving existing compatibility routes where practical.
-
-Required endpoints:
+Add authenticated central endpoints:
 
 ```text
 GET  /api/v1/control/alarm-events
@@ -377,7 +360,7 @@ GET  /api/v1/control/suppressions
 POST /api/v1/control/suppressions/{serid}
 ```
 
-`POST /api/v1/control/suppressions/{serid}` requires:
+Suppression request:
 
 ```json
 {
@@ -391,79 +374,71 @@ POST /api/v1/control/suppressions/{serid}
 
 Validation:
 
-- authenticated user required
+- authentication required
 - role must allow `suppress_alarm`
-- PIN required
+- PIN required and valid
 - duration 60..86400 seconds
 - PIC non-empty
 - reason non-empty
 - detector must exist
-- an already-active suppression returns conflict rather than silently replacing it
+- overlapping active suppression returns conflict
 
-The current `/api/v1/control/alarms` route may remain as a compatibility facade, but operator UI must consume policy-filtered events rather than raw mirrored rows.
+Existing `/api/v1/control/alarms` may remain as a compatibility facade, but operator-facing UI must consume policy-filtered events rather than raw mirrored rows.
 
-## 14. Concurrency and idempotency
+## 16. Concurrency and idempotency
 
-Collector cycles, source alarm mirroring, operator API calls, suppression expiry, and desktop refresh can overlap. Correctness cannot depend on process timing.
+Collector cycles, source mirroring, operator API calls, suppression expiry, and desktop refresh can overlap.
 
 Requirements:
 
-- policy evaluation is serialized/atomic per detector
-- SQLite updates use transactions
-- operator-facing event creation uses deterministic unique keys
-- one active suppression per detector is enforced by persistence
-- one visible suppressed event per suppression is enforced by persistence
-- repeated polling of the same source row is idempotent
-- repeated notification attempts consult `notification_sent_at`
-- the three-alarm counter increments only when a new operator-facing ALARM is successfully created
-- coalesced raw duplicates do not increment the counter
-- SUPPRESSED events do not increment the counter
-- RETRIGGER_LOCKED source events do not increment the counter
+- policy evaluation serialized/atomic per detector
+- SQLite transaction boundaries around state transitions
+- deterministic unique keys for policy events
+- persistence-enforced one active suppression per detector
+- persistence-enforced one visible SUPPRESSED event per session
+- repeated polling of a source row is idempotent
+- repeated notification attempts consult persisted `notification_sent_at`
+- trigger counter increments only when a new operator-facing ALARM is successfully created
+- coalesced duplicates, SUPPRESSED events, and RETRIGGER_LOCKED rows do not increment the counter
 
 After central restart:
 
-- active timed suppression is restored until expiry or AUTO_NORMAL
-- trigger count is restored
-- retrigger lock is restored
-- already-notified events stay notified
-- historical source rows do not get re-sent as new alarms
+- active suppression is restored until expiry or AUTO_NORMAL
+- trigger count survives
+- retrigger lock survives
+- notification-sent state survives
+- historical source rows are not resent as new alarms
 
-## 15. Source write-through failure handling
+## 17. Source write-through failure behavior
 
-Central policy enforcement must not depend on source write-through succeeding.
+Central policy enforcement must not depend on remote write-through succeeding.
 
-If source-side `i_flag = 1` update fails during suppression or response:
+If `i_flag = 1` write-through fails:
 
-- central operator-facing sound/notification remains silenced according to central policy
-- the raw event records the failed write state
-- an audit event records the failure
-- retry occurs on a later cycle with bounded backoff
-- UI indicates that source-side silence is not yet confirmed
+- central still suppresses sound/notification according to policy
+- raw row records pending/failed source silence state
+- audit records failure
+- retry happens on later cycle with bounded backoff
+- UI shows source-side silence is not yet confirmed
 
-A source-side failure must never cause duplicate operator notifications from the same policy event.
+A source write failure must never cause duplicate operator notifications for the same policy event.
 
-## 16. Desktop UI behavior
+## 18. Desktop suppression UI
 
-### 16.1 Suppression control
+`Suppress Alarm...` is available from the selected detector and Alarm page.
 
-The selected detector and Alarm page expose a `Suppress Alarm...` action with the Tabler `bell-cancel` icon.
-
-The dialog contains:
+Dialog fields:
 
 - detector identity, read-only
-- current dose and dose state, read-only
-- duration preset/custom selector
+- current dose and underlying dose status, read-only
+- duration preset/custom
 - PIC, prefilled
 - reason, required
 - checkbox `Aktifkan kembali otomatis saat laju dosis kembali NORMAL`
 - sensitive PIN
-- clear warning that measurements continue and only alarm surfacing/notification is suppressed
+- explicit notice that measurements continue and only alarm surfacing/notification is suppressed
 
-The checkbox defaults to checked because automatic recovery on confirmed NORMAL is the safer operational default. The operator may uncheck it when suppression must last for the full selected duration.
-
-### 16.2 SUPPRESSED visibility
-
-While active, `SUPPRESSED` must be prominent in:
+While active, SUPPRESSED appears prominently in:
 
 - station tree
 - Recent page
@@ -471,19 +446,23 @@ While active, `SUPPRESSED` must be prominent in:
 - status/details panel
 - Grafana monitoring
 
-The display must include PIC, reason, expiry/remaining time, and underlying dose state where space permits. Tooltips/detail panels carry the full information when compact views cannot show all fields.
+Where space allows, show PIC, reason, expiry/remaining time, and underlying dose state. Compact views use tooltip/detail panel for full metadata.
 
-### 16.3 RETRIGGER LOCKED visibility
+A detector that reached #3 while still abnormal shows `RETRIGGER LOCKED` in detailed views without replacing the underlying ALARM/ALERT dose state.
 
-A detector that reached #3 and remains abnormal shows a visible `RETRIGGER LOCKED` policy indicator in detailed views. This must not replace the underlying dose state; the operator still sees ALARM or ALERT as applicable.
+## 19. Icon-system redesign
 
-## 17. Icon-system redesign
+The existing Silk set is too small and currently causes unrelated features to share icons. The redesign vendors a selected subset of Tabler Icons under the Tabler MIT license and uses the Tabler Outline family for every visible feature/command migrated in this scope.
 
-The current small Silk set causes unrelated features to reuse the same symbols. The redesign vendors a selected subset of Tabler Icons under the Tabler MIT license and uses only the Tabler Outline family for the main desktop feature icons.
+Icons are local assets with no runtime network dependency.
 
-Icons are vendored with the application and loaded locally; there is no runtime network dependency.
+### 19.1 Semantic registry
 
-Final semantic mapping:
+UI code calls a semantic registry such as `app_icon(slot)` rather than raw filenames.
+
+Distinct visible features/commands receive distinct semantic slots. The same icon may be reused only when the UI is literally the same action in multiple places, for example Refresh in menu and toolbar, or the same Print action exposed twice.
+
+### 19.2 Primary navigation and operational features
 
 | UI feature | Tabler Outline icon |
 | --- | --- |
@@ -508,163 +487,178 @@ Final semantic mapping:
 | User Manual / Help | `help-circle` |
 | Exit / Logout | `logout` |
 
-The first-order rule is semantic uniqueness: unrelated major features may not share a feature icon. Small repeated action icons are allowed only when the action is literally the same action, such as multiple Refresh buttons all using `refresh` or multiple Print commands using the same print icon.
+### 19.3 File/menu/toolbar commands
 
-The implementation adds an icon registry such as `app_icon(slot)` so business/UI code names semantic slots rather than raw filenames. Tests verify that all required icon assets exist and the major-feature registry entries are unique.
+| UI command | Tabler Outline icon |
+| --- | --- |
+| Save As / generic export | `file-export` |
+| Save As CSV | `table-export` |
+| Printer Setup | `settings-2` |
+| Print Preview | `eye-check` |
+| Print | `printer` |
+| Select Period | `calendar` |
+| New Station | `plus` |
+| Application Options | `settings` |
+| About | `file-info` |
 
-Existing Silk assets can remain temporarily for compatibility with non-migrated minor controls, but all major navigation, toolbar, station-tree, alarm, and security features in this scope move to Tabler Outline. No emoji literals are used as UI icons.
+`Station Properties` deliberately uses `settings-cog`, while general `Options` uses `settings`; they are related but visually distinct commands. `Printer Setup` uses `settings-2` and is not reused for either station configuration command.
 
-## 18. Grafana behavior
+No generic `feed`, `monitor`, `lock`, or other catch-all icon may be reused across unrelated features after migration. No emoji literals are used as UI icons.
 
-Grafana status queries must incorporate the central runtime projection while preserving existing WIB timestamp handling.
+Tests verify that all required assets exist, registry slots resolve to non-null QIcons, and distinct semantic features in the registry map to distinct icon files.
 
-For each detector, panels expose:
+## 20. Grafana behavior
+
+Grafana panels expose:
 
 - current dose rate
 - underlying dose status
 - effective policy status
-- suppression PIC/reason/expiry when suppressed
-- trigger count and retrigger lock in detail views
+- suppression PIC/reason/expiry while suppressed
+- trigger count and retrigger lock in detailed views
 
-`SUPPRESSED` must have a visually distinct, prominent presentation. It must not be colored or worded in a way that implies NORMAL.
+SUPPRESSED must be visually prominent and must not be styled or worded as NORMAL.
 
-Existing 2-second dashboard refresh and TV playlist behavior remain unchanged unless a separate performance issue is found during implementation.
+Existing WIB timestamp handling, 2-second dashboard refresh, and TV playlist behavior remain unchanged unless a separate performance issue is found during implementation.
 
-## 19. Notification behavior
+## 21. Notification behavior
 
-Only policy events may trigger operator notifications.
+Only operator-facing policy events can notify.
 
 Rules:
 
 - ALARM #1/#2/#3 may notify once each
-- duplicate source rows for an active event do not notify
-- SUPPRESSED primary event does not send the normal alarm notification
-- SUPPRESSED duplicate events do not notify
-- RETRIGGER_LOCKED events do not notify
-- historical/backfill alarm rows do not notify
-- a central synthetic ALARM created when suppression expires while still HIGH may notify once as ALARM #1
+- duplicate source rows for an active alarm do not notify
+- SUPPRESSED primary event does not send normal alarm notification
+- SUPPRESSED duplicate rows do not notify
+- RETRIGGER_LOCKED rows do not notify
+- historical/backfill alarms do not notify
+- synthetic ALARM #1 created at suppression expiry while still HIGH may notify once
 
-Notification-sent state is persisted and idempotent across restart.
+Notification state is persisted and idempotent across restart.
 
-## 20. Test matrix
+## 22. Migration and startup ordering
+
+Central SQLite migration is additive and idempotent. Existing users, sessions, audit history, mirrored alarms, LAN checkpoints, station mappings, and archive records are preserved.
+
+Central MariaDB migration only creates/updates the central runtime projection on PC `.2`; source schemas remain untouched.
+
+First startup after upgrade:
+
+1. migrate central SQLite policy tables/columns
+2. create central MariaDB runtime projection if absent
+3. load persistent policy/suppression state
+4. seed/refresh source alarm mirror as historical without notifications
+5. derive current dose state from central `vrecent`
+6. apply NORMAL reset or suppression-expiry transitions as required
+7. publish runtime projection
+8. enable normal policy notification processing
+
+This ordering prevents old alarm rows from becoming new spam during rollout.
+
+## 23. Automated test matrix
 
 Implementation is not complete until automated tests cover at least the following.
 
-### Threshold and reset
+### Threshold/reset
 
-- exactly below LOW -> NORMAL
-- exactly at LOW -> ALERT
-- between LOW and HIGH -> ALERT
-- exactly at HIGH -> ALARM
-- falling below HIGH but remaining at/above LOW does not reset policy
-- falling below LOW resets count and lock
+- below LOW -> NORMAL
+- exactly LOW -> ALERT
+- between LOW/HIGH -> ALERT
+- exactly HIGH -> ALARM
+- below HIGH but still at/above LOW does not reset
+- below LOW resets counter and lock
 
 ### Three-alarm rule
 
-- #1 surfaces and count = 1
-- response then #2 inside burst surfaces and count = 2
-- response then #3 inside burst surfaces and count = 3 and locks
-- fourth qualifying event is not surfaced/notified
-- repeated raw rows while an active alarm remains unresponded are coalesced
+- #1 surfaces, count 1
+- response then #2 in window, count 2
+- response then #3 in window, count 3 and lock
+- fourth qualifying event is hidden/notified zero times
+- duplicate raw rows while one alarm remains active are coalesced
 - locked state survives restart
-- NORMAL clears locked state
+- NORMAL clears lock
 
 ### Five-minute window
 
-- #1 00:00, #2 00:03, #3 00:04 -> lock
-- #1 00:00, #2 00:03, event 00:07 -> new #1 burst
-- boundary at exactly five minutes is defined consistently in tests; an event with `event_time - window_started_at <= 5 minutes` remains in the current burst, while greater than five minutes starts a new burst
+- 00:00 #1, 00:03 #2, 00:04 #3 -> lock
+- 00:00 #1, 00:03 #2, 00:07 next eligible -> new #1
+- exactly +5:00 remains same burst
+- greater than +5:00 starts new burst
 
 ### Suppression
 
 - Administrator can start suppression
 - Operator can start suppression
 - Viewer cannot
-- missing/invalid PIN rejected
+- invalid/missing PIN rejected
 - missing PIC rejected
 - missing reason rejected
-- zero/negative/over-24-hour duration rejected
-- overlapping active suppression rejected
+- duration outside 1 minute..24 hours rejected
+- overlapping suppression rejected
 - suppression survives restart
 - expiry ends suppression
-- auto-normal checkbox ends suppression early only when checked
-- ALERT does not count as NORMAL for auto-resume
-- exactly one visible SUPPRESSED event per suppression session
-- dozens of source ALARM rows during one suppression do not create duplicate visible events or notifications
+- auto-normal ends early only when checked
+- ALERT does not count as NORMAL
+- exactly one visible SUPPRESSED event per session
+- many source ALARM rows during one suppression create no duplicate visible events or notifications
 - SUPPRESSED events do not consume retrigger budget
-- starting suppression while active ALARM safely responds/silences the active event
-- expiry while still HIGH immediately creates central ALARM #1 once
+- starting suppression while active ALARM safely silences/responds to it
+- expiry while still HIGH immediately creates one ALARM #1
 
 ### Source write-through
 
-- suppression writes `i_op`, `pic`, `note`, and `i_flag = 1` while preserving `ack`
-- write failure is audited
-- write failure is retried
-- write failure does not re-notify operator
-- source recovery applies outstanding silence decisions without creating new operator events
+- source response writes `i_op`, `pic`, `note`, `i_flag = 1`, preserves `ack`
+- failure audited
+- failure retried
+- failure never re-notifies same policy event
+- source recovery applies outstanding silence decisions without new operator spam
 
 ### Concurrency/idempotency
 
-- duplicate polling of same source event creates one policy event
-- two concurrent policy evaluations cannot create two #1 events
-- two concurrent suppression-start requests create at most one active suppression
-- two simultaneous first HIGH events during suppression create exactly one SUPPRESSED policy event
+- duplicate polling creates one policy event
+- concurrent policy evaluation cannot create duplicate #1
+- concurrent suppression start creates at most one active session
+- simultaneous first HIGH observations during suppression create one SUPPRESSED policy event
 
-### UI and icons
+### UI/icons
 
-- all major feature icon registry slots resolve to non-null QIcons
-- major feature icon registry values are unique
-- all migrated icons are from the vendored Tabler Outline set
-- Station group and detector child use different icons
-- Monitoring and Server Test use different icons
-- Alarm and Suppress Alarm use different icons
-- SUPPRESSED indicator is visible in station tree, Recent, Alarm page, and Grafana payload/query tests
-- underlying dose condition remains visible while SUPPRESSED
+- all semantic registry icons load
+- distinct feature slots map to distinct icon files
+- all migrated visible feature/command icons are Tabler Outline
+- Station group != detector icon
+- Monitoring != Server Test
+- Alarm != Suppress Alarm
+- Station Properties != Options != Printer Setup
+- SUPPRESSED visible in station tree, Recent, Alarm page, and Grafana tests
+- underlying dose remains visible while SUPPRESSED
 
 ### Regression
 
-- existing source health isolation still works
-- LIVE collection and bounded backfill still work
-- legacy alarm response compatibility remains intact
+- source health isolation remains correct
+- LIVE collection and bounded backfill remain correct
 - historical alarm sync does not resend old alerts
-- Grafana WIB timestamp handling remains correct
+- legacy source response compatibility remains intact
+- Grafana WIB time handling remains correct
 - archive/security settings remain intact
 - full existing test suite remains green
 
-## 21. Migration and rollout
+## 24. Acceptance criteria
 
-The central SQLite schema migration is additive and idempotent. Existing users, sessions, audit history, remote alarm mirror rows, LAN checkpoints, station mappings, and archive records are preserved.
+The revision is accepted only when:
 
-The central MariaDB migration creates only the new central projection table on PC `.2` and is idempotent. It does not modify source schemas.
-
-At first startup after upgrade:
-
-1. migrate central SQLite policy tables/columns
-2. create central MariaDB runtime projection table if absent
-3. load active suppression/policy state
-4. seed source alarm mirror as historical without notifications
-5. derive current dose state from central `vrecent`
-6. publish runtime projection
-7. only then enable normal policy notification processing
-
-This ordering prevents historical rows from becoming new alarm spam during rollout.
-
-## 22. Acceptance criteria
-
-The revision is accepted when all of the following are true:
-
-- no major desktop feature in scope reuses another unrelated feature's icon
-- all migrated major icons share the Tabler Outline style
-- a detector can produce no more than three operator-facing ALARM events in a five-minute burst before locking
-- lock persists until dose is below LOW/WARN
-- a timed suppression requires PIC, reason, PIN, and duration
-- suppression can optionally auto-end on NORMAL
-- SUPPRESSED is prominent and never hides the underlying dose rate/status
-- exactly one operator-facing SUPPRESSED event is created per detector per suppression session
-- raw source alarm history is not deleted
-- suppressed/locked duplicates do not sound or notify
-- central restart preserves suppression, counters, locks, and notification idempotency
-- source-side silence write failures are visible/audited and do not cause operator spam
-- Grafana, desktop Admin, and future authenticated API consumers read consistent effective policy state
-- no source MariaDB schema is migrated
-- all new tests plus the existing suite pass before release
+- unrelated visible features/commands no longer share icons
+- all migrated icons use one Tabler Outline visual family
+- one detector surfaces no more than three ALARMs in a five-minute burst
+- #3 locks further alarm surfacing until dose is below LOW/WARN
+- timed suppression requires PIN, PIC, reason, and duration
+- optional auto-resume on NORMAL works
+- SUPPRESSED is prominent and never hides the underlying dose state
+- exactly one operator-facing SUPPRESSED event exists per detector per suppression session
+- source alarm history is preserved
+- suppressed/locked duplicates never sound or notify
+- restart preserves suppression, counter, lock, and notification idempotency
+- source write failures are visible/audited and do not cause spam
+- desktop Admin, Grafana, and authenticated API expose consistent effective policy state
+- source MariaDB schemas remain unchanged
+- all new tests and the full existing suite pass before release
