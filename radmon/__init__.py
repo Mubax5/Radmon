@@ -60,6 +60,13 @@ from .alarm_policy_revision import apply as _apply_alarm_policy_revision
 _apply_alarm_policy_revision()
 del _apply_alarm_policy_revision
 
+# Suppression is an authenticated operator action. Add the narrow permission to
+# Administrator/Operator after the final security compatibility layer so Viewer
+# remains read-only and explicit bad PIN semantics are preserved.
+from .alarm_policy_security_revision import apply as _apply_alarm_policy_security_revision
+_apply_alarm_policy_security_revision()
+del _apply_alarm_policy_security_revision
+
 # Production DATETIME values are WIB wall-clock values. Keep its query
 # semantics intact before applying the final UI icon compatibility pass.
 from .grafana_wib_revision import apply as _apply_grafana_wib_revision
