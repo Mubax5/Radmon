@@ -36,7 +36,7 @@ from .acquisition_dialog import AcquisitionControlDialog
 from .alarm_page import AlarmPage
 from .chart_page import ChartPage
 from .diagnostics_dialogs import HardwareTestDialog, ServerTestDialog
-from .icons import silk_icon
+from .icons import app_icon
 from .logs_page import LogsPage
 from .options_dialog import OptionsDialog
 from .recent_page import RecentPage
@@ -136,12 +136,12 @@ class MainWindow(QMainWindow):
         self.alarm_page = AlarmPage(repository, alarm_service, settings)
         self.logs_page = LogsPage(log_path)
 
-        self.tabs.addTab(self.recent_page, silk_icon("clock"), "Recent")
-        self.tabs.addTab(self.tabular_page, silk_icon("table"), "Tabular")
-        self.tabs.addTab(self.chart_page, silk_icon("chart_line"), "Chart")
-        self.tabs.addTab(self.reports_page, silk_icon("report"), "Reports")
-        self.tabs.addTab(self.alarm_page, silk_icon("lock"), "Alarm")
-        self.tabs.addTab(self.logs_page, silk_icon("page_white_text"), "Logs")
+        self.tabs.addTab(self.recent_page, app_icon("recent"), "Recent")
+        self.tabs.addTab(self.tabular_page, app_icon("tabular"), "Tabular")
+        self.tabs.addTab(self.chart_page, app_icon("chart"), "Chart")
+        self.tabs.addTab(self.reports_page, app_icon("reports"), "Reports")
+        self.tabs.addTab(self.alarm_page, app_icon("alarm"), "Alarm")
+        self.tabs.addTab(self.logs_page, app_icon("logs"), "Logs")
         self.recent_page.stationSelected.connect(self._select_station_from_recent)
 
         self._build_actions()
@@ -149,7 +149,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
 
         # Station selection can refresh the current page while the sidebar is
-        # still being constructed.  The monitoring poll timer therefore must
+        # still being constructed. The monitoring poll timer therefore must
         # exist before _build_station_sidebar() triggers that first refresh.
         self._monitoring_poll_timer = QTimer(self)
         self._monitoring_poll_timer.setInterval(250)
@@ -218,7 +218,7 @@ class MainWindow(QMainWindow):
         self.station_tree.blockSignals(True)
         self.station_tree.clear()
         root = QTreeWidgetItem(self.station_tree, ["Station"])
-        root.setIcon(0, silk_icon("feed"))
+        root.setIcon(0, app_icon("station_group"))
         root.setExpanded(True)
         selected_item = None
         try:
@@ -228,7 +228,7 @@ class MainWindow(QMainWindow):
             stations = []
         for station in stations:
             child = QTreeWidgetItem(root, [station.room])
-            child.setIcon(0, silk_icon("feed"))
+            child.setIcon(0, app_icon("detector"))
             child.setData(0, Qt.UserRole, station.serid)
             child.setToolTip(
                 0,
@@ -309,67 +309,67 @@ class MainWindow(QMainWindow):
         self.refresh_current_page()
 
     def _build_actions(self) -> None:
-        self.monitoring_action = QAction(silk_icon("monitor"), "Monitoring", self)
+        self.monitoring_action = QAction(app_icon("monitoring"), "Monitoring", self)
         self.monitoring_action.setStatusTip("Open Grafana monitoring")
         self.monitoring_action.triggered.connect(self.open_monitoring)
 
-        self.refresh_action = QAction(silk_icon("arrow_refresh"), "Refresh", self)
+        self.refresh_action = QAction(app_icon("refresh"), "Refresh", self)
         self.refresh_action.setShortcut("F5")
         self.refresh_action.triggered.connect(self.refresh_current_page)
 
-        self.save_as_action = QAction(silk_icon("page_white_text"), "Save As...", self)
+        self.save_as_action = QAction(app_icon("save_as"), "Save As...", self)
         self.save_as_action.triggered.connect(self._save_as)
-        self.save_csv_action = QAction(silk_icon("table"), "Save As CSV...", self)
+        self.save_csv_action = QAction(app_icon("save_csv"), "Save As CSV...", self)
         self.save_csv_action.triggered.connect(self._save_as_csv)
-        self.printer_setup_action = QAction(silk_icon("printer"), "Printer Setup...", self)
+        self.printer_setup_action = QAction(app_icon("printer_setup"), "Printer Setup...", self)
         self.printer_setup_action.triggered.connect(self._printer_setup)
-        self.print_preview_action = QAction(silk_icon("report"), "Print Preview...", self)
+        self.print_preview_action = QAction(app_icon("print_preview"), "Print Preview...", self)
         self.print_preview_action.triggered.connect(self._print_preview)
-        self.print_action = QAction(silk_icon("printer"), "Print...", self)
+        self.print_action = QAction(app_icon("print"), "Print...", self)
         self.print_action.triggered.connect(self._print_current_report)
 
-        self.exit_action = QAction(silk_icon("door_out"), "Exit", self)
+        self.exit_action = QAction(app_icon("exit"), "Exit", self)
         self.exit_action.setShortcut("Ctrl+Q")
         self.exit_action.triggered.connect(self.close)
 
         self.view_actions: list[QAction] = []
-        for index, (label, icon) in enumerate(
+        for index, (label, slot) in enumerate(
             (
-                ("Recent Values", "clock"),
-                ("Tabular View", "table"),
-                ("Chart Display", "chart_line"),
-                ("Reports", "report"),
-                ("Alarm", "lock"),
-                ("Log", "page_white_text"),
+                ("Recent Values", "recent"),
+                ("Tabular View", "tabular"),
+                ("Chart Display", "chart"),
+                ("Reports", "reports"),
+                ("Alarm", "alarm"),
+                ("Log", "logs"),
             )
         ):
-            action = QAction(silk_icon(icon), label, self)
+            action = QAction(app_icon(slot), label, self)
             action.triggered.connect(
                 lambda _checked=False, tab_index=index: self.tabs.setCurrentIndex(tab_index)
             )
             self.view_actions.append(action)
         self.report_action = self.view_actions[self.REPORT_TAB_INDEX]
 
-        self.select_period_action = QAction(silk_icon("clock"), "Select period...", self)
+        self.select_period_action = QAction(app_icon("select_period"), "Select period...", self)
         self.select_period_action.triggered.connect(self._select_period_current)
 
-        self.new_station_action = QAction(silk_icon("feed"), "New station...", self)
+        self.new_station_action = QAction(app_icon("new_station"), "New station...", self)
         self.new_station_action.triggered.connect(self._new_station)
 
-        self.options_action = QAction(silk_icon("help"), "Options...", self)
+        self.options_action = QAction(app_icon("application_options"), "Options...", self)
         self.options_action.triggered.connect(self._open_options)
-        self.server_test_action = QAction(silk_icon("monitor"), "Test Server...", self)
+        self.server_test_action = QAction(app_icon("server_test"), "Test Server...", self)
         self.server_test_action.triggered.connect(self._open_server_test)
-        self.hardware_test_action = QAction(silk_icon("feed"), "Test Hardware...", self)
+        self.hardware_test_action = QAction(app_icon("hardware_test"), "Test Hardware...", self)
         self.hardware_test_action.triggered.connect(self._open_hardware_test)
-        self.acquisition_action = QAction(silk_icon("arrow_refresh"), "Acquisition Control...", self)
+        self.acquisition_action = QAction(app_icon("acquisition"), "Acquisition Control...", self)
         self.acquisition_action.triggered.connect(self._open_acquisition)
 
-        self.install_manual_action = QAction(silk_icon("page_white_text"), "Installation Manual...", self)
+        self.install_manual_action = QAction(app_icon("installation_manual"), "Installation Manual...", self)
         self.install_manual_action.triggered.connect(lambda: self._open_manual("docs/INSTALLATION.md"))
-        self.user_manual_action = QAction(silk_icon("page_white_text"), "User Manual...", self)
+        self.user_manual_action = QAction(app_icon("user_manual"), "User Manual...", self)
         self.user_manual_action.triggered.connect(lambda: self._open_manual("docs/USER-MANUAL.md"))
-        self.about_action = QAction(silk_icon("help"), "About...", self)
+        self.about_action = QAction(app_icon("about"), "About...", self)
         self.about_action.triggered.connect(self._show_about)
 
         context = get_context()
