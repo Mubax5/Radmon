@@ -56,7 +56,14 @@ def test_visible_admin_dialogs_do_not_use_silk_icons():
         "radmon/admin/alarm_page.py",
         "radmon/admin/station_admin_dialog.py",
         "radmon/admin/user_admin_dialog.py",
-        "radmon/production_integration_revision.py",
-        "radmon/production_integration_compat_revision.py",
     ):
         assert "silk_icon(" not in read(path), path
+
+
+def test_final_icon_revision_runs_after_legacy_production_patches():
+    init_source = read("radmon/__init__.py")
+    assert "icon_system_revision" in init_source
+    patch_source = read("radmon/icon_system_revision.py")
+    assert 'app_icon("station_group")' in patch_source
+    assert 'app_icon("detector")' in patch_source
+    assert 'app_icon("station_properties")' in patch_source
