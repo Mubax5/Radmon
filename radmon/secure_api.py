@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from .audit import AuditTrail
 from .remote_alarm import RemoteAlarmMirror
-from .security import Role, SecurityStore, UserIdentity
+from .security import Role, SecurityError, SecurityStore, UserIdentity
 
 
 SESSION_COOKIE = "radmon_session"
@@ -26,6 +26,21 @@ class AckRequest(BaseModel):
     pic: str = Field(min_length=1, max_length=128)
     note: str = Field(default="", max_length=1000)
     pin: str = Field(min_length=4, max_length=8)
+
+
+class SuppressionRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+    duration_seconds: int = Field(ge=60, le=86400)
+    pic: str = Field(min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=1000)
+    auto_resume_on_normal: bool = True
+
+
+class PolicyResponseRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+    action: str = Field(min_length=1, max_length=128)
+    pic: str = Field(min_length=1, max_length=128)
+    reason: str = Field(default="", max_length=1000)
 
 
 class StationUpdateRequest(BaseModel):
@@ -58,6 +73,8 @@ def attach_secure_routes(
     archive_catalog: Any | None = None,
     archive_service: Any | None = None,
     source_health: Any | None = None,
+    alarm_policy: Any | None = None,
+    alarm_suppression: Any | None = None,
 ) -> FastAPI:
     def current_user(request: Request) -> UserIdentity:
         identity = security.session_user(request.cookies.get(SESSION_COOKIE))
@@ -75,23 +92,14 @@ def attach_secure_routes(
         identity = security.authenticate(payload.username, payload.password)
         if identity is None:
             audit.record(
-                "LOGIN_FAILED",
-                None,
-                "user",
-                payload.username.strip().lower(),
-                success=False,
-                reason="invalid credentials",
+                "LOGIN_FAILED", None, "user", payload.username.strip().lower(),
+                success=False, reason="invalid credentials",
             )
             raise HTTPException(status_code=401, detail="invalid credentials")
         token = security.create_session(identity.username, SESSION_TTL_SECONDS)
         response.set_cookie(
-            SESSION_COOKIE,
-            token,
-            max_age=SESSION_TTL_SECONDS,
-            httponly=True,
-            secure=cookie_secure,
-            samesite="strict",
-            path="/",
+            SESSION_COOKIE, token, max_age=SESSION_TTL_SECONDS,
+            httponly=True, secure=cookie_secure, samesite="strict", path="/",
         )
         audit.record("LOGIN_SUCCESS", identity, "user", identity.username)
         return {
@@ -117,9 +125,78 @@ def attach_secure_routes(
             "role": identity.role.value,
         }
 
+    # Compatibility raw-alarm route remains intentionally available for
+    # diagnostics/history. Operator-facing alarm workflow uses policy events.
     @app.get("/api/v1/control/alarms")
     def alarms(identity: UserIdentity = Depends(current_user)):
         return alarm_mirror.list_alarms(limit=500)
+
+    @app.get("/api/v1/control/alarm-events")
+    def alarm_events(identity: UserIdentity = Depends(current_user)):
+        if alarm_policy is None:
+            raise HTTPException(status_code=404, detail="alarm policy unavailable")
+        return alarm_policy.list_events(limit=500)
+
+    @app.get("/api/v1/control/alarm-policy/{serid}")
+    def alarm_policy_status(serid: int, identity: UserIdentity = Depends(current_user)):
+        if alarm_policy is None:
+            raise HTTPException(status_code=404, detail="alarm policy unavailable")
+        try:
+            return alarm_policy.get_policy(serid)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/v1/control/alarm-events/{event_id}/response")
+    def respond_policy_event(
+        event_id: str,
+        payload: PolicyResponseRequest,
+        identity: UserIdentity = Depends(current_user),
+    ):
+        if alarm_policy is None:
+            raise HTTPException(status_code=404, detail="alarm policy unavailable")
+        if not security.role_allows(identity.role, "ack_alarm"):
+            raise HTTPException(status_code=403, detail="operator permission required")
+        try:
+            return alarm_control.respond_policy_event(
+                identity, payload.pin, event_id,
+                action=payload.action, pic=payload.pic, reason=payload.reason,
+            )
+        except SecurityError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except Exception as exc:
+            code = 404 if "tidak ditemukan" in str(exc).lower() else 409
+            raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+    @app.get("/api/v1/control/suppressions")
+    def suppressions(identity: UserIdentity = Depends(current_user)):
+        if alarm_suppression is None:
+            raise HTTPException(status_code=404, detail="alarm suppression unavailable")
+        return alarm_suppression.list(active_only=False)
+
+    @app.post("/api/v1/control/suppressions/{serid}")
+    def start_suppression(
+        serid: int,
+        payload: SuppressionRequest,
+        identity: UserIdentity = Depends(current_user),
+    ):
+        if alarm_suppression is None:
+            raise HTTPException(status_code=404, detail="alarm suppression unavailable")
+        if not security.role_allows(identity.role, "suppress_alarm"):
+            raise HTTPException(status_code=403, detail="operator permission required")
+        try:
+            return alarm_suppression.start(
+                identity,
+                payload.pin,
+                serid,
+                payload.duration_seconds,
+                payload.pic,
+                payload.reason,
+                payload.auto_resume_on_normal,
+            )
+        except SecurityError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/v1/control/sources/health")
     def sources_health(identity: UserIdentity = Depends(current_user)):
@@ -138,16 +215,10 @@ def attach_secure_routes(
             raise HTTPException(status_code=403, detail="operator permission required")
         try:
             return alarm_control.ack(
-                identity,
-                payload.pin,
-                source_id,
-                serid,
-                payload.event_time,
-                action=payload.action,
-                pic=payload.pic,
-                note=payload.note,
+                identity, payload.pin, source_id, serid, payload.event_time,
+                action=payload.action, pic=payload.pic, note=payload.note,
             )
-        except PermissionError as exc:
+        except (PermissionError, SecurityError) as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -177,29 +248,18 @@ def attach_secure_routes(
         try:
             security.require_sensitive(identity, "manage_users", payload.pin)
             created = security.create_user(
-                payload.username,
-                payload.display_name,
-                payload.role,
-                payload.password,
-                payload.user_pin,
-                actor=identity.username,
+                payload.username, payload.display_name, payload.role,
+                payload.password, payload.user_pin, actor=identity.username,
             )
         except Exception as exc:
             audit.record(
-                "USER_CREATE",
-                identity,
-                "user",
-                payload.username,
+                "USER_CREATE", identity, "user", payload.username,
                 after={"display_name": payload.display_name, "role": payload.role.value},
-                success=False,
-                reason=str(exc),
+                success=False, reason=str(exc),
             )
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         audit.record(
-            "USER_CREATE",
-            identity,
-            "user",
-            created.username,
+            "USER_CREATE", identity, "user", created.username,
             after={"display_name": created.display_name, "role": created.role.value},
         )
         return {
@@ -219,10 +279,7 @@ def attach_secure_routes(
         return archive_catalog.list_archives(limit=1000)
 
     @app.get("/api/v1/control/archives/{quarter_id}/recap")
-    def archive_recap(
-        quarter_id: str,
-        identity: UserIdentity = Depends(current_user),
-    ):
+    def archive_recap(quarter_id: str, identity: UserIdentity = Depends(current_user)):
         if archive_catalog is None:
             raise HTTPException(status_code=404, detail="archive catalog unavailable")
         try:
@@ -245,22 +302,13 @@ def attach_secure_routes(
             result = archive_service.retry(quarter_id)
         except Exception as exc:
             audit.record(
-                "ARCHIVE_MANUAL_RETRY",
-                identity,
-                "archive",
-                quarter_id,
-                success=False,
-                reason=str(exc),
-                source="central",
+                "ARCHIVE_MANUAL_RETRY", identity, "archive", quarter_id,
+                success=False, reason=str(exc), source="central",
             )
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         audit.record(
-            "ARCHIVE_MANUAL_RETRY",
-            identity,
-            "archive",
-            quarter_id,
-            after=result,
-            source="central",
+            "ARCHIVE_MANUAL_RETRY", identity, "archive", quarter_id,
+            after=result, source="central",
         )
         return result
 
