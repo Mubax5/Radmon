@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..security import Role, SecurityStore, UserIdentity
-from .icons import silk_icon
+from .icons import app_icon
 
 
 class LoginDialog(QDialog):
@@ -20,7 +20,7 @@ class LoginDialog(QDialog):
         self.security = security
         self.identity: UserIdentity | None = None
         self.setWindowTitle("RadMon Login")
-        self.setWindowIcon(silk_icon("lock"))
+        self.setWindowIcon(app_icon("users"))
         self.setModal(True)
         self.setMinimumWidth(360)
 
@@ -57,7 +57,7 @@ class BootstrapAdminDialog(QDialog):
         self.security = security
         self.identity: UserIdentity | None = None
         self.setWindowTitle("RadMon - Buat Administrator Pertama")
-        self.setWindowIcon(silk_icon("lock"))
+        self.setWindowIcon(app_icon("users"))
         self.setModal(True)
         self.setMinimumWidth(440)
         layout = QVBoxLayout(self)
@@ -104,7 +104,7 @@ class PinDialog(QDialog):
     def __init__(self, title: str = "Verifikasi PIN", message: str = "Masukkan PIN untuk melanjutkan.", parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setWindowIcon(silk_icon("lock"))
+        self.setWindowIcon(app_icon("users"))
         self.setModal(True)
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(message))
