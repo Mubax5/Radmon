@@ -67,6 +67,12 @@ from .alarm_policy_security_revision import apply as _apply_alarm_policy_securit
 _apply_alarm_policy_security_revision()
 del _apply_alarm_policy_security_revision
 
+# Persisted alarm rows are visible immediately after restart, but notification
+# delivery reopens only after the first fresh live policy cycle completes.
+from .alarm_policy_runtime_revision import apply as _apply_alarm_policy_runtime_revision
+_apply_alarm_policy_runtime_revision()
+del _apply_alarm_policy_runtime_revision
+
 # Production DATETIME values are WIB wall-clock values. Keep its query
 # semantics intact before applying the final UI icon compatibility pass.
 from .grafana_wib_revision import apply as _apply_grafana_wib_revision
