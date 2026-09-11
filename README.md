@@ -16,6 +16,8 @@ Demo seluruh station/detector:
 RUN_DUMMY.bat
 ```
 
+Dataset demo tetap mencakup detector contoh **5202 / IS-1 Koridor** agar workflow multi-station dapat diuji tanpa hardware production.
+
 Central LAN pada PC `.2`:
 
 ```text
@@ -216,14 +218,14 @@ POST /auth/login
 POST /auth/logout
 GET  /auth/me
 
-GET  /api/v1/control/alarms                         # raw compatibility/history
-GET  /api/v1/control/alarm-events                   # operator policy events
+GET  /api/v1/control/alarms
+GET  /api/v1/control/alarm-events
 POST /api/v1/control/alarm-events/{event_id}/response
 GET  /api/v1/control/alarm-policy/{serid}
 GET  /api/v1/control/suppressions
 POST /api/v1/control/suppressions/{serid}
 
-POST /api/v1/control/alarms/{source_id}/{serid}/ack # legacy compatibility
+POST /api/v1/control/alarms/{source_id}/{serid}/ack
 GET  /api/v1/control/sources/health
 POST /api/v1/control/stations/{serid}
 GET/POST /api/v1/control/users
@@ -306,9 +308,11 @@ PENDING_DRAIN
 -> COMPLETE
 ```
 
-Sebelum purge central, backlog source sampai cutoff harus selesai dan archive diverifikasi. **Production source tidak pernah dipurge oleh archive service.**
+Sebelum purge central, backlog source sampai cutoff harus selesai dan archive **diverifikasi**. **Production source tidak pernah dipurge oleh archive service.**
 
-Retensi minimum default 5 tahun. Reports dapat membaca archive tanpa restore SQL.
+Bundle archive mencakup data CSV/SQL dan metadata verifikasi, termasuk `manifest.json` serta `monthly-recap.csv`. Retensi minimum default **5 tahun**. Reports dapat membaca archive **tanpa restore** SQL.
+
+Workflow report operator tetap memakai **Preview -> Print / Export PDF / Export CSV**.
 
 ## Audit
 
