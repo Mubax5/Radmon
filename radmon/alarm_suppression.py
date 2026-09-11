@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timedelta
 from typing import Callable
+import uuid
 
+from .alarm_policy_store import SuppressionRecord
 from .security import Role, SecurityError
 
 
@@ -52,6 +54,58 @@ class AlarmSuppressionService:
             permission = "ack_alarm"
         self.security.require_sensitive(identity, permission, pin)
 
+    @staticmethod
+    def _create_in_transaction(
+        tx,
+        *,
+        serid: int,
+        started_at: datetime,
+        expires_at: datetime,
+        auto_resume_on_normal: bool,
+        pic: str,
+        reason: str,
+        started_by: str,
+    ) -> SuppressionRecord:
+        """Insert and read a suppression on the same SQLite transaction.
+
+        Reading through a second SQLite connection before the detector
+        transaction commits cannot see the newly inserted row. Keep the write
+        and returned record on the owning transaction so creation is atomic.
+        """
+        suppression_id = str(uuid.uuid4())
+        tx.connection.execute(
+            """
+INSERT INTO alarm_suppression
+  (suppression_id, serid, started_at, expires_at, auto_resume_on_normal, pic, reason,
+   started_by, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""",
+            (
+                suppression_id,
+                int(serid),
+                started_at.isoformat(),
+                expires_at.isoformat(),
+                1 if auto_resume_on_normal else 0,
+                pic,
+                reason,
+                started_by,
+                started_at.isoformat(),
+                started_at.isoformat(),
+            ),
+        )
+        return SuppressionRecord(
+            suppression_id=suppression_id,
+            serid=int(serid),
+            started_at=started_at,
+            expires_at=expires_at,
+            auto_resume_on_normal=bool(auto_resume_on_normal),
+            pic=pic,
+            reason=reason,
+            started_by=started_by,
+            created_at=started_at,
+            updated_at=started_at,
+        )
+
     def start(
         self,
         identity,
@@ -93,15 +147,15 @@ class AlarmSuppressionService:
                 state.last_trigger_at = None
                 tx.save_state(state, at=started_at)
 
-            suppression = self.store.start_suppression(
-                int(serid),
-                started_at,
-                expires_at,
-                bool(auto_resume_on_normal),
-                pic_text,
-                reason_text,
-                identity.username,
-                connection=tx.connection,
+            suppression = self._create_in_transaction(
+                tx,
+                serid=int(serid),
+                started_at=started_at,
+                expires_at=expires_at,
+                auto_resume_on_normal=bool(auto_resume_on_normal),
+                pic=pic_text,
+                reason=reason_text,
+                started_by=identity.username,
             )
             tx.active_suppression = suppression
 
