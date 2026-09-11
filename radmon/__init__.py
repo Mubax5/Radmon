@@ -53,8 +53,15 @@ from .production_safety_revision import apply as _apply_production_safety_revisi
 _apply_production_safety_revision()
 del _apply_production_safety_revision
 
-# Production DATETIME values are WIB wall-clock values. Apply this last so all
-# generated Grafana queries use explicit WIB-to-UTC epoch conversion.
+# Production DATETIME values are WIB wall-clock values. Keep its query
+# semantics intact before applying the final UI icon compatibility pass.
 from .grafana_wib_revision import apply as _apply_grafana_wib_revision
 _apply_grafana_wib_revision()
 del _apply_grafana_wib_revision
+
+# Legacy production patches can replace tree/dialog methods. Apply semantic
+# Tabler icons after every older compatibility layer so final visible icons
+# remain distinct without changing LAN grouping behavior.
+from .icon_system_revision import apply as _apply_icon_system_revision
+_apply_icon_system_revision()
+del _apply_icon_system_revision
