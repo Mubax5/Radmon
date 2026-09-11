@@ -59,6 +59,8 @@ def install_window_security(window) -> None:
     if context is None:
         return
 
+    from .admin.icons import app_icon
+
     user_label = QLabel(
         f"User: {context.identity.display_name} · {context.identity.role.value}"
     )
@@ -95,12 +97,11 @@ def install_window_security(window) -> None:
     toolbar = window.findChild(QToolBar, "mainToolbar")
 
     if context.identity.role is Role.ADMINISTRATOR:
-        from .admin.icons import silk_icon
         from .admin.station_admin_dialog import StationAdminDialog
         from .admin.user_admin_dialog import UserAdminDialog
 
-        edit_station = QAction(silk_icon("feed"), "Edit Station", window)
-        manage_users = QAction(silk_icon("lock"), "Users", window)
+        edit_station = QAction(app_icon("station_properties"), "Edit Station", window)
+        manage_users = QAction(app_icon("users"), "Users", window)
 
         def open_station_editor() -> None:
             try:
@@ -140,7 +141,7 @@ def install_window_security(window) -> None:
             toolbar.addAction(edit_station)
             toolbar.addAction(manage_users)
 
-    logout = QAction("Logout / Exit", window)
+    logout = QAction(app_icon("exit"), "Logout / Exit", window)
 
     def do_logout() -> None:
         context.audit.record(
