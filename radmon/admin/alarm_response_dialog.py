@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from .icons import silk_icon
+from .icons import app_icon
 
 
 ACTIONS = (
@@ -25,7 +25,7 @@ class AlarmResponseDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Response to Alarm")
-        self.setWindowIcon(silk_icon("lock"))
+        self.setWindowIcon(app_icon("alarm"))
         self.setMinimumWidth(430)
         layout = QVBoxLayout(self)
         form = QFormLayout()
