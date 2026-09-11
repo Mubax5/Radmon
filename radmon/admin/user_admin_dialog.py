@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from ..security import Role, UserIdentity
 from .auth_dialogs import PinDialog
-from .icons import silk_icon
+from .icons import app_icon
 
 
 class UserAdminDialog(QDialog):
@@ -26,7 +26,7 @@ class UserAdminDialog(QDialog):
         self.security = security
         self.identity = identity
         self.setWindowTitle("User Management")
-        self.setWindowIcon(silk_icon("lock"))
+        self.setWindowIcon(app_icon("users"))
         self.resize(760, 520)
 
         layout = QVBoxLayout(self)
@@ -54,9 +54,9 @@ class UserAdminDialog(QDialog):
         layout.addLayout(form)
 
         actions = QHBoxLayout()
-        create = QPushButton(silk_icon("lock"), "Create User")
+        create = QPushButton(app_icon("users"), "Create User")
         create.clicked.connect(self._create)
-        toggle = QPushButton(silk_icon("lock"), "Enable / Disable Selected")
+        toggle = QPushButton(app_icon("users"), "Enable / Disable Selected")
         toggle.clicked.connect(self._toggle)
         actions.addWidget(create)
         actions.addWidget(toggle)
