@@ -46,11 +46,8 @@ def main() -> int:
     archive_service = None
     if settings.archive_enabled:
         archive_service = QuarterArchiveService(
-            CentralArchiveStore(settings),
-            archive_catalog,
-            services.audit,
-            settings.archive_dir,
-            timezone_name=settings.archive_timezone,
+            CentralArchiveStore(settings), archive_catalog, services.audit,
+            settings.archive_dir, timezone_name=settings.archive_timezone,
         )
 
     lan_enabled = _enabled("RADMON_LAN_ENABLED")
@@ -75,7 +72,7 @@ def main() -> int:
     whatsapp = None
     if _enabled("RADMON_WHATSAPP_ENABLED"):
         whatsapp = WhatsAppAlarmDispatcher(
-            services.alarm_mirror,
+            services.alarm_policy,
             SeleniumWhatsAppSender.from_env(),
         )
 
