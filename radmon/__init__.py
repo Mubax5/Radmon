@@ -53,6 +53,13 @@ from .production_safety_revision import apply as _apply_production_safety_revisi
 _apply_production_safety_revision()
 del _apply_production_safety_revision
 
+# Alarm policy must see the already-final production/safety behavior. It only
+# adds central sidecar state and legacy source write-through; source schemas are
+# never migrated by this layer.
+from .alarm_policy_revision import apply as _apply_alarm_policy_revision
+_apply_alarm_policy_revision()
+del _apply_alarm_policy_revision
+
 # Production DATETIME values are WIB wall-clock values. Keep its query
 # semantics intact before applying the final UI icon compatibility pass.
 from .grafana_wib_revision import apply as _apply_grafana_wib_revision
