@@ -1,0 +1,52 @@
+name: One-shot Task 9 Refactor
+
+on:
+  push:
+    branches: [release-cleanup]
+    paths:
+      - .github/workflows/refactor-task9.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Consolidate alarm policy layers
+        run: python scripts/refactor_task9.py
+      - name: Verify syntax and revision removal
+        shell: bash
+        run: |
+          python -m compileall -q radmon
+          python - <<'PY'
+          from pathlib import Path
+          import ast
+          for name in (
+              'alarm_policy_revision.py',
+              'alarm_policy_store_revision.py',
+              'alarm_policy_security_revision.py',
+              'alarm_policy_runtime_revision.py',
+          ):
+              assert not (Path('radmon') / name).exists()
+          tree = ast.parse(Path('radmon/alarm_policy.py').read_text(encoding='utf-8'))
+          cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AlarmPolicyService')
+          methods = {n.name for n in cls.body if isinstance(n, ast.FunctionDef)}
+          assert {'process_cycle','get_policy','observe_source_alarm','_snapshot'} <= methods
+          print('Task 9 structure OK')
+          PY
+      - name: Commit consolidated sources
+        shell: bash
+        run: |
+          git config user.name "RadMon Refactor Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "refactor: consolidate alarm policy patches"
+          git push origin HEAD:release-cleanup
