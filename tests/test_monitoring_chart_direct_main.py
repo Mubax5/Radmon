@@ -9,7 +9,7 @@ from radmon.grafana_tv import PLAYLIST_UID
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_grafana_uses_native_install_before_docker_when_local_api_cannot_be_provisioned() -> None:
+def test_grafana_uses_native_install_before_docker_when_local_api_cannot_be_provisioned(monkeypatch) -> None:
     calls: list[str] = []
     native_started = {"value": False}
 
@@ -22,6 +22,15 @@ def test_grafana_uses_native_install_before_docker_when_local_api_cannot_be_prov
     def native_runner(*, env, port: int) -> None:
         calls.append(f"native:{port}")
         native_started["value"] = True
+
+    # This test verifies native-before-Docker ordering, not host port availability.
+    # Keep the port deterministic so a running production Grafana on 3300/3301
+    # cannot turn the test into an environment-dependent false negative.
+    monkeypatch.setattr(
+        GrafanaBootstrap,
+        "_find_free_port",
+        lambda self, preferred: preferred,
+    )
 
     bootstrap = GrafanaBootstrap(
         Settings(grafana_fallback_port=3300),
