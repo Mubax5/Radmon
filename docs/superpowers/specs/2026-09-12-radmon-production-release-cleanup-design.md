@@ -312,6 +312,8 @@ The final product documentation is limited to current operational material, such
 - `docs/USER-MANUAL.md`
 - runtime HTML help assets only if the UI continues to use them
 
+The design spec in `docs/superpowers/specs/` and the implementation plan produced from it are temporary review artifacts on `release-cleanup`. They may exist while this refactor is in progress so the approved design and execution plan are auditable. Before the final production merge, they are removed as part of the user-requested historical-engineering-document cleanup after the final operational behavior has been captured in the current README/installation/user documentation.
+
 Documentation is updated to describe executable-based installation, startup, shutdown, external Grafana expectations, upgrade, rollback, and diagnostics. References to `.bat` launchers, `.venv`, manual `pip install`, or production `pytest` execution are removed from the production SOP.
 
 ## 14. Test strategy
