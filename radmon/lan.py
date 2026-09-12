@@ -554,12 +554,12 @@ class LanAggregator:
     def run_source_once(self, source):
         """Compatibility helper: one live/alarm poll plus one detector backfill step."""
         result = PullResult(source.source_id)
-        live_result = run_live_once(self, source)
+        live_result = self.run_live_once(source)
         result.mirrored_alarms = live_result.mirrored_alarms
         if live_result.error:
             result.error = live_result.error
             return result
-        backfill_result = run_backfill_once(self, source, 0)
+        backfill_result = self.run_backfill_once(source, 0)
         result.inserted_measurements = backfill_result.inserted_measurements
         result.error = backfill_result.error
         return result
