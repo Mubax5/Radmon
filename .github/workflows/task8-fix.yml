@@ -1,0 +1,56 @@
+name: One-shot Task 8 UI Fix
+
+on:
+  push:
+    branches: [release-cleanup]
+    paths:
+      - .github/workflows/task8-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Remove redundant station wrapper and canonicalize LAN values
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import ast
+
+          prod = Path('radmon/production_integration_revision.py')
+          text = prod.read_text(encoding='utf-8')
+          start = text.index('    original_station_init = station_admin_dialog.StationAdminDialog.__init__\n')
+          end_marker = '    station_admin_dialog.StationAdminDialog._values = station_values\n'
+          end = text.index(end_marker, start) + len(end_marker)
+          text = text[:start] + text[end:]
+          prod.write_text(text, encoding='utf-8')
+
+          path = Path('radmon/admin/station_admin_dialog.py')
+          source = path.read_text(encoding='utf-8')
+          old = '''    def _values(self) -> dict:\n        return {\n            "name": self.name.text().strip(),\n            "location": self.location.text().strip(),\n            "description": self.description.toPlainText().strip(),\n            "warnlevel": self.warn.value(),\n            "alarmlevel": self.alarm.value(),\n            "maxidlemin": self.maxidle.value(),\n            "unit": self.unit.text().strip() or "µSv/h",\n            "audiopath": self.audio_path.text().strip(),\n            "hwaddress": self.hw_address.text().strip(),\n            "hwtype": self.hw_type.text().strip() or "detector",\n        }\n'''
+          new = '''    def _values(self) -> dict:\n        values = {\n            "name": self.name.text().strip(),\n            "location": self.location.text().strip(),\n            "description": self.description.toPlainText().strip(),\n            "warnlevel": self.warn.value(),\n            "alarmlevel": self.alarm.value(),\n            "maxidlemin": self.maxidle.value(),\n            "unit": self.unit.text().strip() or "µSv/h",\n            "audiopath": self.audio_path.text().strip(),\n            "hwaddress": self.hw_address.text().strip(),\n            "hwtype": self.hw_type.text().strip() or "detector",\n        }\n        if self.source == "lan":\n            values.pop("hwaddress", None)\n            values.pop("hwtype", None)\n        return values\n'''
+          if old not in source:
+              raise SystemExit('canonical _values block not found')
+          path.write_text(source.replace(old, new, 1), encoding='utf-8')
+
+          Path('.github/workflows/task8-fix.yml').unlink()
+          PY
+          python -m compileall -q radmon
+      - name: Commit fix
+        shell: bash
+        run: |
+          git config user.name "RadMon Refactor Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: canonicalize LAN station identity fields"
+          git push origin HEAD:release-cleanup
