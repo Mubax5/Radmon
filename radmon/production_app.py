@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import replace
 from pathlib import Path
+import shutil
 from typing import Callable, Sequence, Any
 
 from .central_service import CentralService, smoke_server_lifecycle
@@ -22,6 +23,19 @@ from .single_instance import SingleInstanceLock
 
 def _default_grafana_startup(settings: Settings, paths: ApplicationPaths) -> str:
     return GrafanaBootstrap(settings, project_root=paths.app_dir).ensure()
+
+
+def _migrate_legacy_env(paths: ApplicationPaths) -> bool:
+    """Copy a legacy install-root .env into external config exactly once."""
+    legacy_env = paths.install_root / ".env"
+    target_env = paths.env_file
+    if legacy_env.resolve() == target_env.resolve():
+        return False
+    if target_env.exists() or not legacy_env.is_file():
+        return False
+    target_env.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(legacy_env, target_env)
+    return True
 
 
 def run_production(
@@ -44,6 +58,7 @@ def run_production(
     ):
         folder.mkdir(parents=True, exist_ok=True)
 
+    _migrate_legacy_env(paths)
     settings = Settings.from_env(paths.env_file).for_application_paths(paths)
     settings = replace(settings, lan_enabled=True)
     log_path = configure_logging(settings.log_dir)
