@@ -1,0 +1,44 @@
+name: One-shot Task 10 Regression Repair
+
+on:
+  push:
+    branches: [release-cleanup]
+    paths:
+      - scripts/repair_task10.py
+      - .github/workflows/repair-task10.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Repair canonical Grafana and refresh methods
+        run: python scripts/repair_task10.py
+      - name: Verify syntax and cleanup
+        shell: bash
+        run: |
+          python -m compileall -q radmon
+          test ! -e scripts/repair_task10.py
+          test ! -e .github/workflows/repair-task10.yml
+          ! grep -R "relation = status_relation(stations)" -n radmon/grafana_tv.py
+          ! grep -R "def _refresh_current_page_base" -n radmon/admin/main_window.py
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name "RadMon Refactor Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 1
+          fi
+          git commit -m "fix: repair final revision consolidation"
+          git push origin HEAD:release-cleanup
