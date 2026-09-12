@@ -61,6 +61,12 @@ def test_grafana_behavior_is_defined_in_base_modules():
     assert grafana_tv.build_page_three.__module__ == "radmon.grafana_tv"
 
 
+def test_canonical_grafana_helpers_do_not_reference_revision_local_names():
+    source = (ROOT / "radmon/grafana_tv.py").read_text(encoding="utf-8")
+    assert "relation = status_relation(stations)" not in source
+    assert "relation = _status_relation(stations)" in source
+
+
 def test_admin_ui_behavior_is_defined_in_base_modules():
     assert PinDialog.get_pin.__module__ == "radmon.admin.auth_dialogs"
     assert MainWindow.reload_station_sidebar.__module__ == "radmon.admin.main_window"
@@ -68,6 +74,15 @@ def test_admin_ui_behavior_is_defined_in_base_modules():
     assert StationAdminDialog.__init__.__module__ == "radmon.admin.station_admin_dialog"
     assert AlarmPage.__init__.__module__ == "radmon.admin.alarm_page"
     assert AlarmResponseDialog.__init__.__module__ == "radmon.admin.alarm_response_dialog"
+
+
+def test_public_refresh_method_owns_monitoring_feedback_directly():
+    source = (ROOT / "radmon/admin/main_window.py").read_text(encoding="utf-8")
+    assert "def _refresh_current_page_base" not in source
+    start = source.index("    def refresh_current_page")
+    block = source[start:]
+    assert "if self._monitoring_open_pending:" in block
+    assert "Grafana sedang disiapkan" in block
 
 
 def test_consolidated_revision_files_are_gone():
