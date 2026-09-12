@@ -150,7 +150,9 @@ Tombol **Monitoring** membuka Grafana Playlist `Realtime -> Trends -> Operations
 
 ## Reports dan quarterly archive
 
-Reports mendukung workflow **Preview -> Print / Export PDF / Export CSV**. Quarter lama dapat dipindah ke archive terverifikasi melalui lifecycle `PENDING_DRAIN -> EXPORTING -> VERIFYING -> SEALED -> PURGING -> COMPLETE`. Source production tidak pernah dipurge oleh archive service. Retensi minimum default 5 tahun dan report archive dapat dibaca tanpa restore SQL.
+Reports mendukung workflow **Preview -> Print / Export PDF / Export CSV**. Quarter lama dapat dipindah ke archive terverifikasi melalui lifecycle `PENDING_DRAIN -> EXPORTING -> VERIFYING -> SEALED -> PURGING -> COMPLETE`. Sebelum purge central, backlog source sampai cutoff harus selesai dan bundle archive harus terverifikasi; source production tidak pernah dipurge oleh archive service.
+
+Bundle archive mencakup metadata verifikasi dan export yang diperlukan untuk pembacaan langsung, termasuk `manifest.json` dan `monthly-recap.csv`. Checkpoint/drain tetap diikat ke `source_id + SERID production`. Retensi minimum default **5 tahun** dan report archive dapat dibaca **tanpa restore** SQL.
 
 ## WhatsApp alarm
 
