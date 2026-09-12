@@ -22,10 +22,8 @@ def test_repository_and_archive_behavior_is_not_monkey_patched():
 
 def test_lan_alarm_behavior_is_defined_in_base_modules():
     assert RemoteMariaDBSource.live_rows.__module__ == "radmon.lan"
-    # Alarm Policy still wraps the public cycle until Task 9. The consolidated
-    # LAN implementation itself must already live in the canonical module.
     assert LanAggregator._run_live_core_once.__module__ == "radmon.lan"
-    assert "    def run_live_once(self, source):" in (ROOT / "radmon" / "lan.py").read_text(encoding="utf-8")
+    assert LanAggregator.run_live_once.__module__ == "radmon.lan"
     assert MariaCentralStore.mark_alarm_handled.__module__ == "radmon.lan"
     assert RemoteAlarmMirror.mirror.__module__ == "radmon.remote_alarm"
     assert RemoteAlarmMirror.reconcile_source_active_keys.__module__ == "radmon.remote_alarm"
@@ -55,6 +53,10 @@ def test_consolidated_revision_files_are_gone():
         "remote_alarm_revision.py",
         "production_safety_revision.py",
         "production_integration_compat_revision.py",
+        "alarm_policy_revision.py",
+        "alarm_policy_store_revision.py",
+        "alarm_policy_security_revision.py",
+        "alarm_policy_runtime_revision.py",
     ):
         assert not (ROOT / "radmon" / name).exists()
 
@@ -64,11 +66,14 @@ def test_one_shot_refactor_artifacts_are_gone():
         "scripts/refactor_task7.py",
         "scripts/refactor_task7_fixed.py",
         "scripts/refactor_task8.py",
+        "scripts/refactor_task9.py",
         ".github/workflows/refactor-task7.yml",
         ".github/workflows/refactor-task7-retry.yml",
         ".github/workflows/refactor-task7-repair.yml",
         ".github/workflows/task7-finalize.yml",
         ".github/workflows/refactor-task8.yml",
         ".github/workflows/task8-fix.yml",
+        ".github/workflows/refactor-task9.yml",
+        ".github/workflows/refactor-task9-retry.yml",
     ):
         assert not (ROOT / relative).exists()
