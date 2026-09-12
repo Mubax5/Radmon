@@ -12,8 +12,19 @@ import {
 } from "@phosphor-icons/react";
 import { Badge, Button, Input, LayerCard, Sidebar, Table } from "@cloudflare/kumo";
 import { api, currentUser, login, logout, type Role, type SessionUser, type Station } from "./api";
+import { AlarmOperations, CreateUserPanel } from "./Actions";
 
 const ROLE_RANK: Record<Role, number> = { Viewer: 1, Operator: 2, Administrator: 3 };
+
+type PolicyEvent = Record<string, unknown> & {
+  event_id: string;
+  serid: number;
+  status: string;
+  kind: string;
+  measured_value?: number | null;
+  threshold?: number | null;
+  surfaced_at?: string;
+};
 
 type NavItem = {
   id: string;
@@ -196,16 +207,32 @@ function ArchivesPage() {
 }
 
 function AlarmsPage() {
-  const [items, setItems] = useState<Array<Record<string, unknown>> | null>(null);
-  const load = () => api<Array<Record<string, unknown>>>("/api/v1/control/alarm-events").then(setItems);
+  const [items, setItems] = useState<PolicyEvent[] | null>(null);
+  const [error, setError] = useState("");
+  const load = () => api<PolicyEvent[]>("/api/v1/control/alarm-events").then((rows) => { setItems(rows); setError(""); }).catch((e) => setError(e.message));
   useEffect(() => { void load(); }, []);
-  return <><PageHeading title="Alarms" description="Central alarm-policy events. Response and suppression remain protected by operator PIN policy." action={<Button variant="secondary" onClick={() => void load()}>Refresh</Button>} />{items ? <JsonTable rows={items} empty="No alarm events." /> : <LoadingCard />}</>;
+  return (
+    <>
+      <PageHeading title="Alarms" description="Central alarm-policy events. Response and suppression are protected by operator role and PIN policy." action={<Button variant="secondary" onClick={() => void load()}>Refresh</Button>} />
+      {error ? <ErrorCard message={error} /> : null}
+      {items ? <><AlarmOperations events={items} onChanged={() => void load()} /><JsonTable rows={items} empty="No alarm events." /></> : <LoadingCard />}
+    </>
+  );
 }
 
 function UsersPage() {
   const [items, setItems] = useState<Array<Record<string, unknown>> | null>(null);
-  useEffect(() => { api<Array<Record<string, unknown>>>("/api/v1/control/users").then(setItems); }, []);
-  return <><PageHeading title="Users" description="Authenticated RadMon identities and assigned roles." />{items ? <JsonTable rows={items} empty="No users." /> : <LoadingCard />}</>;
+  const [error, setError] = useState("");
+  const load = () => api<Array<Record<string, unknown>>>("/api/v1/control/users").then((rows) => { setItems(rows); setError(""); }).catch((e) => setError(e.message));
+  useEffect(() => { void load(); }, []);
+  return (
+    <>
+      <PageHeading title="Users" description="Authenticated RadMon identities and assigned roles." />
+      <CreateUserPanel onCreated={() => void load()} />
+      {error ? <ErrorCard message={error} /> : null}
+      {items ? <JsonTable rows={items} empty="No users." /> : <LoadingCard />}
+    </>
+  );
 }
 
 function SystemPage() {
