@@ -29,7 +29,10 @@ def test_collector_supports_pause_event_and_releases_port():
     assert "serial_port.close()" in source
 
 
-def test_main_passes_runtime_to_window_and_lan_keeps_runtime_none():
-    source = Path("main.py").read_text(encoding="utf-8")
-    assert "runtime=runtime" in source
-    assert 'if args.source != "lan"' in source
+def test_developer_runtime_passes_runtime_to_window_and_production_lan_does_not():
+    developer = Path("radmon/dev_app.py").read_text(encoding="utf-8")
+    desktop = Path("radmon/desktop_app.py").read_text(encoding="utf-8")
+    production = Path("radmon/production_app.py").read_text(encoding="utf-8")
+    assert "runtime=runtime" in developer
+    assert "ApplicationRuntime(" not in desktop
+    assert "ApplicationRuntime(" not in production
