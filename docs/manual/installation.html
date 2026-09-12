@@ -1,15 +1,56 @@
-<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RadMon - Installation Manual</title><link rel="stylesheet" href="manual.css"></head><body><h1>RadMon Installation Manual</h1><p>Manual ini untuk PC3 central RadMon pada jaringan produksi. Database central tetap bernama <code>ipradmon</code>.</p><h2>Topologi produksi</h2><table><tr><th>Peran</th><th>Alamat</th><th>Isi</th></tr><tr><td>PC3 central</td><td>192.168.1.2</td><td>MariaDB central, collector/API, Admin, Grafana</td></tr><tr><td>Source Gd.50</td><td>192.168.1.50:3306</td><td>3000-3004</td></tr><tr><td>Source Gd.52</td><td>192.168.1.52:3306</td><td>5201, 5202, 5501, 5701, 5702</td></tr><tr><td>Source Gd.38</td><td>192.168.1.38:3306</td><td>3801-3805</td></tr></table><h2>Konfigurasi .env</h2><pre>RADMON_DB_HOST=127.0.0.1
-RADMON_DB_PORT=3306
-RADMON_DB_NAME=ipradmon
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RadMon - Installation</title>
+  <link rel="stylesheet" href="manual.css">
+</head>
+<body>
+  <main>
+    <h1>RadMon Installation Guide</h1>
+    <p>Production Windows dijalankan dari <strong>app\RadMon.exe</strong>. Python tidak perlu dipasang di PC production karena runtime sudah dibundle.</p>
 
-RADMON_LAN_ENABLED=1
-RADMON_LAN_SOURCES=gd50@192.168.1.50;gd52@192.168.1.52;gd38@192.168.1.38
-RADMON_LAN_DB_PORT=3306
-RADMON_LAN_DB_NAME=ipradmon
-RADMON_LAN_POLL_INTERVAL=2
+    <h2>Portable layout</h2>
+    <pre>RadMon\
+  app\
+    RadMon.exe
+    docs\manual\
+    grafana\
+  config\
+    .env.example
+    .env
+  runtime\
+  archives\
+  reports\</pre>
 
-RADMON_BACKFILL_ENABLED=1
-RADMON_BACKFILL_BATCH_SIZE=500
-RADMON_BACKFILL_INTERVAL=2</pre><p class="warn">Simpan username/password MariaDB hanya di file <code>.env</code> lokal. Jangan commit credential ke repository.</p><h2>Menjalankan</h2><p>Jalankan <code>RUN_LAN.bat</code>. Launcher menyalakan satu central collector/API owner, lalu membuka Admin. Docker tidak diperlukan untuk collector. Jika Windows PC3 tidak mendukung Docker, Grafana dapat dijalankan sebagai instalasi native Windows.</p><h2>Alur data</h2><p><code>vrecent</code> dipoll setiap 2 detik untuk monitoring. Snapshot disimpan ke central <code>recent</code>, dan sample live juga dimasukkan idempotent ke <code>measurement</code> agar grafik live langsung memiliki titik data. History lama diambil worker backfill terpisah secara bertahap dan checkpointed.</p><h2>Pemeriksaan</h2><pre>Test-NetConnection 192.168.1.50 -Port 3306
-Test-NetConnection 192.168.1.52 -Port 3306
-Test-NetConnection 192.168.1.38 -Port 3306</pre><p>Log normal memperlihatkan baris <code>[LIVE]</code> untuk tiap source dan <code>[BACKFILL]</code> untuk import history. Source yang gagal tidak menghentikan source lain.</p><h2>Grafana</h2><p>Dashboard realtime membaca central <code>vrecent</code>. Trend dan sparkline membaca central <code>measurement</code>. Jika Grafana native digunakan, konfigurasi datasource tetap menunjuk ke MariaDB central PC3.</p></body></html>
+    <h2>First run pada central PC 192.168.1.2</h2>
+    <ol>
+      <li>Extract artifact <code>RadMon-Windows</code> ke folder tetap, misalnya <code>C:\RadMon</code>.</li>
+      <li>Pastikan Docker Desktop tersedia jika Grafana lokal dipakai.</li>
+      <li>Copy <code>config\.env.example</code> menjadi <code>config\.env</code>.</li>
+      <li>Isi koneksi central MariaDB serta source <code>gd50</code>, <code>gd52</code>, dan <code>gd38</code>.</li>
+      <li>Double-click <code>app\RadMon.exe</code>.</li>
+    </ol>
+
+    <h2>Source production</h2>
+    <pre>gd50 -&gt; 192.168.1.50:3306 / ipradmon
+gd52 -&gt; 192.168.1.52:3306 / ipradmon
+gd38 -&gt; 192.168.1.38:3306 / ipradmon</pre>
+
+    <p><strong>Jangan mengganti source_id</strong> karena checkpoint/state menggunakan identity tersebut. RadMon tidak melakukan DDL pada database source production.</p>
+
+    <h2>Migrasi konfigurasi lama</h2>
+    <p>Jika instalasi lama memiliki <code>.env</code> di root dan <code>config\.env</code> belum ada, first run menyalin konfigurasi tersebut ke lokasi baru. File lama tetap disimpan. Target yang sudah ada tidak pernah ditimpa.</p>
+
+    <h2>Upgrade</h2>
+    <p>Tutup RadMon, backup folder instalasi, lalu pertahankan <code>config\.env</code>, <code>runtime\</code>, <code>archives\</code>, dan <code>reports\</code>. Ganti file aplikasi dari artifact baru dan jalankan kembali <code>app\RadMon.exe</code>.</p>
+
+    <h2>Lifecycle</h2>
+    <p>Satu proses RadMon menjadi owner untuk collector LAN, API, desktop Admin, alarm policy, archive lifecycle, dan bootstrap Grafana. Menutup desktop Admin menghentikan central service yang dimiliki proses tersebut.</p>
+
+    <h2>Commissioning</h2>
+    <p>Setelah instalasi atau upgrade, verifikasi source health, central MariaDB, Grafana, alarm Response/Silence, report/archive, dan konektivitas lapangan. CI/smoke-test bundle tidak menggantikan commissioning hardware nyata.</p>
+  </main>
+</body>
+</html>
