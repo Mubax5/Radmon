@@ -1,14 +1,15 @@
 from pathlib import Path
 
 from radmon.config import Settings
-from radmon.grafana_bootstrap import DASHBOARD_UIDS, GrafanaBootstrap, PLAYLIST_UID
+from radmon.grafana_persistent import PersistentGrafanaBootstrap
+from radmon.grafana_tv import DASHBOARD_UIDS, PLAYLIST_UID
 
 
 def test_existing_grafana_resources_are_never_overwritten(tmp_path: Path) -> None:
-    bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
+    bootstrap = PersistentGrafanaBootstrap(Settings(), project_root=tmp_path)
     writes: list[tuple[str, str]] = []
 
-    def request(url: str, *, method: str = "GET", payload=None):
+    def request(url: str, *, method: str = "GET", payload=None, use_auth=True):
         if method != "GET":
             writes.append((method, url))
         if "/api/datasources/uid/" in url:
@@ -25,10 +26,10 @@ def test_existing_grafana_resources_are_never_overwritten(tmp_path: Path) -> Non
 
 
 def test_missing_grafana_resources_are_seeded_without_overwrite(tmp_path: Path) -> None:
-    bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
+    bootstrap = PersistentGrafanaBootstrap(Settings(), project_root=tmp_path)
     posts: list[tuple[str, dict]] = []
 
-    def request(url: str, *, method: str = "GET", payload=None):
+    def request(url: str, *, method: str = "GET", payload=None, use_auth=True):
         if method == "GET":
             raise RuntimeError("missing")
         posts.append((url, payload or {}))
@@ -46,7 +47,7 @@ def test_missing_grafana_resources_are_seeded_without_overwrite(tmp_path: Path) 
 
 def test_native_grafana_is_lan_visible_and_persistent(tmp_path: Path) -> None:
     settings = Settings(runtime_dir=Path("runtime"), grafana_fallback_port=3300)
-    env = GrafanaBootstrap(settings, project_root=tmp_path)._native_environment(3300)
+    env = PersistentGrafanaBootstrap(settings, project_root=tmp_path)._native_environment(3300)
     assert env["GF_SERVER_HTTP_ADDR"] == "0.0.0.0"
     assert env["GF_SERVER_HTTP_PORT"] == "3300"
     assert env["GF_AUTH_ANONYMOUS_ENABLED"] == "true"
