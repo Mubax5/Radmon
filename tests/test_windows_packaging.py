@@ -59,6 +59,7 @@ def test_windows_installer_release_has_fixed_unversioned_name():
     normalized = workflow.replace("/", "\\")
 
     assert "OutputBaseFilename=RadMon-Setup" in installer
+    assert "AppVerName={#AppName}" in installer
     assert "AppVersion=" not in installer
     assert "VersionInfoVersion=" not in installer
     assert "RadMon-Setup.exe" in normalized
