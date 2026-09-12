@@ -739,24 +739,6 @@ class MainWindow(QMainWindow):
                 page.build_preview()
             page.print_report()
 
-    def _refresh_current_page_base(self) -> None:
-        page = self.tabs.currentWidget()
-        if page is not None and hasattr(page, "refresh_live"):
-            page.refresh_live()
-
-        self._open_monitoring_if_ready()
-        if self._monitoring_open_pending:
-            self.statusBar().showMessage("Grafana sedang disiapkan dan diverifikasi...")
-            return
-
-        error = getattr(page, "last_error", None) if page is not None else None
-        mode = {"dummy": "DEMO", "detector": "DETECTOR", "lan": "LAN"}.get(self.source, self.source.upper())
-        if error:
-            self.statusBar().showMessage(f"{mode} · {error}")
-        else:
-            self.statusBar().showMessage(
-                f"{mode} · {self.settings.station_label} · refresh {self.preferences.refresh_interval:g}s"
-            )
 
     def reload_station_sidebar(self, *, select_serid: int | None = None) -> None:
         context = get_context()
@@ -900,19 +882,38 @@ class MainWindow(QMainWindow):
             lambda: self._open_manual(USER_MANUAL_PATH)
         )
 
-    def refresh_current_page(self) -> None:
-        self._refresh_current_page_base()
-        self._refresh_source_parent_states()
-        context = get_context()
-        if context is None:
-            return
-        try:
-            active = context.alarm_mirror.list_alarms(active_only=True, limit=1)
-        except Exception:
-            active = []
-        if active:
-            now = time.monotonic()
-            last = float(getattr(self, "_last_alarm_beep", 0.0))
-            if now - last >= 1.5:
-                QApplication.beep()
-                self._last_alarm_beep = now
+def refresh_current_page(self) -> None:
+    page = self.tabs.currentWidget()
+    if page is not None and hasattr(page, "refresh_live"):
+        page.refresh_live()
+
+    self._open_monitoring_if_ready()
+    if self._monitoring_open_pending:
+        self.statusBar().showMessage("Grafana sedang disiapkan dan diverifikasi...")
+    else:
+        error = getattr(page, "last_error", None) if page is not None else None
+        mode = {"dummy": "DEMO", "detector": "DETECTOR", "lan": "LAN"}.get(
+            self.source, self.source.upper()
+        )
+        if error:
+            self.statusBar().showMessage(f"{mode} · {error}")
+        else:
+            self.statusBar().showMessage(
+                f"{mode} · {self.settings.station_label} · "
+                f"refresh {self.preferences.refresh_interval:g}s"
+            )
+
+    self._refresh_source_parent_states()
+    context = get_context()
+    if context is None:
+        return
+    try:
+        active = context.alarm_mirror.list_alarms(active_only=True, limit=1)
+    except Exception:
+        active = []
+    if active:
+        now = time.monotonic()
+        last = float(getattr(self, "_last_alarm_beep", 0.0))
+        if now - last >= 1.5:
+            QApplication.beep()
+            self._last_alarm_beep = now

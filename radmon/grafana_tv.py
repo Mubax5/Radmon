@@ -210,7 +210,7 @@ def _time_stat(panel_id, station, x, y, w, h=1):
 
 
 def _operation_table(panel_id: int, title: str, x: int, y: int, w: int, h: int, *, stations: Sequence | None=None) -> dict[str, Any]:
-    relation = status_relation(stations)
+    relation = _status_relation(stations)
     table = _panel(panel_id, 'table', title, x, y, w, h)
     table['description'] = 'operational-condition'
     table['targets'] = [_target(f"\nSELECT\n  s.serid AS `ID`,\n  s.name AS `Ruangan`,\n  s.location AS `Lokasi`,\n  ROUND(s.doserate, 3) AS `Dose Rate`,\n  DATE_FORMAT(s.dtom, '%Y-%m-%d %H:%i:%s') AS `Waktu`,\n  s.status AS `Status`,\n  s.underlying_status AS `Underlying`,\n  s.trigger_count AS `Trigger`,\n  CASE WHEN s.retrigger_locked = 1 THEN 'LOCKED' ELSE '' END AS `Retrigger`,\n  DATE_FORMAT(s.suppression_expires_at, '%Y-%m-%d %H:%i:%s') AS `Suppression Until`,\n  COALESCE(s.suppression_pic, '') AS `PIC`,\n  COALESCE(s.suppression_reason, '') AS `Reason`\nFROM ({relation}) s\nORDER BY FIELD(s.status, 'OFFLINE', 'SUPPRESSED', 'ALARM', 'ALERT', 'NORMAL'), s.serid\n")]
