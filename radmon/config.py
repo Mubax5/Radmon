@@ -55,6 +55,7 @@ class Settings:
     log_dir: Path = Path("logs")
     single_instance_port: int = 47652
     central_host: str = "192.168.1.2"
+    lan_enabled: bool = False
     archive_enabled: bool = True
     archive_dir: Path = Path("archives")
     archive_timezone: str = "Asia/Jakarta"
@@ -62,9 +63,9 @@ class Settings:
     archive_check_interval: float = 60.0
 
     @classmethod
-    def from_env(cls, env_file: str | None = ".env") -> "Settings":
+    def from_env(cls, env_file: str | Path | None = ".env") -> "Settings":
         if load_dotenv is not None and env_file:
-            load_dotenv(env_file, override=False)
+            load_dotenv(str(env_file), override=False)
         get = os.getenv
         dummy_mode = get("RADMON_DUMMY_MODE", "normal").strip().lower()
         if dummy_mode not in {"normal", "alert", "alarm", "mixed"}:
@@ -120,11 +121,27 @@ class Settings:
             log_dir=Path(get("RADMON_LOG_DIR", "logs")),
             single_instance_port=int(get("RADMON_SINGLE_INSTANCE_PORT", "47652")),
             central_host=get("RADMON_CENTRAL_HOST", "192.168.1.2"),
+            lan_enabled=_as_bool(get("RADMON_LAN_ENABLED"), False),
             archive_enabled=_as_bool(get("RADMON_ARCHIVE_ENABLED"), True),
             archive_dir=Path(get("RADMON_ARCHIVE_DIR", "archives")),
             archive_timezone=archive_timezone,
             archive_min_retention_years=archive_retention,
             archive_check_interval=archive_check_interval,
+        )
+
+    def for_application_paths(self, paths: "ApplicationPaths") -> "Settings":
+        def resolved(value: Path, default: Path) -> Path:
+            if value.is_absolute():
+                return value
+            default_names = {"runtime", "archives", "logs", "!REPORT!", "reports"}
+            return default if str(value) in default_names else paths.install_root / value
+
+        return replace(
+            self,
+            runtime_dir=resolved(self.runtime_dir, paths.runtime_dir),
+            archive_dir=resolved(self.archive_dir, paths.archive_dir),
+            report_dir=resolved(self.report_dir, paths.report_dir),
+            log_dir=resolved(self.log_dir, paths.log_dir),
         )
 
     def detector_bindings(self) -> list[tuple[int, str]]:
