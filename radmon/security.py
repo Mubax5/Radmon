@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import secrets
 import sqlite3
+import threading
 from typing import Any, Callable
 
 
@@ -31,9 +32,9 @@ class UserIdentity:
 
 ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
     Role.ADMINISTRATOR: frozenset({
-        "view", "ack_alarm", "manage_users", "edit_station", "manage_sources",
+        "view", "ack_alarm", "suppress_alarm", "manage_users", "edit_station", "manage_sources",
     }),
-    Role.OPERATOR: frozenset({"view", "ack_alarm"}),
+    Role.OPERATOR: frozenset({"view", "ack_alarm", "suppress_alarm"}),
     Role.VIEWER: frozenset({"view"}),
 }
 
@@ -41,16 +42,10 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
 class SecurityStore:
     PBKDF2_ITERATIONS = 260_000
 
-    def __init__(
-        self,
-        path: Path | str,
-        *,
-        now: Callable[[], datetime] | None = None,
-    ) -> None:
-        self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._now = now or (lambda: datetime.now(timezone.utc))
-        self._init_schema()
+    def __init__(self, path: Path | str, *, now: Callable[[], datetime] | None = None) -> None:
+        self._init_base(path, now=now)
+        self._sensitive_leases: dict[str, datetime] = {}
+        self._sensitive_lease_lock = threading.Lock()
 
     def _connection(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=10)
@@ -241,11 +236,9 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
         return bool(row and int(row[1]) and self._verify_secret(pin, str(row[0])))
 
     def set_user_enabled(self, username: str, enabled: bool) -> None:
-        with self._connection() as connection:
-            connection.execute(
-                "UPDATE users SET enabled = ?, updated_at = ? WHERE username = ?",
-                (1 if enabled else 0, self._now().isoformat(), username.strip().lower()),
-            )
+        self._set_user_enabled_base(username, enabled)
+        if not enabled:
+            self.clear_sensitive_lease(username)
 
     def reset_password(self, username: str, password: str) -> None:
         if len(password) < 8:
@@ -257,13 +250,8 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
             )
 
     def reset_pin(self, username: str, pin: str) -> None:
-        if not pin.isdigit() or not 4 <= len(pin) <= 8:
-            raise ValueError("PIN harus 4-8 digit")
-        with self._connection() as connection:
-            connection.execute(
-                "UPDATE users SET pin_hash = ?, updated_at = ? WHERE username = ?",
-                (self._hash_secret(pin), self._now().isoformat(), username.strip().lower()),
-            )
+        self._reset_pin_base(username, pin)
+        self.clear_sensitive_lease(username)
 
     def list_users(self) -> list[dict[str, object]]:
         with self._connection() as connection:
@@ -287,11 +275,18 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
         selected = role if isinstance(role, Role) else Role(role)
         return permission in ROLE_PERMISSIONS[selected]
 
-    def require_sensitive(self, identity: UserIdentity | None, permission: str, pin: str) -> None:
+    def require_sensitive(self, identity, permission: str, pin: str) -> None:
         if identity is None or not self.role_allows(identity.role, permission):
-            raise SecurityError("aksi tidak diizinkan")
-        if not self.verify_pin(identity.username, pin):
-            raise SecurityError("PIN tidak valid")
+            raise SecurityError('aksi tidak diizinkan')
+        supplied = str(pin or '')
+        if not supplied:
+            if self.sensitive_lease_active(identity):
+                return
+            raise SecurityError('PIN tidak valid')
+        if not self.verify_pin(identity.username, supplied):
+            raise SecurityError('PIN tidak valid')
+        with self._sensitive_lease_lock:
+            self._sensitive_leases[str(identity.username).strip().lower()] = self._now() + timedelta(seconds=600)
 
     @staticmethod
     def _token_hash(token: str) -> str:
@@ -338,12 +333,10 @@ WHERE s.token_hash = ?
         return UserIdentity(str(row[0]), str(row[1]), Role(str(row[2])))
 
     def revoke_session(self, token: str | None) -> None:
-        if not token:
-            return
-        with self._connection() as connection:
-            connection.execute(
-                "DELETE FROM sessions WHERE token_hash = ?", (self._token_hash(token),)
-            )
+        identity = self.session_user(token) if token else None
+        self._revoke_session_base(token)
+        if identity is not None:
+            self.clear_sensitive_lease(identity.username)
 
     def resolve_station(self, source_id: str, remote_serid: int) -> int:
         source = source_id.strip()
@@ -513,3 +506,63 @@ ON CONFLICT(quarter_id) DO UPDATE SET
         if item is None:
             raise RuntimeError("archive state tidak ditemukan setelah update")
         return item
+
+    def _init_base(self, path: Path | str, *, now: Callable[[], datetime] | None=None) -> None:
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._now = now or (lambda: datetime.now(timezone.utc))
+        self._init_schema()
+
+    def _set_user_enabled_base(self, username: str, enabled: bool) -> None:
+        with self._connection() as connection:
+            connection.execute('UPDATE users SET enabled = ?, updated_at = ? WHERE username = ?', (1 if enabled else 0, self._now().isoformat(), username.strip().lower()))
+
+    def _reset_pin_base(self, username: str, pin: str) -> None:
+        if not pin.isdigit() or not 4 <= len(pin) <= 8:
+            raise ValueError('PIN harus 4-8 digit')
+        with self._connection() as connection:
+            connection.execute('UPDATE users SET pin_hash = ?, updated_at = ? WHERE username = ?', (self._hash_secret(pin), self._now().isoformat(), username.strip().lower()))
+
+    def _revoke_session_base(self, token: str | None) -> None:
+        if not token:
+            return
+        with self._connection() as connection:
+            connection.execute('DELETE FROM sessions WHERE token_hash = ?', (self._token_hash(token),))
+
+    def sensitive_lease_active(self, identity) -> bool:
+        if identity is None:
+            return False
+        username = str(identity.username).strip().lower()
+        with self._sensitive_lease_lock:
+            expires = self._sensitive_leases.get(username)
+            if expires is None:
+                return False
+            if expires <= self._now():
+                self._sensitive_leases.pop(username, None)
+                return False
+            return True
+
+    def clear_sensitive_lease(self, username: str | None=None) -> None:
+        with self._sensitive_lease_lock:
+            if username is None:
+                self._sensitive_leases.clear()
+            else:
+                self._sensitive_leases.pop(str(username).strip().lower(), None)
+
+    def station_source(self, central_serid: int) -> tuple[str, int] | None:
+        with self._connection() as connection:
+            rows = connection.execute('\nSELECT source_id, remote_serid\nFROM source_station_map\nWHERE central_serid = ?\nORDER BY source_id, remote_serid\n', (int(central_serid),)).fetchall()
+        if not rows:
+            return None
+        unique = {(str(row[0]), int(row[1])) for row in rows}
+        if len(unique) != 1:
+            raise RuntimeError(f'ambiguous source mapping for central SERID {int(central_serid)}')
+        return next(iter(unique))
+
+    def station_source_map(self) -> dict[int, str]:
+        with self._connection() as connection:
+            rows = connection.execute('\nSELECT source_id, remote_serid, central_serid\nFROM source_station_map\nORDER BY source_id, remote_serid\n').fetchall()
+        candidates: dict[int, set[str]] = {}
+        for source_id, _remote_serid, central_serid in rows:
+            candidates.setdefault(int(central_serid), set()).add(str(source_id))
+        return {serid: next(iter(source_ids)) for serid, source_ids in candidates.items() if len(source_ids) == 1}

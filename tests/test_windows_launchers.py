@@ -9,34 +9,28 @@ def read(name: str) -> str:
     return (ROOT / name).read_text(encoding="utf-8")
 
 
-def test_operator_launchers_include_central_lan():
-    assert sorted(path.name for path in ROOT.glob("*.bat")) == [
-        "RADMON.bat", "RUN_DUMMY.bat", "RUN_LAN.bat"
-    ]
-    assert not list((ROOT / "scripts").glob("*.bat"))
+def test_windows_production_launch_is_exe_package_only():
+    assert not list(ROOT.glob("*.bat"))
+    assert not (ROOT / "main.py").exists()
+    assert not (ROOT / "central_server.py").exists()
+    package_main = read("radmon/__main__.py")
+    assert "production_app" in package_main
 
 
-def test_launchers_self_bootstrap_without_spawning_service_consoles():
-    for name, source_mode in (
-        ("RADMON.bat", "detector"),
-        ("RUN_DUMMY.bat", "dummy"),
-        ("RUN_LAN.bat", "lan"),
-    ):
-        text = read(name).lower()
-        assert ".venv" in text
-        assert "requirements.txt" in text
-        assert ".env.example" in text
-        assert "pythonw.exe" in text
-        assert "main.py" in text
-        assert f"--source {source_mode}" in text
-        assert "cmd /k" not in text
-        assert "taskkill" not in text
+def test_production_supervisor_is_single_process_owner():
+    source = read("radmon/production_app.py")
+    assert "SingleInstanceLock" in source
+    assert "CentralService" in source
+    assert "run_admin_ui" in source
+    assert "central.start()" in source
+    assert "central.stop()" in source
 
 
 def test_runtime_collision_is_prevented_by_single_instance_lock():
-    source = read("main.py")
+    source = read("radmon/production_app.py")
     assert "SingleInstanceLock" in source
-    assert "sudah berjalan" in source
+    assert "if not lock.acquire():" in source
+    assert "return 2" in source
 
 
 def test_refresh_interval_is_two_seconds_everywhere_live():

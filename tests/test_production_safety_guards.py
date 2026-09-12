@@ -13,7 +13,7 @@ def test_station_write_through_is_disabled_when_lan_runtime_is_disabled(tmp_path
     monkeypatch.setenv("RADMON_LAN_SOURCES", "gd50@192.168.1.50")
     monkeypatch.setenv("RADMON_LAN_ENABLED", "0")
     monkeypatch.setenv("RADMON_SECURITY_DB", str(tmp_path / "security.db"))
-    settings = replace(Settings(), runtime_dir=tmp_path)
+    settings = replace(Settings(), runtime_dir=tmp_path, lan_enabled=False)
 
     services = build_secure_services(settings)
     assert services.sources
@@ -24,7 +24,7 @@ def test_station_write_through_is_enabled_only_for_lan_runtime(tmp_path, monkeyp
     monkeypatch.setenv("RADMON_LAN_SOURCES", "gd50@192.168.1.50")
     monkeypatch.setenv("RADMON_LAN_ENABLED", "1")
     monkeypatch.setenv("RADMON_SECURITY_DB", str(tmp_path / "security.db"))
-    settings = replace(Settings(), runtime_dir=tmp_path)
+    settings = replace(Settings(), runtime_dir=tmp_path, lan_enabled=True)
 
     services = build_secure_services(settings)
     assert services.device_admin.write_through is True

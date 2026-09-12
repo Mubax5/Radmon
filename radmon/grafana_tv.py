@@ -59,26 +59,22 @@ def _panel(panel_id: int, type_: str, title: str, x: int, y: int, w: int, h: int
 
 
 def _header_panels() -> list[dict[str, Any]]:
-    title = _panel(1, "text", "", 0, 0, 24, 2)
-    title["options"] = {
-        "mode": "html",
-        "content": (
-            "<div style='height:100%;display:flex;align-items:center;justify-content:center;"
-            "font-size:clamp(22px,1.7vw,32px);font-weight:800;letter-spacing:.2px'>"
-            "REAL TIME DOSE RATE MONITORING SYSTEM</div>"
-        ),
-    }
-    organization = _panel(2, "text", "", 0, 2, 24, 2)
-    organization["options"] = {
-        "mode": "html",
-        "content": (
-            "<div style='height:100%;display:flex;align-items:center;justify-content:center;"
-            "text-align:center;font-size:clamp(13px,.95vw,18px);font-weight:650'>"
-            "Instalasi Pengelolaan Limbah Radioaktif<br>"
-            "Direktorat Pengelolaan Fasilitas Ketenaganukliran</div>"
-        ),
-    }
-    return [title, organization]
+    title = _panel(1, 'text', '', 0, 0, 24, 2)
+    title['options'] = {'mode': 'html', 'content': "<div style='height:100%;display:flex;align-items:center;justify-content:center;font-size:clamp(22px,1.7vw,32px);font-weight:800;letter-spacing:.2px'>REAL TIME DOSE RATE MONITORING SYSTEM</div>"}
+    organization = _panel(2, 'text', '', 6, 2, 12, 2)
+    organization['description'] = 'header-organization'
+    organization['options'] = {'mode': 'html', 'content': "<div style='height:100%;display:flex;align-items:center;justify-content:center;text-align:center;font-size:clamp(13px,.95vw,18px);font-weight:650'>Instalasi Pengelolaan Limbah Radioaktif<br>Direktorat Pengelolaan Fasilitas Ketenaganukliran</div>"}
+    date_panel = _panel(3, 'stat', '', 0, 2, 6, 2)
+    date_panel['description'] = 'header-date-wib'
+    date_panel['targets'] = [_target('SELECT UNIX_TIMESTAMP() * 1000 AS value')]
+    date_panel['fieldConfig'] = {'defaults': {'unit': 'time:DD/MM/YYYY', 'decimals': 0}, 'overrides': []}
+    date_panel['options'] = {'colorMode': 'none', 'graphMode': 'none', 'justifyMode': 'center', 'orientation': 'horizontal', 'reduceOptions': {'calcs': ['lastNotNull'], 'fields': '', 'values': False}, 'text': {'valueSize': 12}, 'textMode': 'value', 'wideLayout': True}
+    update_panel = _panel(4, 'stat', '', 18, 2, 6, 2)
+    update_panel['description'] = 'header-update-wib'
+    update_panel['targets'] = [_target('SELECT UNIX_TIMESTAMP() * 1000 AS value')]
+    update_panel['fieldConfig'] = {'defaults': {'unit': 'time:HH:mm:ss [WIB]', 'decimals': 0}, 'overrides': []}
+    update_panel['options'] = {'colorMode': 'none', 'graphMode': 'none', 'justifyMode': 'center', 'orientation': 'horizontal', 'reduceOptions': {'calcs': ['lastNotNull'], 'fields': '', 'values': False}, 'text': {'valueSize': 12}, 'textMode': 'value', 'wideLayout': True}
+    return [title, organization, date_panel, update_panel]
 
 
 def _base_dashboard(title: str, uid: str, *, time_from: str) -> dict[str, Any]:
@@ -122,44 +118,15 @@ def operation_page_stations(page_number: int) -> list[StationConfig]:
     return stations[start : start + page_size]
 
 
-def _latest_relation(stations: Sequence[StationConfig] | None = None) -> str:
+def _latest_relation(stations: Sequence | None=None) -> str:
     ids = _station_ids(stations)
-    return f"""
-SELECT m.serid, m.dtom, m.doserate
-FROM measurement m
-JOIN (
-  SELECT serid, MAX(dtom) AS dtom
-  FROM measurement
-  WHERE serid IN ({ids})
-  GROUP BY serid
-) latest ON latest.serid = m.serid AND latest.dtom = m.dtom
-""".strip()
+    return f'\nSELECT serid, dtom, doserate\nFROM vrecent\nWHERE serid IN ({ids})\n'.strip()
 
 
-def _status_relation(stations: Sequence[StationConfig] | None = None) -> str:
+def _status_relation(stations: Sequence | None=None) -> str:
     ids = _station_ids(stations)
-    latest = _latest_relation(stations)
-    return f"""
-SELECT
-  d.serid,
-  d.name,
-  d.location,
-  d.warnlevel,
-  d.alarmlevel,
-  COALESCE(d.maxidlemin, 30) AS maxidlemin,
-  m.dtom,
-  m.doserate,
-  CASE
-    WHEN m.dtom IS NULL OR m.doserate IS NULL THEN 'OFFLINE'
-    WHEN TIMESTAMPDIFF(SECOND, m.dtom, NOW()) > COALESCE(d.maxidlemin, 30) * 60 THEN 'OFFLINE'
-    WHEN m.doserate >= d.alarmlevel THEN 'ALARM'
-    WHEN m.doserate >= d.warnlevel THEN 'ALERT'
-    ELSE 'NORMAL'
-  END AS status
-FROM device d
-LEFT JOIN ({latest}) m ON m.serid = d.serid
-WHERE d.serid IN ({ids})
-""".strip()
+    wib_now = "CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00')"
+    return f"\nSELECT\n  v.serid,\n  v.name,\n  v.location,\n  v.warnlevel,\n  v.alarmlevel,\n  COALESCE(v.maxidlemin, 30) AS maxidlemin,\n  v.dtom,\n  v.doserate,\n  COALESCE(\n    r.underlying_dose_status,\n    CASE\n      WHEN v.doserate >= v.alarmlevel THEN 'ALARM'\n      WHEN v.doserate >= v.warnlevel THEN 'ALERT'\n      ELSE 'NORMAL'\n    END\n  ) AS underlying_status,\n  CASE\n    WHEN v.dtom IS NULL OR v.doserate IS NULL THEN 'OFFLINE'\n    WHEN TIMESTAMPDIFF(SECOND, v.dtom, {wib_now}) > COALESCE(v.maxidlemin, 30) * 60 THEN 'OFFLINE'\n    WHEN COALESCE(r.suppressed, 0) = 1 THEN 'SUPPRESSED'\n    WHEN v.doserate >= v.alarmlevel THEN 'ALARM'\n    WHEN v.doserate >= v.warnlevel THEN 'ALERT'\n    ELSE 'NORMAL'\n  END AS status,\n  COALESCE(r.trigger_count, 0) AS trigger_count,\n  COALESCE(r.retrigger_locked, 0) AS retrigger_locked,\n  r.suppression_expires_at,\n  r.suppression_pic,\n  r.suppression_reason\nFROM vrecent v\nLEFT JOIN radmon_runtime_status r ON r.serid = v.serid\nWHERE v.serid IN ({ids})\n".strip()
 
 
 def _latest_scalar_stat(
@@ -200,191 +167,66 @@ def _latest_scalar_stat(
     return panel
 
 
-def _dose_stat(panel_id: int, station: StationConfig, x: int, y: int, w: int, h: int = 2) -> dict[str, Any]:
-    panel = _panel(panel_id, "stat", f"[{station.serid}] {station.room} ({station.location})", x, y, w, h)
-    panel["targets"] = [_target(f"""
-SELECT m.doserate AS value
-FROM measurement m
-WHERE m.serid = {station.serid}
-ORDER BY m.dtom DESC LIMIT 1
-""")]
-    panel["fieldConfig"] = {
-        "defaults": {
-            "unit": "suffix: µSv/h",
-            "decimals": 2,
-            "thresholds": {
-                "mode": "absolute",
-                "steps": [
-                    {"color": "green", "value": None},
-                    {"color": "orange", "value": station.warnlevel},
-                    {"color": "red", "value": station.alarmlevel},
-                ],
-            },
-        },
-        "overrides": [],
-    }
-    panel["options"] = {
-        "colorMode": "value",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False},
-        "text": {"valueSize": 28},
-        "textMode": "value",
-        "wideLayout": True,
-    }
+def _dose_stat(panel_id, station, x, y, w, h=2):
+    panel = _panel(panel_id, 'stat', f'[{station.serid}] {station.room} ({station.location})', x, y, w, h)
+    panel['targets'] = [_target(f'\nSELECT doserate AS value\nFROM vrecent\nWHERE serid = {station.serid}\nLIMIT 1\n')]
+    panel['fieldConfig'] = {'defaults': {'unit': 'suffix: µSv/h', 'decimals': 2, 'color': {'mode': 'fixed', 'fixedColor': 'green'}, 'thresholds': {'mode': 'absolute', 'steps': [{'color': 'green', 'value': None}]}}, 'overrides': []}
+    panel['options'] = {'colorMode': 'value', 'graphMode': 'none', 'justifyMode': 'center', 'orientation': 'horizontal', 'reduceOptions': {'calcs': ['lastNotNull'], 'fields': '', 'values': False}, 'text': {'valueSize': 28}, 'textMode': 'value', 'wideLayout': True}
     return panel
 
 
-def _dose_sparkline(panel_id: int, station: StationConfig, x: int, y: int, w: int, h: int = 1) -> dict[str, Any]:
-    panel = _panel(panel_id, "timeseries", "", x, y, w, h)
-    panel["description"] = "latest-dose-sparkline"
-    panel["targets"] = [_target(f"""
-SELECT UNIX_TIMESTAMP(m.dtom) AS time, m.doserate AS value
-FROM measurement m
-WHERE m.serid = {station.serid}
-  AND $__timeFilter(m.dtom)
-ORDER BY m.dtom
-""", format_="time_series")]
-    panel["fieldConfig"] = {
-        "defaults": {
-            "unit": "suffix: µSv/h",
-            "decimals": 2,
-            "color": {"mode": "fixed", "fixedColor": "green"},
-            "custom": {
-                "axisPlacement": "hidden",
-                "drawStyle": "line",
-                "fillOpacity": 18,
-                "lineWidth": 1,
-                "showPoints": "never",
-                "spanNulls": 4000,
-            },
-        },
-        "overrides": [],
-    }
-    panel["options"] = {
-        "legend": {"displayMode": "hidden", "placement": "bottom", "showLegend": False},
-        "tooltip": {"mode": "single", "sort": "none"},
-    }
+def _utc_epoch_sql(column: str) -> str:
+    return (
+        "TIMESTAMPDIFF(SECOND, '1970-01-01 00:00:00', "
+        f"CONVERT_TZ({column}, '+07:00', '+00:00'))"
+    )
+
+
+def _utc_epoch_ms_sql(column: str) -> str:
+    return (
+        "TIMESTAMPDIFF(MICROSECOND, '1970-01-01 00:00:00', "
+        f"CONVERT_TZ({column}, '+07:00', '+00:00')) / 1000"
+    )
+
+
+def _dose_sparkline(panel_id, station, x, y, w, h=1):
+    panel = _panel(panel_id, 'timeseries', '', x, y, w, h)
+    panel['description'] = 'latest-dose-sparkline'
+    epoch = _utc_epoch_sql('m.dtom')
+    panel['targets'] = [_target(f'\nSELECT {epoch} AS time, m.doserate AS value\nFROM measurement m\nWHERE m.serid = {station.serid}\n  AND {epoch} BETWEEN $__unixEpochFrom() AND $__unixEpochTo()\nORDER BY m.dtom\n', format_='time_series')]
+    panel['fieldConfig'] = {'defaults': {'unit': 'suffix: µSv/h', 'decimals': 2, 'color': {'mode': 'fixed', 'fixedColor': 'green'}, 'custom': {'axisPlacement': 'hidden', 'drawStyle': 'line', 'fillOpacity': 18, 'lineWidth': 1, 'showPoints': 'never', 'spanNulls': 4000}}, 'overrides': []}
+    panel['options'] = {'legend': {'displayMode': 'hidden', 'placement': 'bottom', 'showLegend': False}, 'tooltip': {'mode': 'single', 'sort': 'none'}}
     return panel
 
 
-def _time_stat(panel_id: int, station: StationConfig, x: int, y: int, w: int, h: int = 1) -> dict[str, Any]:
-    panel = _panel(panel_id, "stat", "", x, y, w, h)
-    panel["description"] = "latest-measurement-time"
-    panel["targets"] = [_target(f"""
-SELECT DATE_FORMAT(MAX(m.dtom), '%d/%m/%Y %H:%i:%s') AS value
-FROM measurement m
-WHERE m.serid = {station.serid}
-""")]
-    panel["fieldConfig"] = {"defaults": {"unit": "none", "decimals": 0}, "overrides": []}
-    panel["options"] = {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "center",
-        "orientation": "horizontal",
-        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False},
-        "text": {"valueSize": 12},
-        "textMode": "value",
-        "wideLayout": True,
-    }
+def _time_stat(panel_id, station, x, y, w, h=1):
+    panel = _panel(panel_id, 'stat', '', x, y, w, h)
+    panel['description'] = 'latest-measurement-time'
+    epoch_ms = _utc_epoch_ms_sql('dtom')
+    panel['targets'] = [_target(f'\nSELECT {epoch_ms} AS value\nFROM vrecent\nWHERE serid = {station.serid}\nLIMIT 1\n')]
+    panel['fieldConfig'] = {'defaults': {'unit': 'time:DD/MM/YYYY HH:mm:ss', 'decimals': 0}, 'overrides': []}
+    panel['options'] = {'colorMode': 'none', 'graphMode': 'none', 'justifyMode': 'center', 'orientation': 'horizontal', 'reduceOptions': {'calcs': ['lastNotNull'], 'fields': '', 'values': False}, 'text': {'valueSize': 12}, 'textMode': 'value', 'wideLayout': True}
     return panel
 
 
-def _operation_table(
-    panel_id: int,
-    title: str,
-    x: int,
-    y: int,
-    w: int,
-    h: int,
-    *,
-    stations: Sequence[StationConfig] | None = None,
-) -> dict[str, Any]:
+def _operation_table(panel_id: int, title: str, x: int, y: int, w: int, h: int, *, stations: Sequence | None=None) -> dict[str, Any]:
     relation = _status_relation(stations)
-    table = _panel(panel_id, "table", title, x, y, w, h)
-    table["description"] = "operational-condition"
-    table["targets"] = [_target(f"""
-SELECT
-  s.serid AS `ID`,
-  s.name AS `Ruangan`,
-  s.location AS `Lokasi`,
-  ROUND(s.doserate, 3) AS `Dose Rate`,
-  s.dtom AS `Waktu`,
-  s.status AS `Status`
-FROM ({relation}) s
-ORDER BY FIELD(s.status, 'ALARM', 'ALERT', 'OFFLINE', 'NORMAL'), s.serid
-""")]
-    table["fieldConfig"] = {
-        "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
-        "overrides": [
-            {
-                "matcher": {"id": "byName", "options": "Dose Rate"},
-                "properties": [
-                    {"id": "unit", "value": "suffix: µSv/h"},
-                    {"id": "decimals", "value": 3},
-                ],
-            },
-            {
-                "matcher": {"id": "byName", "options": "Status"},
-                "properties": [
-                    {
-                        "id": "mappings",
-                        "value": [{
-                            "type": "value",
-                            "options": {
-                                "NORMAL": {"color": "green", "text": "NORMAL"},
-                                "ALERT": {"color": "orange", "text": "ALERT"},
-                                "ALARM": {"color": "red", "text": "ALARM"},
-                                "OFFLINE": {"color": "purple", "text": "OFFLINE"},
-                            },
-                        }],
-                    },
-                    {"id": "custom.cellOptions", "value": {"type": "color-background"}},
-                ],
-            },
-        ],
-    }
-    table["options"] = {"cellHeight": "sm", "enablePagination": False, "showHeader": True}
+    table = _panel(panel_id, 'table', title, x, y, w, h)
+    table['description'] = 'operational-condition'
+    table['targets'] = [_target(f"\nSELECT\n  s.serid AS `ID`,\n  s.name AS `Ruangan`,\n  s.location AS `Lokasi`,\n  ROUND(s.doserate, 3) AS `Dose Rate`,\n  DATE_FORMAT(s.dtom, '%Y-%m-%d %H:%i:%s') AS `Waktu`,\n  s.status AS `Status`,\n  s.underlying_status AS `Underlying`,\n  s.trigger_count AS `Trigger`,\n  CASE WHEN s.retrigger_locked = 1 THEN 'LOCKED' ELSE '' END AS `Retrigger`,\n  DATE_FORMAT(s.suppression_expires_at, '%Y-%m-%d %H:%i:%s') AS `Suppression Until`,\n  COALESCE(s.suppression_pic, '') AS `PIC`,\n  COALESCE(s.suppression_reason, '') AS `Reason`\nFROM ({relation}) s\nORDER BY FIELD(s.status, 'OFFLINE', 'SUPPRESSED', 'ALARM', 'ALERT', 'NORMAL'), s.serid\n")]
+    table['fieldConfig'] = {'defaults': {'custom': {'align': 'auto', 'cellOptions': {'type': 'auto'}}}, 'overrides': [{'matcher': {'id': 'byName', 'options': 'Dose Rate'}, 'properties': [{'id': 'unit', 'value': 'suffix: µSv/h'}, {'id': 'decimals', 'value': 3}]}, {'matcher': {'id': 'byName', 'options': 'Status'}, 'properties': [{'id': 'mappings', 'value': [{'type': 'value', 'options': {'NORMAL': {'color': 'green', 'text': 'NORMAL'}, 'ALERT': {'color': 'orange', 'text': 'ALERT'}, 'ALARM': {'color': 'red', 'text': 'ALARM'}, 'OFFLINE': {'color': 'purple', 'text': 'OFFLINE'}, 'SUPPRESSED': {'color': 'blue', 'text': 'SUPPRESSED'}}}]}, {'id': 'custom.cellOptions', 'value': {'type': 'color-background'}}]}]}
+    table['options'] = {'cellHeight': 'sm', 'enablePagination': False, 'showHeader': True}
     return table
 
 
-def _building_trend(panel_id: int, building: str, x: int, y: int, w: int, h: int) -> dict[str, Any]:
+def _building_trend(panel_id: int, building: str, x: int, y: int, w: int, h: int):
     stations = _stations_for_building(building)
-    panel = _panel(panel_id, "timeseries", f"Dose Rate · Gedung {building} · 3 Jam", x, y, w, h)
-    panel["description"] = "building-dose-trend"
-    panel["targets"] = [_target(f"""
-SELECT
-  UNIX_TIMESTAMP(m.dtom) AS time,
-  CONCAT('[', d.serid, '] ', d.name) AS metric,
-  m.doserate AS value
-FROM measurement m
-JOIN device d ON d.serid = m.serid
-WHERE m.serid IN ({_station_ids(stations)})
-  AND $__timeFilter(m.dtom)
-ORDER BY m.dtom, d.serid
-""", format_="time_series")]
-    panel["fieldConfig"] = {
-        "defaults": {
-            "unit": "suffix: µSv/h",
-            "decimals": 3,
-            "min": 0,
-            "max": 1,
-            "color": {"mode": "palette-classic"},
-            "custom": {
-                "drawStyle": "line",
-                "fillOpacity": 0,
-                "lineWidth": 1,
-                "showPoints": "never",
-                "spanNulls": 4000,
-            },
-        },
-        "overrides": [],
-    }
-    panel["options"] = {
-        "legend": {"displayMode": "list", "placement": "bottom", "showLegend": True, "calcs": []},
-        "tooltip": {"mode": "multi", "sort": "desc"},
-    }
+    panel = _panel(panel_id, 'timeseries', f'Dose Rate · Gedung {building} · 3 Jam', x, y, w, h)
+    panel['description'] = 'building-dose-trend'
+    epoch = _utc_epoch_sql('m.dtom')
+    panel['targets'] = [_target(f"\nSELECT\n  {epoch} AS time,\n  CONCAT('[', d.serid, '] ', d.name) AS metric,\n  m.doserate AS value\nFROM measurement m\nJOIN device d ON d.serid = m.serid\nWHERE m.serid IN ({_station_ids(stations)})\n  AND {epoch} BETWEEN $__unixEpochFrom() AND $__unixEpochTo()\nORDER BY m.dtom, d.serid\n", format_='time_series')]
+    panel['fieldConfig'] = {'defaults': {'unit': 'suffix: µSv/h', 'decimals': 3, 'min': 0, 'color': {'mode': 'palette-classic'}, 'custom': {'drawStyle': 'line', 'fillOpacity': 0, 'lineWidth': 1, 'showPoints': 'never', 'spanNulls': 4000}}, 'overrides': []}
+    panel['options'] = {'legend': {'displayMode': 'list', 'placement': 'bottom', 'showLegend': True, 'calcs': []}, 'tooltip': {'mode': 'multi', 'sort': 'desc'}}
     return panel
 
 
@@ -445,7 +287,7 @@ def build_page_two() -> dict[str, Any]:
     return dashboard
 
 
-def build_page_three(page_number: int = 1) -> dict[str, Any]:
+def _build_page_three_base(page_number: int = 1) -> dict[str, Any]:
     if not 1 <= page_number <= OPERATIONS_PAGE_COUNT:
         raise ValueError(f"operations page must be 1..{OPERATIONS_PAGE_COUNT}")
     dashboard = _base_dashboard(
@@ -527,6 +369,51 @@ LIMIT 12
     }
     alarms["options"] = {"cellHeight": "sm", "enablePagination": False, "showHeader": True}
     dashboard["panels"].append(alarms)
+    return dashboard
+
+def build_page_three(page_number: int = 1) -> dict[str, Any]:
+    dashboard = _build_page_three_base(page_number)
+    status_panel = next(
+        panel for panel in dashboard["panels"]
+        if panel.get("title") == "Status Detector"
+    )
+    operations_panel = next(
+        panel for panel in dashboard["panels"]
+        if panel.get("description") == "operational-condition"
+    )
+    status_panel["gridPos"]["w"] = 12
+    operations_panel["gridPos"]["x"] = 12
+    operations_panel["gridPos"]["w"] = 12
+    status_panel["options"]["displayLabels"] = ["name", "value"]
+    status_panel["options"]["legend"].update(
+        {"displayMode": "table", "placement": "bottom", "showLegend": True, "values": ["value"]}
+    )
+
+    alarms = next(
+        panel for panel in dashboard["panels"]
+        if panel.get("title") == "Alarm Terbaru · 24 Jam"
+    )
+    wib_now = "CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00')"
+    alarms["targets"] = [_target(f"""
+SELECT
+  DATE_FORMAT(a.dtoa, '%Y-%m-%d %H:%i:%s') AS `Waktu`,
+  a.serid AS `ID`,
+  d.name AS `Ruangan`,
+  d.location AS `Lokasi`,
+  CASE WHEN a.lvl >= 2 THEN 'ALARM' ELSE 'ALERT' END AS `Status`,
+  ROUND(a.mvalue, 3) AS `Dose Rate`,
+  ROUND(a.thvalue, 3) AS `Threshold`,
+  a.nhit AS `Hit Count`,
+  DATE_FORMAT(a.i_op, '%Y-%m-%d %H:%i:%s') AS `Action Time`,
+  COALESCE(a.pic, '') AS `PIC`,
+  COALESCE(a.note, '') AS `Note`
+FROM alarm a
+LEFT JOIN device d ON d.serid = a.serid
+WHERE a.serid IN ({_station_ids()})
+  AND a.dtoa >= DATE_SUB({wib_now}, INTERVAL 24 HOUR)
+ORDER BY a.dtoa DESC, a.serid
+LIMIT 12
+""")]
     return dashboard
 
 

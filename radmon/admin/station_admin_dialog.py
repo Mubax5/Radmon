@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from ..security import UserIdentity
 from .auth_dialogs import PinDialog
-from .icons import app_icon, silk_icon
+from .icons import app_icon
 
 
 class StationAdminDialog(QDialog):
@@ -77,6 +77,11 @@ class StationAdminDialog(QDialog):
         self.hw_type = QLineEdit(str(station.get("hwtype") or "detector"))
         self.hw_address = QLineEdit(str(station.get("hwaddress") or ""))
         self.unit = QLineEdit(str(station.get("unit") or "µSv/h"))
+        if source == "lan":
+            self.hw_type.setEnabled(False)
+            self.hw_address.setEnabled(False)
+            self.hw_type.setToolTip("Identity hardware dikelola oleh source LAN.")
+            self.hw_address.setToolTip("Identity hardware dikelola oleh source LAN.")
 
         tabs = QTabWidget()
         tabs.addTab(self._attributes_tab(), "Attributes")
@@ -128,7 +133,7 @@ class StationAdminDialog(QDialog):
             self.audio_path.setText(filename)
 
     def _values(self) -> dict:
-        return {
+        values = {
             "name": self.name.text().strip(),
             "location": self.location.text().strip(),
             "description": self.description.toPlainText().strip(),
@@ -140,6 +145,10 @@ class StationAdminDialog(QDialog):
             "hwaddress": self.hw_address.text().strip(),
             "hwtype": self.hw_type.text().strip() or "detector",
         }
+        if self.source == "lan":
+            values.pop("hwaddress", None)
+            values.pop("hwtype", None)
+        return values
 
     def _save(self) -> None:
         if self.warn.value() > self.alarm.value() and self.alarm.value() > 0:

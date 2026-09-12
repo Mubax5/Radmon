@@ -27,35 +27,21 @@ class AlarmPolicyService:
         value = row.get(key)
         return default if value is None else float(value)
 
-    def _snapshot(self, tx, *, underlying: str, measured_value: float | None = None,
-                  threshold: float | None = None, active_event_id: str | None = None) -> dict[str, Any]:
-        state = tx.state
-        suppression = tx.active_suppression
-        if suppression is not None:
-            policy_state = "SUPPRESSED"
-        elif state.retrigger_locked and state.active_event_id is None and underlying == "ALARM":
-            policy_state = "RETRIGGER_LOCKED"
-        elif underlying == "ALARM" and (active_event_id or state.active_event_id):
-            policy_state = "ALARM"
-        else:
-            policy_state = underlying
-        snapshot = {
-            "serid": state.serid,
-            "policy_state": policy_state,
-            "underlying_dose_status": underlying,
-            "trigger_count": state.trigger_count,
-            "retrigger_locked": bool(state.retrigger_locked),
-            "active_event_id": active_event_id if active_event_id is not None else state.active_event_id,
-            "measured_value": measured_value,
-            "threshold": threshold,
-            "suppressed": suppression is not None,
-            "suppression_id": suppression.suppression_id if suppression else None,
-            "suppression_expires_at": suppression.expires_at if suppression else None,
-            "suppression_pic": suppression.pic if suppression else None,
-            "suppression_reason": suppression.reason if suppression else None,
-        }
-        if self.projector is not None:
-            self.projector.project(snapshot)
+    def _snapshot(self, tx, *, underlying, measured_value=None, threshold=None, active_event_id=None):
+        snapshot = self._snapshot_base(
+            tx,
+            underlying=underlying,
+            measured_value=measured_value,
+            threshold=threshold,
+            active_event_id=active_event_id,
+        )
+        cache = getattr(self, "_current_policy_snapshots", None)
+        if cache is None:
+            cache = {}
+            self._current_policy_snapshots = cache
+        copy = dict(snapshot)
+        copy["updated_at"] = tx.state.updated_at or self.now()
+        cache[int(snapshot["serid"])] = copy
         return snapshot
 
     def evaluate_live(self, row: dict[str, Any], *, source_id: str | None = None) -> dict[str, Any]:
@@ -150,68 +136,120 @@ class AlarmPolicyService:
                 tx.save_state(at=at)
             return responded
 
-    def list_events(self, *, serid: int | None = None, active_only: bool = False,
-                    notify_pending_only: bool = False, limit: int = 500) -> list[dict[str, Any]]:
-        return [asdict(item) for item in self.store.list_policy_events(
-            serid=serid, active_only=active_only,
-            notify_pending_only=notify_pending_only, limit=limit,
-        )]
+    def list_events(self, *, serid=None, active_only=False, notify_pending_only=False, limit=500):
+        if notify_pending_only and not bool(getattr(self, "notifications_enabled", True)):
+            return []
+        return self._list_events_base(
+            serid=serid,
+            active_only=active_only,
+            notify_pending_only=notify_pending_only,
+            limit=limit,
+        )
 
-    def get_policy(self, serid: int) -> dict[str, Any]:
-        state = self.store.get_state(int(serid))
-        suppression = self.store.active_suppression(int(serid))
-        return {
-            "serid": state.serid,
-            "trigger_count": state.trigger_count,
-            "retrigger_locked": state.retrigger_locked,
-            "active_event_id": state.active_event_id,
-            "window_started_at": state.window_started_at,
-            "last_trigger_at": state.last_trigger_at,
-            "last_normal_at": state.last_normal_at,
-            "suppressed": suppression is not None,
-            "suppression": asdict(suppression) if suppression else None,
-        }
+    def get_policy(self, serid):
+        persistent = self._get_policy_base(serid)
+        cache = getattr(self, "_current_policy_snapshots", {})
+        live = dict(cache.get(int(serid), {}))
+        result = dict(live)
+        result.update(persistent)
 
-    def observe_source_alarm(self, source_id: str, row: dict[str, Any]) -> dict[str, Any]:
-        serid = int(row["serid"])
-        event_time = self._measurement_time(row)
-        historical = bool(row.get("_historical_seed"))
-        state = self.store.get_state(serid)
-        suppression = self.store.active_suppression(serid)
-        event = self.store.get_event(state.active_event_id) if state.active_event_id else None
-        if historical:
-            decision = "HISTORICAL_SEED"
-            visible = False
-        elif suppression is not None:
-            decision = "SUPPRESSED"
-            visible = False
-        elif state.retrigger_locked and event is None:
-            decision = "RETRIGGER_LOCKED"
-            visible = False
-        elif event is not None:
-            decision = "SURFACED"
-            visible = True
+        suppression = persistent.get("suppression") or {}
+        underlying = live.get("underlying_dose_status")
+        if not underlying:
+            if persistent.get("active_event_id") or persistent.get("retrigger_locked"):
+                underlying = "ALARM"
+            else:
+                underlying = "UNKNOWN"
+
+        if persistent.get("suppressed"):
+            policy_state = "SUPPRESSED"
+        elif persistent.get("retrigger_locked") and underlying == "ALARM":
+            policy_state = "RETRIGGER_LOCKED"
+        elif persistent.get("active_event_id"):
+            policy_state = "ALARM"
+        elif underlying in {"NORMAL", "ALERT", "ALARM"}:
+            policy_state = underlying
         else:
-            decision = "COALESCED_DUPLICATE"
-            visible = False
+            policy_state = "NORMAL"
+
+        result.update({
+            "policy_state": policy_state,
+            "underlying_dose_status": underlying,
+            "measured_value": live.get("measured_value"),
+            "threshold": live.get("threshold"),
+            "suppression_id": suppression.get("suppression_id"),
+            "suppression_expires_at": suppression.get("expires_at"),
+            "suppression_pic": suppression.get("pic"),
+            "suppression_reason": suppression.get("reason"),
+            "updated_at": live.get("updated_at") or persistent.get("last_trigger_at") or persistent.get("last_normal_at"),
+        })
+        return result
+
+    def observe_source_alarm(self, source_id: str, row: dict[str, Any]):
+        result = self._observe_source_alarm_base(source_id, row)
+        if bool(row.get("_historical_seed")):
+            return result
+        decision = str(result.get("decision") or "")
+        if decision not in {"SUPPRESSED", "RETRIGGER_LOCKED", "COALESCED_DUPLICATE"}:
+            return result
+        event_time = self._measurement_time(row)
+        suppression = self.store.active_suppression(int(row["serid"]))
+        policy_event_id = result.get("policy_event_id")
+        if policy_event_id is None and suppression is not None:
+            for item in self.store.list_policy_events(serid=int(row["serid"]), limit=50):
+                if item.kind == "SUPPRESSED" and item.suppression_id == suppression.suppression_id:
+                    policy_event_id = item.event_id
+                    break
         self.store.annotate_raw_alarm(
             source_id,
-            serid,
+            int(row["serid"]),
             event_time,
             policy_decision=decision,
             suppression_id=suppression.suppression_id if suppression else None,
-            operator_visible=visible,
-            policy_event_id=event.event_id if event else None,
+            operator_visible=False,
+            policy_event_id=policy_event_id,
+            source_silence_state="PENDING",
+            source_silence_retry_at=self.now(),
         )
-        return {
-            "serid": serid,
-            "source_id": source_id,
-            "decision": decision,
-            "policy_event_id": event.event_id if event else None,
-            "operator_visible": visible,
-        }
+        result["policy_event_id"] = policy_event_id
+        return result
 
-    def process_cycle(self, source_id: str, live_rows: list[dict[str, Any]], alarm_rows: list[dict[str, Any]]):
+    def process_cycle(self, source_id, live_rows, alarm_rows):
+        events = self._process_cycle_base(source_id, live_rows, alarm_rows)
+        self.notifications_enabled = True
+        return events
+
+    def mark_notification_sent(self, event_id: str, at: datetime | None = None) -> None:
+        self.store.mark_notification_sent(event_id, at or self.now())
+
+    def restore_and_reconcile_current_state(self) -> None:
+        self.notifications_enabled = False
+
+    def _snapshot_base(self, tx, *, underlying: str, measured_value: float | None=None, threshold: float | None=None, active_event_id: str | None=None) -> dict[str, Any]:
+        state = tx.state
+        suppression = tx.active_suppression
+        if suppression is not None:
+            policy_state = 'SUPPRESSED'
+        elif state.retrigger_locked and state.active_event_id is None and (underlying == 'ALARM'):
+            policy_state = 'RETRIGGER_LOCKED'
+        elif underlying == 'ALARM' and (active_event_id or state.active_event_id):
+            policy_state = 'ALARM'
+        else:
+            policy_state = underlying
+        snapshot = {'serid': state.serid, 'policy_state': policy_state, 'underlying_dose_status': underlying, 'trigger_count': state.trigger_count, 'retrigger_locked': bool(state.retrigger_locked), 'active_event_id': active_event_id if active_event_id is not None else state.active_event_id, 'measured_value': measured_value, 'threshold': threshold, 'suppressed': suppression is not None, 'suppression_id': suppression.suppression_id if suppression else None, 'suppression_expires_at': suppression.expires_at if suppression else None, 'suppression_pic': suppression.pic if suppression else None, 'suppression_reason': suppression.reason if suppression else None}
+        if self.projector is not None:
+            self.projector.project(snapshot)
+        return snapshot
+
+    def _get_policy_base(self, serid: int) -> dict[str, Any]:
+        state = self.store.get_state(int(serid))
+        suppression = self.store.active_suppression(int(serid))
+        return {'serid': state.serid, 'trigger_count': state.trigger_count, 'retrigger_locked': state.retrigger_locked, 'active_event_id': state.active_event_id, 'window_started_at': state.window_started_at, 'last_trigger_at': state.last_trigger_at, 'last_normal_at': state.last_normal_at, 'suppressed': suppression is not None, 'suppression': asdict(suppression) if suppression else None}
+
+    def _list_events_base(self, *, serid: int | None=None, active_only: bool=False, notify_pending_only: bool=False, limit: int=500) -> list[dict[str, Any]]:
+        return [asdict(item) for item in self.store.list_policy_events(serid=serid, active_only=active_only, notify_pending_only=notify_pending_only, limit=limit)]
+
+    def _process_cycle_base(self, source_id: str, live_rows: list[dict[str, Any]], alarm_rows: list[dict[str, Any]]):
         before = {item.event_id for item in self.store.list_policy_events(limit=5000)}
         for row in live_rows:
             self.evaluate_live(row, source_id=source_id)
@@ -219,8 +257,27 @@ class AlarmPolicyService:
             self.observe_source_alarm(source_id, row)
         return [item for item in self.store.list_policy_events(limit=5000) if item.event_id not in before]
 
-    def mark_notification_sent(self, event_id: str, at: datetime | None = None) -> None:
-        self.store.mark_notification_sent(event_id, at or self.now())
-
-    def restore_and_reconcile_current_state(self) -> None:
-        self.notifications_enabled = False
+    def _observe_source_alarm_base(self, source_id: str, row: dict[str, Any]) -> dict[str, Any]:
+        serid = int(row['serid'])
+        event_time = self._measurement_time(row)
+        historical = bool(row.get('_historical_seed'))
+        state = self.store.get_state(serid)
+        suppression = self.store.active_suppression(serid)
+        event = self.store.get_event(state.active_event_id) if state.active_event_id else None
+        if historical:
+            decision = 'HISTORICAL_SEED'
+            visible = False
+        elif suppression is not None:
+            decision = 'SUPPRESSED'
+            visible = False
+        elif state.retrigger_locked and event is None:
+            decision = 'RETRIGGER_LOCKED'
+            visible = False
+        elif event is not None:
+            decision = 'SURFACED'
+            visible = True
+        else:
+            decision = 'COALESCED_DUPLICATE'
+            visible = False
+        self.store.annotate_raw_alarm(source_id, serid, event_time, policy_decision=decision, suppression_id=suppression.suppression_id if suppression else None, operator_visible=visible, policy_event_id=event.event_id if event else None)
+        return {'serid': serid, 'source_id': source_id, 'decision': decision, 'policy_event_id': event.event_id if event else None, 'operator_visible': visible}

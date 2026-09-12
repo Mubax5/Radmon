@@ -12,27 +12,19 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_operator_launchers_include_detector_dummy_and_central_lan():
-    bats = sorted(path.name for path in ROOT.glob("*.bat"))
-    assert bats == ["RADMON.bat", "RUN_DUMMY.bat", "RUN_LAN.bat"]
-    scripts = ROOT / "scripts"
-    if scripts.exists():
-        assert list(scripts.glob("*.bat")) == []
+def test_production_has_one_package_entrypoint_and_no_batch_launchers():
+    assert list(ROOT.glob("*.bat")) == []
+    package_main = read("radmon/__main__.py")
+    assert "from .production_app import main" in package_main
+    assert "raise SystemExit(main())" in package_main
 
 
-def test_launchers_start_single_process_without_cmd_fanout():
-    real = read("RADMON.bat").lower()
-    dummy = read("RUN_DUMMY.bat").lower()
-    lan = read("RUN_LAN.bat").lower()
-    assert "main.py" in real and "--source detector" in real
-    assert "main.py" in dummy and "--source dummy" in dummy
-    assert "main.py" in lan and "--source lan" in lan
-    for text in (real, dummy, lan):
-        assert "pythonw.exe" in text
-        assert "cmd /k" not in text
-        assert "run_sync.bat" not in text
-        assert "run_public.bat" not in text
-        assert "run_admin.bat" not in text
+def test_developer_runtime_exposes_detector_and_dummy_only():
+    source = read("radmon/dev_app.py")
+    parser_body = source.split("def parser", 1)[1].split("def run_developer_mode", 1)[0]
+    assert 'choices=("detector", "dummy")' in parser_body
+    assert '"lan"' not in parser_body
+    assert "SingleInstanceLock" in source
 
 
 def test_default_runtime_matches_station_catalog_and_dummy_selects_5202(monkeypatch):

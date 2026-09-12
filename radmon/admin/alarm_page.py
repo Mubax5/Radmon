@@ -71,7 +71,8 @@ class AlarmPage(QWidget):
         can_operate = bool(
             context and context.identity.role in {Role.ADMINISTRATOR, Role.OPERATOR}
         )
-        self.ack_button = QPushButton(app_icon("alarm"), "ACK / Response")
+        self.ack_button = QPushButton(app_icon("alarm"), "Response / Silence")
+        self.ack_button.setToolTip("Isi Action/PIC/Note lalu submit untuk set i_flag=1 pada source.")
         self.ack_button.clicked.connect(self._ack_selected)
         self.ack_button.setEnabled(can_operate)
 

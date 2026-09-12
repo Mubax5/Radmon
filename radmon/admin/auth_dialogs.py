@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..secure_context import get_context
 from ..security import Role, SecurityStore, UserIdentity
 from .icons import app_icon
 
@@ -121,9 +122,22 @@ class PinDialog(QDialog):
         self.pin.returnPressed.connect(self.accept)
 
     @classmethod
-    def get_pin(cls, parent=None, *, title: str = "Verifikasi PIN", message: str = "Masukkan PIN untuk melanjutkan.") -> tuple[str, bool]:
+    def _get_pin_base(cls, parent=None, *, title: str='Verifikasi PIN', message: str='Masukkan PIN untuk melanjutkan.') -> tuple[str, bool]:
         dialog = cls(title=title, message=message, parent=parent)
         accepted = dialog.exec() == QDialog.Accepted
-        value = dialog.pin.text() if accepted else ""
+        value = dialog.pin.text() if accepted else ''
         dialog.pin.clear()
-        return value, accepted
+        return (value, accepted)
+
+    @classmethod
+    def get_pin(cls, parent=None, *, title: str = "PIN", message: str = "Masukkan PIN untuk melanjutkan") -> tuple[str, bool]:
+        context = get_context()
+        security = getattr(getattr(context, "device_admin", None), "security", None)
+        identity = getattr(context, "identity", None)
+        if security is not None and identity is not None:
+            try:
+                if security.sensitive_lease_active(identity):
+                    return "", True
+            except Exception:
+                pass
+        return cls._get_pin_base(parent, title=title, message=message)

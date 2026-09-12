@@ -97,14 +97,12 @@ class GrafanaBootstrap:
     def _ready(self, base_url: str) -> bool:
         return self.dashboard_probe(base_url) and self.playlist_probe(base_url)
 
-    def ensure(self) -> str:
+    def _ensure_base(self) -> str:
         candidates = self._candidate_base_urls()
         errors: list[str] = []
-
         for base in candidates:
             if self._ready(base):
                 return playlist_url(base)
-
         for base in candidates:
             if not self.grafana_health_probe(base):
                 continue
@@ -113,10 +111,9 @@ class GrafanaBootstrap:
                 if provisioned and self._ready(base):
                     return playlist_url(base)
             except Exception as exc:
-                errors.append(f"{base}: {exc}")
-
+                errors.append(f'{base}: {exc}')
         native_port = self._find_free_port(self.settings.grafana_fallback_port)
-        native_base = f"http://localhost:{native_port}"
+        native_base = f'http://localhost:{native_port}'
         native_env = self._native_environment(native_port)
         try:
             self.native_runner(env=native_env, port=native_port)
@@ -128,14 +125,13 @@ class GrafanaBootstrap:
                             native_verified = True
                             return playlist_url(native_base)
                     except Exception as exc:
-                        errors.append(f"native {native_base}: {exc}")
+                        errors.append(f'native {native_base}: {exc}')
                         break
                 self.sleeper(1.0)
-            if not native_verified and not any(native_base in item for item in errors):
-                errors.append(f"native {native_base}: playlist monitoring belum terverifikasi")
+            if not native_verified and (not any((native_base in item for item in errors))):
+                errors.append(f'native {native_base}: playlist monitoring belum terverifikasi')
         except Exception as exc:
-            errors.append(f"native Grafana: {exc}")
-
+            errors.append(f'native Grafana: {exc}')
         fallback = self.fallback_base_url
         docker_env = self._docker_environment()
         try:
@@ -148,19 +144,15 @@ class GrafanaBootstrap:
                             docker_verified = True
                             return playlist_url(fallback)
                     except Exception as exc:
-                        errors.append(f"Docker {fallback}: {exc}")
+                        errors.append(f'Docker {fallback}: {exc}')
                         break
                 self.sleeper(1.0)
-            if not docker_verified and not any(fallback in item for item in errors):
-                errors.append(f"Docker {fallback}: playlist monitoring belum terverifikasi")
+            if not docker_verified and (not any((fallback in item for item in errors))):
+                errors.append(f'Docker {fallback}: playlist monitoring belum terverifikasi')
         except Exception as exc:
-            errors.append(f"Docker Grafana: {exc}")
-
-        detail = "; ".join(errors[-4:]) if errors else "playlist monitoring tidak terverifikasi"
-        raise RuntimeError(
-            "Grafana RadMon tidak dapat disiapkan otomatis. "
-            f"{detail}. Set RADMON_GRAFANA_BIN bila Grafana terpasang di lokasi non-standar."
-        )
+            errors.append(f'Docker Grafana: {exc}')
+        detail = '; '.join(errors[-4:]) if errors else 'playlist monitoring tidak terverifikasi'
+        raise RuntimeError(f'Grafana RadMon tidak dapat disiapkan otomatis. {detail}. Set RADMON_GRAFANA_BIN bila Grafana terpasang di lokasi non-standar.')
 
     def _dashboard_payloads(self) -> list[dict]:
         return build_dashboard_payloads()
@@ -496,3 +488,23 @@ class GrafanaBootstrap:
             raise RuntimeError(f"Grafana API {exc.code}: {detail or exc.reason}") from exc
         except URLError as exc:
             raise RuntimeError(f"Grafana tidak dapat dihubungi: {exc.reason}") from exc
+
+    def ensure(self) -> str:
+        candidates = self._candidate_base_urls()
+        healthy_ready_found = False
+        errors: list[str] = []
+        for base in candidates:
+            if not self._ready(base):
+                continue
+            if not self.grafana_health_probe(base):
+                return playlist_url(base)
+            healthy_ready_found = True
+            try:
+                if self.api_provisioner(base) and self._ready(base):
+                    return playlist_url(base)
+            except Exception as exc:
+                errors.append(f'{base}: {exc}')
+        if healthy_ready_found:
+            detail = '; '.join(errors[-4:]) if errors else 'dashboard repair tidak terverifikasi'
+            raise RuntimeError(f'Grafana ditemukan tetapi payload RadMon terbaru gagal diterapkan. {detail}')
+        return self._ensure_base()

@@ -1,0 +1,76 @@
+name: Windows RadMon EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - release-cleanup
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: pip
+
+      - name: Install runtime and build dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Build RadMon.exe
+        shell: pwsh
+        run: |
+          python -m PyInstaller --clean --noconfirm RadMon.spec
+          if (-not (Test-Path "dist\RadMon\RadMon.exe")) {
+            throw "PyInstaller did not create dist\RadMon\RadMon.exe"
+          }
+
+      - name: Assemble portable RadMon layout
+        shell: pwsh
+        run: |
+          $portable = "portable\RadMon"
+          New-Item -ItemType Directory -Force "$portable\app" | Out-Null
+          New-Item -ItemType Directory -Force "$portable\config" | Out-Null
+          New-Item -ItemType Directory -Force "$portable\app\docs" | Out-Null
+          Copy-Item "dist\RadMon\*" "$portable\app" -Recurse -Force
+          Copy-Item "docs\manual" "$portable\app\docs\manual" -Recurse -Force
+          Copy-Item "grafana" "$portable\app\grafana" -Recurse -Force
+          Copy-Item ".env.example" "$portable\config\.env.example" -Force
+          Copy-Item "README.md" "$portable\README.md" -Force
+
+      - name: Smoke test packaged EXE
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "portable\RadMon\app\RadMon.exe" -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "RadMon.exe smoke test failed with exit code $($process.ExitCode)"
+          }
+
+      - name: Write executable checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "portable\RadMon\app\RadMon.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  app\RadMon.exe" | Set-Content "portable\RadMon\SHA256SUMS.txt" -Encoding ascii
+
+      - name: Upload portable Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadMon-Windows
+          path: portable\RadMon
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

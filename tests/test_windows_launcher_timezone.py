@@ -4,10 +4,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_windows_launchers_bootstrap_iana_timezone_data():
+def test_windows_package_includes_iana_timezone_runtime_dependency():
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").lower()
     assert "tzdata" in requirements
-
-    for runner in ("RADMON.bat", "RUN_DUMMY.bat", "RUN_LAN.bat"):
-        source = (ROOT / runner).read_text(encoding="utf-8").lower()
-        assert "tzdata" in source, f"{runner} must force-install tzdata into existing venvs"
+    assert not list(ROOT.glob("*.bat"))
+    production = (ROOT / "radmon/production_app.py").read_text(encoding="utf-8")
+    assert "Settings.from_env" in production

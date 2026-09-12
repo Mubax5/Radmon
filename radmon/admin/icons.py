@@ -38,7 +38,6 @@ ICON_SLOTS: dict[str, str] = {
 }
 
 _TABLER_ROOT = Path(__file__).with_name("icons") / "tabler"
-_SILK_ROOT = Path(__file__).with_name("icons") / "silk"
 
 
 def icon_path(slot: str) -> Path:
@@ -51,14 +50,3 @@ def app_icon(slot: str) -> QIcon:
     if not path.is_file():
         raise FileNotFoundError(f"Tabler icon asset missing for {slot}: {path}")
     return QIcon(str(path))
-
-
-# Temporary compatibility API for legacy call sites. Visible UI is migrated to
-# app_icon() in the next task; keep this only so that Task 1 is non-breaking.
-def silk_path(name: str) -> Path:
-    return _SILK_ROOT / f"{name}.png"
-
-
-def silk_icon(name: str) -> QIcon:
-    path = silk_path(name)
-    return QIcon(str(path)) if path.is_file() else QIcon()

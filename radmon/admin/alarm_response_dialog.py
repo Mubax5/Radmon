@@ -24,7 +24,7 @@ ACTIONS = (
 class AlarmResponseDialog(QDialog):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Response to Alarm")
+        self.setWindowTitle("Alarm Response / Silence")
         self.setWindowIcon(app_icon("alarm"))
         self.setMinimumWidth(430)
         layout = QVBoxLayout(self)
@@ -32,6 +32,7 @@ class AlarmResponseDialog(QDialog):
         self.action = QComboBox()
         self.action.addItems(ACTIONS)
         self.pic = QLineEdit()
+        self.pic.returnPressed.connect(self.accept)
         self.note = QPlainTextEdit()
         self.note.setMaximumHeight(100)
         form.addRow("Action", self.action)
@@ -39,6 +40,10 @@ class AlarmResponseDialog(QDialog):
         form.addRow("Note", self.note)
         layout.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button = buttons.button(QDialogButtonBox.Ok)
+        if button is not None:
+            button.setText("Submit / Silence")
+            button.setDefault(True)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
