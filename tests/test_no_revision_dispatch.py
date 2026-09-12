@@ -24,10 +24,13 @@ def test_lan_alarm_behavior_is_defined_in_base_modules():
     assert RemoteAlarmMirror.reconcile_source_active_keys.__module__ == "radmon.remote_alarm"
 
 
-def test_consolidated_repository_archive_revision_files_are_gone():
+def test_consolidated_revision_files_are_gone():
     for name in (
         "repository_revision.py",
         "archive_store_revision.py",
         "archive_reports_revision.py",
+        "lan_revision.py",
+        "remote_alarm_revision.py",
+        "production_safety_revision.py",
     ):
         assert not (ROOT / "radmon" / name).exists()
