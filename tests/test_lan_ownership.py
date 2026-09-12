@@ -18,7 +18,7 @@ def test_static_station_catalog_is_not_seeded_in_lan_central_mode():
 
 def test_run_lan_starts_central_server_before_admin_view():
     source = (ROOT / "RUN_LAN.bat").read_text(encoding="utf-8")
-    admin_launch = 'start "" "%~dp0.venv\\Scripts\\pythonw.exe" "%~dp0main.py" --source lan'
+    admin_launch = 'start "" /wait "%~dp0.venv\\Scripts\\pythonw.exe" "%~dp0main.py" --source lan'
     assert "central_server.py" in source
     assert admin_launch in source
     assert source.index("call :central") < source.index(admin_launch)
