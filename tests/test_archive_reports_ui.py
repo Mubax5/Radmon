@@ -20,8 +20,8 @@ def test_main_window_passes_archive_catalog_to_reports_page():
     assert "archive_catalog=archive_catalog" in source
 
 
-def test_lan_main_uses_composite_repository_for_active_and_archived_reports():
-    source = (ROOT / "main.py").read_text(encoding="utf-8")
+def test_lan_desktop_uses_composite_repository_for_active_and_archived_reports():
+    source = (ROOT / "radmon/desktop_app.py").read_text(encoding="utf-8")
     assert "ArchiveReportRepository" in source
     assert "CompositeReportRepository" in source
     assert "archive_catalog=archive_catalog" in source
