@@ -12,19 +12,22 @@ def test_pyinstaller_build_contract_exists():
     assert "name='RadMon'" in spec or 'name="RadMon"' in spec
     assert "console=False" in spec
     assert "radmon/admin/icons" in spec.replace("\\", "/")
+    assert '("web/dist", "web")' in spec
     assert "from radmon.production_app import main" in entry
     assert "pyinstaller" in build_requirements
 
 
-def test_windows_workflow_builds_smokes_and_uploads_portable_exe():
+def test_windows_workflow_builds_web_smokes_and_uploads_portable_exe():
     workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
     normalized = workflow.replace("/", "\\").lower()
 
     assert "windows-latest" in workflow
     assert "requirements-build.txt" in workflow
+    assert "actions/setup-node" in workflow
+    assert "npm run build" in workflow
     assert "RadMon.spec" in workflow
     assert "RadMon\\app\\RadMon.exe".lower() in normalized
-    assert "--smoke-test" in workflow
+    assert "--server" in workflow and "--smoke-test" in workflow
     assert "RadMon-Windows" in workflow
     assert "actions/upload-artifact" in workflow
 
@@ -48,6 +51,22 @@ def test_portable_layout_keeps_configuration_external_and_assets_beside_exe():
     assert '"$portable\\app\\docs\\manual"' in normalized
     assert '"$portable\\app\\grafana"' in normalized
     assert "Copy-Item .env " not in workflow
+
+
+def test_installer_registers_server_at_windows_boot_and_limits_firewall_to_lan():
+    installer = (ROOT / "packaging/RadMon.iss").read_text(encoding="utf-8")
+    helper = (ROOT / "packaging/install_server.ps1").read_text(encoding="utf-8")
+
+    assert "PrivilegesRequired=admin" in installer
+    assert "install_server.ps1" in installer
+    assert "--open-web" in installer
+    assert "RadMon Server" in installer
+    assert "/End /TN" in installer and "/Delete /F /TN" in installer
+    assert "/SC ONSTART" in helper
+    assert "--server" in helper
+    assert "/RU SYSTEM" in helper
+    assert "localport=8090" in helper and "localport=3300" in helper
+    assert "remoteip=LocalSubnet" in helper
 
 
 def test_windows_installer_release_has_fixed_unversioned_name():
