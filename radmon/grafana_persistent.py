@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+import socket
 
 from .grafana_bootstrap import DATASOURCE_UID, GrafanaBootstrap
 from .grafana_tv import PLAYLIST_UID, build_playlist_payload, playlist_url
 
 
 class PersistentGrafanaBootstrap(GrafanaBootstrap):
-    """Grafana bootstrap that seeds missing resources but never overwrites saved edits."""
+    """Seed missing Grafana resources while treating saved Grafana state as authoritative."""
 
     def __init__(self, *args, **kwargs) -> None:
         compose_runner = kwargs.get("compose_runner")
@@ -41,11 +41,14 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                 payload=self._datasource_payload(),
             )
 
-        for dashboard in self._dashboard_payloads():
-            uid = str(dashboard.get("uid") or "")
+        for factory_dashboard in self._dashboard_payloads():
+            uid = str(factory_dashboard.get("uid") or "")
+            dashboard_endpoint = f"{base}/api/dashboards/uid/{uid}"
             try:
-                self._request_json(f"{base}/api/dashboards/uid/{uid}")
+                current = self._request_json(dashboard_endpoint)
             except Exception:
+                dashboard = dict(factory_dashboard)
+                dashboard["editable"] = True
                 self._request_json(
                     f"{base}/api/dashboards/db",
                     method="POST",
@@ -56,6 +59,24 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                         "message": "RadMon initial monitoring seed",
                     },
                 )
+            else:
+                # One-time compatibility migration for dashboards seeded by older
+                # RadMon builds. Preserve the saved dashboard verbatim and only
+                # unlock Grafana editing; never restore factory layout/content.
+                saved = current.get("dashboard") if isinstance(current, dict) else None
+                if isinstance(saved, dict) and saved.get("editable") is False:
+                    editable = dict(saved)
+                    editable["editable"] = True
+                    self._request_json(
+                        f"{base}/api/dashboards/db",
+                        method="POST",
+                        payload={
+                            "dashboard": editable,
+                            "folderId": 0,
+                            "overwrite": True,
+                            "message": "RadMon unlock existing monitoring dashboard",
+                        },
+                    )
 
         playlist_endpoint = (
             f"{base}/apis/playlist.grafana.app/v1/namespaces/default/playlists/{PLAYLIST_UID}"
@@ -77,6 +98,17 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         env["GF_AUTH_ANONYMOUS_ORG_ROLE"] = "Viewer"
         env["GF_AUTH_DISABLE_LOGIN_FORM"] = "false"
         return env
+
+    def _find_free_port(self, preferred: int) -> int:
+        """Keep Grafana's production address stable instead of silently moving ports."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            try:
+                sock.bind(("127.0.0.1", int(preferred)))
+            except OSError as exc:
+                raise RuntimeError(
+                    f"port Grafana {preferred} sudah dipakai proses lain; RadMon tidak akan pindah port otomatis"
+                ) from exc
+        return int(preferred)
 
     def _ensure_base(self) -> str:
         candidates = self._candidate_base_urls()
@@ -128,7 +160,7 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         )
 
     def ensure(self) -> str:
-        """Return an existing saved monitoring setup without repairing it."""
+        """Reuse saved dashboards as-is; provision only when resources are missing."""
         candidates = self._candidate_base_urls()
         for base in candidates:
             if self._ready(base):
