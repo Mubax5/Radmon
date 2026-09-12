@@ -1,10 +1,17 @@
 from pathlib import Path
 
+import radmon.grafana_tv as grafana_tv
+from radmon.admin.alarm_page import AlarmPage
+from radmon.admin.alarm_response_dialog import AlarmResponseDialog
+from radmon.admin.auth_dialogs import PinDialog
+from radmon.admin.main_window import MainWindow
+from radmon.admin.station_admin_dialog import StationAdminDialog
 from radmon.alarm_policy import AlarmPolicyService
 from radmon.alarm_policy_store import AlarmPolicyStore
 from radmon.archive_reports import ArchiveReportRepository
 from radmon.archive_store import CentralArchiveStore
 from radmon.device_admin import DeviceAdminService
+from radmon.grafana_bootstrap import GrafanaBootstrap
 from radmon.lan import LanAggregator, MariaCentralStore, RemoteMariaDBSource
 from radmon.remote_alarm import AlarmControlService, RemoteAlarmMirror
 from radmon.repository import MariaDBRepository
@@ -44,6 +51,24 @@ def test_alarm_policy_behavior_is_defined_in_base_modules():
     assert LanAggregator.run_live_once.__module__ == "radmon.lan"
 
 
+def test_grafana_behavior_is_defined_in_base_modules():
+    assert GrafanaBootstrap.ensure.__module__ == "radmon.grafana_bootstrap"
+    assert grafana_tv._dose_stat.__module__ == "radmon.grafana_tv"
+    assert grafana_tv._dose_sparkline.__module__ == "radmon.grafana_tv"
+    assert grafana_tv._status_relation.__module__ == "radmon.grafana_tv"
+    assert grafana_tv._operation_table.__module__ == "radmon.grafana_tv"
+    assert grafana_tv.build_page_three.__module__ == "radmon.grafana_tv"
+
+
+def test_admin_ui_behavior_is_defined_in_base_modules():
+    assert PinDialog.get_pin.__module__ == "radmon.admin.auth_dialogs"
+    assert MainWindow.reload_station_sidebar.__module__ == "radmon.admin.main_window"
+    assert MainWindow.refresh_current_page.__module__ == "radmon.admin.main_window"
+    assert StationAdminDialog.__init__.__module__ == "radmon.admin.station_admin_dialog"
+    assert AlarmPage.__init__.__module__ == "radmon.admin.alarm_page"
+    assert AlarmResponseDialog.__init__.__module__ == "radmon.admin.alarm_response_dialog"
+
+
 def test_consolidated_revision_files_are_gone():
     for name in (
         "repository_revision.py",
@@ -57,8 +82,20 @@ def test_consolidated_revision_files_are_gone():
         "alarm_policy_store_revision.py",
         "alarm_policy_security_revision.py",
         "alarm_policy_runtime_revision.py",
+        "grafana_bootstrap_revision.py",
+        "grafana_policy_revision.py",
+        "grafana_revision.py",
+        "grafana_wib_revision.py",
+        "icon_system_revision.py",
+        "production_integration_revision.py",
     ):
         assert not (ROOT / "radmon" / name).exists()
+
+
+def test_package_init_has_no_revision_dispatch():
+    package_init = (ROOT / "radmon" / "__init__.py").read_text(encoding="utf-8")
+    assert "_revision" not in package_init
+    assert "apply as _apply" not in package_init
 
 
 def test_one_shot_refactor_artifacts_are_gone():
