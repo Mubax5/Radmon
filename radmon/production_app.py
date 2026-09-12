@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import signal
 import threading
+import webbrowser
 from typing import Callable, Sequence, Any
 
 from .central_service import CentralService, smoke_server_lifecycle
@@ -21,6 +22,10 @@ from .process_ownership import (
     stop_legacy_radmon_central,
 )
 from .single_instance import SingleInstanceLock
+
+
+WEB_APP_URL = "http://127.0.0.1:8090/app"
+MONITORING_URL = "http://127.0.0.1:8090/"
 
 
 def _default_grafana_startup(settings: Settings, paths: ApplicationPaths) -> str:
@@ -164,6 +169,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="run the headless 24/7 web platform without the PySide desktop",
     )
     parser.add_argument(
+        "--open-web",
+        action="store_true",
+        help="open the authenticated RadMon control plane in the default browser",
+    )
+    parser.add_argument(
+        "--open-monitoring",
+        action="store_true",
+        help="open the anonymous full-screen monitoring landing page",
+    )
+    parser.add_argument(
         "--smoke-test",
         action="store_true",
         help="validate packaged imports and managed API lifecycle without production DB access",
@@ -172,6 +187,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     paths = ApplicationPaths.discover()
     if args.smoke_test:
         return _smoke_test(paths)
+    if args.open_web:
+        webbrowser.open(WEB_APP_URL)
+        return 0
+    if args.open_monitoring:
+        webbrowser.open(MONITORING_URL)
+        return 0
     if args.server:
         return run_server(paths)
     return run_production(paths)
