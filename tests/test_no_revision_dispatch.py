@@ -132,5 +132,7 @@ def test_one_shot_refactor_artifacts_are_gone():
         ".github/workflows/refactor-task10.yml",
         "scripts/repair_task10.py",
         ".github/workflows/repair-task10.yml",
+        "scripts/repair_task10_indent.py",
+        ".github/workflows/repair-task10-indent.yml",
     ):
         assert not (ROOT / relative).exists()
