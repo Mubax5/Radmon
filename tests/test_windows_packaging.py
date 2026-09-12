@@ -53,7 +53,7 @@ def test_portable_layout_keeps_configuration_external_and_assets_beside_exe():
     assert "Copy-Item .env " not in workflow
 
 
-def test_installer_registers_server_at_windows_boot_and_limits_firewall_to_lan():
+def test_installer_registers_resilient_server_at_windows_boot_and_limits_firewall_to_lan():
     installer = (ROOT / "packaging/RadMon.iss").read_text(encoding="utf-8")
     helper = (ROOT / "packaging/install_server.ps1").read_text(encoding="utf-8")
 
@@ -62,9 +62,11 @@ def test_installer_registers_server_at_windows_boot_and_limits_firewall_to_lan()
     assert "--open-web" in installer
     assert "RadMon Server" in installer
     assert "/End /TN" in installer and "/Delete /F /TN" in installer
-    assert "/SC ONSTART" in helper
-    assert "--server" in helper
-    assert "/RU SYSTEM" in helper
+    assert "New-ScheduledTaskTrigger -AtStartup" in helper
+    assert 'New-ScheduledTaskAction -Execute $ExePath -Argument "--server"' in helper
+    assert 'New-ScheduledTaskPrincipal -UserId "SYSTEM"' in helper
+    assert "-RestartCount 999" in helper
+    assert "-RestartInterval" in helper
     assert "localport=8090" in helper and "localport=3300" in helper
     assert "remoteip=LocalSubnet" in helper
 
