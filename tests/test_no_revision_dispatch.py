@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from radmon.alarm_policy import AlarmPolicyService
+from radmon.alarm_policy_store import AlarmPolicyStore
 from radmon.archive_reports import ArchiveReportRepository
 from radmon.archive_store import CentralArchiveStore
 from radmon.device_admin import DeviceAdminService
@@ -35,6 +37,13 @@ def test_security_write_through_and_ack_are_defined_in_base_modules():
     assert DeviceAdminService.update_station.__module__ == "radmon.device_admin"
     assert AlarmControlService.ack.__module__ == "radmon.remote_alarm"
     assert RemoteMariaDBSource.respond_alarm.__module__ == "radmon.lan"
+
+
+def test_alarm_policy_behavior_is_defined_in_base_modules():
+    assert AlarmPolicyService.process_cycle.__module__ == "radmon.alarm_policy"
+    assert AlarmPolicyService.get_policy.__module__ == "radmon.alarm_policy"
+    assert AlarmPolicyStore.start_suppression.__module__ == "radmon.alarm_policy_store"
+    assert LanAggregator.run_live_once.__module__ == "radmon.lan"
 
 
 def test_consolidated_revision_files_are_gone():
