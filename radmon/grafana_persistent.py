@@ -15,6 +15,10 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         super().__init__(*args, **kwargs)
         self._compose_fallback_explicit = compose_runner is not None
 
+    def _candidate_base_urls(self) -> list[str]:
+        """Production Grafana has one stable address: localhost:<configured port>."""
+        return [self.fallback_base_url]
+
     def _probe_playlist(self, base_url: str) -> bool:
         endpoint = (
             f"{base_url.rstrip('/')}/apis/playlist.grafana.app/v1/"
@@ -61,8 +65,7 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                 )
             else:
                 # One-time compatibility migration for dashboards seeded by older
-                # RadMon builds. Preserve the saved dashboard verbatim and only
-                # unlock Grafana editing; never restore factory layout/content.
+                # RadMon builds. Preserve saved content and only unlock editing.
                 saved = current.get("dashboard") if isinstance(current, dict) else None
                 if isinstance(saved, dict) and saved.get("editable") is False:
                     editable = dict(saved)
@@ -114,9 +117,6 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         candidates = self._candidate_base_urls()
         errors: list[str] = []
         for base in candidates:
-            if self._ready(base):
-                return playlist_url(base)
-        for base in candidates:
             if not self.grafana_health_probe(base):
                 continue
             try:
@@ -160,9 +160,9 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         )
 
     def ensure(self) -> str:
-        """Reuse saved dashboards as-is; provision only when resources are missing."""
-        candidates = self._candidate_base_urls()
-        for base in candidates:
-            if self._ready(base):
+        """Seed/migrate safely on a healthy Grafana, otherwise start native Grafana."""
+        base = self.fallback_base_url
+        if self.grafana_health_probe(base):
+            if self.api_provisioner(base) and self._ready(base):
                 return playlist_url(base)
         return self._ensure_base()
