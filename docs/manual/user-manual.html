@@ -9,45 +9,47 @@
 <body>
   <main>
     <h1>RadMon User Manual</h1>
-    <p>Production central dimulai dengan <strong>app\RadMon.exe</strong>. Satu proses RadMon memiliki collector LAN, secure API, desktop Admin, alarm policy, archive lifecycle, dan Grafana bootstrap.</p>
+    <p>Production RadMon berjalan otomatis 24/7 melalui Scheduled Task Windows yang menjalankan <strong>app\RadMon.exe --server</strong>. Browser user bukan lifecycle owner server.</p>
 
-    <h2>Login dan role</h2>
+    <h2>Monitoring anonymous</h2>
+    <p>Buka <code>http://192.168.1.2:8090/</code> untuk Grafana monitoring fullscreen/kiosk. Halaman ini read-only, tidak mempunyai tombol Sign in RadMon, dan hanya tersedia untuk network BRIN/LAN yang diizinkan.</p>
+
+    <h2>Control Plane dan role</h2>
+    <p>Buka <code>http://192.168.1.2:8090/app</code>. Semua role wajib login, termasuk Viewer.</p>
     <ul>
-      <li><strong>Administrator</strong>: monitoring, Response/Silence, suppression, user management, edit station, archive admin.</li>
-      <li><strong>Operator</strong>: monitoring/report, Response/Silence, suppression.</li>
-      <li><strong>Viewer</strong>: read-only.</li>
+      <li><strong>Viewer</strong>: Overview, Stations, History, Archives/Reports read-only.</li>
+      <li><strong>Operator</strong>: Viewer + Alarm, Response/Silence, suppression.</li>
+      <li><strong>Administrator</strong>: Operator + Users, station/system administration, Grafana admin.</li>
     </ul>
+    <p>Control Plane menggunakan Cloudflare Kumo UI. Backend tetap memeriksa session, role, dan PIN untuk aksi sensitif.</p>
 
-    <h2>Monitoring</h2>
-    <p>Tab utama adalah Recent, Tabular, Chart, Reports, Alarm, dan Logs. Monitoring realtime menggunakan snapshot <code>vrecent</code> dengan refresh default 2 detik.</p>
-    <p>Tombol Monitoring membuka Grafana Playlist Realtime, Trends, dan Operations. Dashboard refresh 2 detik; Playlist berganti setiap 10 detik.</p>
+    <h2>Grafana editable</h2>
+    <p>Administrator pada PC server membuka <code>http://localhost:3300</code>. Login default Grafana adalah <code>admin/admin</code> bila belum diganti. Edit dan Save disimpan sebagai state Grafana authoritative dan langsung digunakan monitoring anonymous.</p>
+    <p>Restart RadMon, Grafana, Windows, atau installer upgrade tidak mengembalikan layout ke factory. Dashboard factory hanya di-seed bila UID belum ada.</p>
 
     <h2>Source health</h2>
     <pre>gd50 -&gt; 192.168.1.50
 gd52 -&gt; 192.168.1.52
 gd38 -&gt; 192.168.1.38</pre>
-    <p>Status source dapat berupa CONNECTED, DEGRADED, OFFLINE, atau RECOVERED. Kegagalan satu source tidak menghentikan source lain.</p>
+    <p>Kegagalan satu source tidak menghentikan source lain. RadMon tidak melakukan DDL pada source production.</p>
 
     <h2>Alarm Response / Silence</h2>
-    <ol>
-      <li>Pilih alarm aktif.</li>
-      <li>Klik Response / Silence.</li>
-      <li>Isi Action, PIC, Note/Reason, dan PIN bila diminta.</li>
-      <li>Submit dan verifikasi event menjadi responded.</li>
-    </ol>
-    <p>Write-through source mengisi <code>i_op</code>, <code>pic</code>, <code>note</code>, dan <code>i_flag=1</code>. Kolom <code>ack</code> tidak diubah.</p>
+    <p>Operator/Administrator menangani policy event melalui menu Alarms. Aksi Response/Silence dan suppression memerlukan role yang sesuai serta PIN. Source write-through mengisi <code>i_op</code>, <code>pic</code>, <code>note</code>, dan <code>i_flag=1</code>; <code>ack</code> tidak diubah.</p>
 
     <h2>Timed suppression</h2>
-    <p>Administrator/Operator dapat men-suppress alarm detector selama 1 menit sampai 24 jam dengan PIN, PIC, dan reason. Measurement tetap berjalan; dose aktual dan underlying NORMAL/ALERT/ALARM tetap terlihat. Satu sesi menghasilkan paling banyak satu event SUPPRESSED.</p>
+    <p>Suppression berlangsung 1 menit sampai 24 jam dengan PIN, PIC, dan reason. Measurement tetap berjalan dan dose aktual tetap terlihat. Satu sesi maksimal menghasilkan satu event SUPPRESSED.</p>
 
-    <h2>Reports</h2>
-    <p>Workflow report: <strong>Preview -&gt; Print / Export PDF / Export CSV</strong>. Reports dapat membaca data aktif dan quarterly archive yang sudah terverifikasi.</p>
+    <h2>Reports dan archive</h2>
+    <p>Workflow report: <strong>Preview -&gt; Print / Export PDF / Export CSV</strong>. Reports dapat membaca data aktif dan quarterly archive yang sudah terverifikasi tanpa restore SQL.</p>
 
-    <h2>Shutdown dan upgrade</h2>
-    <p>Tutup desktop Admin untuk shutdown normal; central service milik RadMon ikut berhenti. Saat upgrade, pertahankan <code>config\.env</code>, <code>runtime\</code>, <code>archives\</code>, dan <code>reports\</code>.</p>
+    <h2>Operasi 24/7</h2>
+    <p>Scheduled Task <code>RadMon Server</code> start saat Windows boot sebagai SYSTEM dan restart otomatis bila proses berhenti. Menutup browser tidak menghentikan collector/API.</p>
+
+    <h2>Upgrade</h2>
+    <p>Jalankan installer baru sebagai Administrator. Pertahankan <code>config\.env</code>, <code>runtime\</code>, <code>archives\</code>, dan <code>reports\</code>. Setelah upgrade verifikasi monitoring, login/RBAC, Grafana Save persistence, source health, alarm, dan report.</p>
 
     <h2>Jika ada masalah</h2>
-    <p>Periksa Logs, source health, central MariaDB, dan Docker Desktop/Grafana. Jangan menghapus security DB, checkpoint, archive, report, atau konfigurasi production sebagai langkah troubleshooting.</p>
+    <p>Periksa Scheduled Task RadMon Server, <code>runtime\logs</code>, port 8090/3300, Grafana native, serta central/source MariaDB. Jangan menghapus security DB/checkpoint/archive/report sebagai langkah troubleshooting.</p>
   </main>
 </body>
 </html>
