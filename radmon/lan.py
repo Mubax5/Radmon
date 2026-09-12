@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import importlib
 import os
 from typing import Any, Callable, Iterable
@@ -9,6 +9,72 @@ from typing import Any, Callable, Iterable
 from .repository import upsert_recent
 from .security import SecurityStore
 
+
+_SILENCE_DECISIONS = {'SUPPRESSED', 'RETRIGGER_LOCKED', 'COALESCED_DUPLICATE'}
+
+_BACKOFF_SECONDS = (5, 15, 30, 60)
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+def _ensure_retry_column(store) -> None:
+    with store.security._connection() as db:
+        columns = {str(row[1]) for row in db.execute('PRAGMA table_info(remote_alarm_state)')}
+        if 'source_silence_attempts' not in columns:
+            db.execute('ALTER TABLE remote_alarm_state ADD COLUMN source_silence_attempts INTEGER NOT NULL DEFAULT 0')
+
+def _pending_alarm_rows(alarm_mirror, source_id: str, *, limit: int=500) -> list[dict[str, Any]]:
+    """Return mirrored source rows that policy has not classified yet."""
+    if alarm_mirror is None:
+        return []
+    with alarm_mirror.store._connection() as db:
+        rows = db.execute('\nSELECT serid, remote_serid, event_time, level, measured_value, threshold,\n       hit_count, notification_sent_at\nFROM remote_alarm_state\nWHERE source_id = ? AND policy_decision IS NULL\nORDER BY event_time ASC, serid ASC\nLIMIT ?\n', (str(source_id), max(1, int(limit)))).fetchall()
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        result.append({'serid': int(row[0]), '_remote_serid': int(row[1]) if row[1] is not None else int(row[0]), 'dtoa': datetime.fromisoformat(str(row[2])), 'lvl': 2 if str(row[3]).upper() == 'ALARM' else 1, 'mvalue': row[4], 'thvalue': row[5], 'nhit': row[6], '_historical_seed': row[7] is not None})
+    return result
+
+def _mapped_live_rows(aggregator, source) -> list[dict[str, Any]]:
+    remote = aggregator.remote_factory(source)
+    mapped: list[dict[str, Any]] = []
+    for row in remote.live_rows():
+        remote_serid = int(row['serid'])
+        central_serid = aggregator.checkpoints.store.resolve_station(source.source_id, remote_serid)
+        item = dict(row)
+        item['_remote_serid'] = remote_serid
+        item['serid'] = central_serid
+        mapped.append(item)
+    return mapped
+
+def _retry_source_silences(aggregator, source, alarm_policy) -> None:
+    """Retry at most 25 source silences using 5/15/30/60-second backoff."""
+    store = alarm_policy.store
+    _ensure_retry_column(store)
+    now = alarm_policy.now() if callable(getattr(alarm_policy, 'now', None)) else _utcnow()
+    pending = store.pending_source_silences(source.source_id, at=now, limit=25)
+    if not pending:
+        return
+    remote = aggregator.remote_factory(source)
+    for item in pending:
+        with store.security._connection() as db:
+            row = db.execute('SELECT source_silence_attempts FROM remote_alarm_state\n                   WHERE source_id=? AND serid=? AND event_time=?', (item['source_id'], int(item['serid']), item['event_time'].isoformat())).fetchone()
+            attempts = int(row[0] or 0) if row else 0
+        try:
+            ok = bool(remote.respond_alarm(int(item.get('remote_serid') or item['serid']), item['event_time'], action='Suppressed', pic='RadMon Policy', note='Central policy auto-silence', at=now))
+            if not ok:
+                raise RuntimeError('source menolak alarm silence')
+            store.mark_source_silence_result(item['source_id'], item['serid'], item['event_time'], state='CONFIRMED')
+            with store.security._connection() as db:
+                db.execute('UPDATE remote_alarm_state SET source_silence_attempts=?\n                       WHERE source_id=? AND serid=? AND event_time=?', (attempts + 1, item['source_id'], int(item['serid']), item['event_time'].isoformat()))
+        except Exception as exc:
+            next_attempt = attempts + 1
+            delay = _BACKOFF_SECONDS[min(attempts, len(_BACKOFF_SECONDS) - 1)]
+            store.mark_source_silence_result(item['source_id'], item['serid'], item['event_time'], state='FAILED', retry_at=now + timedelta(seconds=delay))
+            with store.security._connection() as db:
+                db.execute('UPDATE remote_alarm_state SET source_silence_attempts=?\n                       WHERE source_id=? AND serid=? AND event_time=?', (next_attempt, item['source_id'], int(item['serid']), item['event_time'].isoformat()))
+            audit = getattr(alarm_policy, 'audit', None)
+            if audit is not None:
+                audit.record('SUPPRESSION_SOURCE_SILENCE_FAILED', None, 'alarm', f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}", success=False, reason=str(exc), source=item['source_id'])
 
 @dataclass(frozen=True, slots=True)
 class LanSource:
@@ -706,44 +772,17 @@ class LanAggregator:
         return result
 
     def run_live_once(self, source):
-        historical_seed = self.checkpoints.load_alarm(source.source_id) is None
-        result = self._run_live_core_once(source)
-        if result.error:
+        result = self._run_live_policy_base_once(source)
+        alarm_policy = getattr(self, "alarm_policy", None)
+        if result.error or alarm_policy is None:
             return result
         try:
-            remote = self.remote_factory(source)
-            state_reader = getattr(remote, "alarm_states", None)
-            state_rows = state_reader(2000) if callable(state_reader) else []
-            mapped: list[dict[str, Any]] = []
-            for row in state_rows:
-                item = dict(row)
-                remote_serid = int(item["serid"])
-                item["_remote_serid"] = remote_serid
-                item["serid"] = self.checkpoints.store.resolve_station(
-                    source.source_id, remote_serid
-                )
-                if historical_seed:
-                    item["_historical_seed"] = True
-                mapped.append(item)
-            if mapped and self.alarm_mirror is not None:
-                self.alarm_mirror.mirror(source.source_id, mapped)
-            if mapped and hasattr(self.central, "mirror_alarm_events"):
-                self.central.mirror_alarm_events(source.source_id, mapped)
-
-            if self.alarm_mirror is not None:
-                key_reader = getattr(remote, "active_alarm_keys", None)
-                if callable(key_reader):
-                    active_keys: set[tuple[int, datetime]] = set()
-                    for remote_serid, event_time in key_reader():
-                        central_serid = self.checkpoints.store.resolve_station(
-                            source.source_id, int(remote_serid)
-                        )
-                        active_keys.add((int(central_serid), event_time))
-                    handled = self.alarm_mirror.reconcile_source_active_keys(
-                        source.source_id, active_keys
-                    )
-                    if handled and hasattr(self.central, "mark_alarm_handled"):
-                        self.central.mark_alarm_handled(handled)
+            mapped_live = _mapped_live_rows(self, source)
+            mapped_alarms = _pending_alarm_rows(
+                getattr(self, "alarm_mirror", None), source.source_id, limit=500
+            )
+            alarm_policy.process_cycle(source.source_id, mapped_live, mapped_alarms)
+            _retry_source_silences(self, source, alarm_policy)
         except Exception as exc:
             result.error = str(exc)
         return result
@@ -770,6 +809,42 @@ class LanAggregator:
                 raise ValueError('remote measurement time tidak valid')
             self.checkpoints.save(source.source_id, remote_serid, last_time)
             result.checkpoint = last_time
+        except Exception as exc:
+            result.error = str(exc)
+        return result
+
+    def _run_live_policy_base_once(self, source):
+        historical_seed = self.checkpoints.load_alarm(source.source_id) is None
+        result = self._run_live_core_once(source)
+        if result.error:
+            return result
+        try:
+            remote = self.remote_factory(source)
+            state_reader = getattr(remote, 'alarm_states', None)
+            state_rows = state_reader(2000) if callable(state_reader) else []
+            mapped: list[dict[str, Any]] = []
+            for row in state_rows:
+                item = dict(row)
+                remote_serid = int(item['serid'])
+                item['_remote_serid'] = remote_serid
+                item['serid'] = self.checkpoints.store.resolve_station(source.source_id, remote_serid)
+                if historical_seed:
+                    item['_historical_seed'] = True
+                mapped.append(item)
+            if mapped and self.alarm_mirror is not None:
+                self.alarm_mirror.mirror(source.source_id, mapped)
+            if mapped and hasattr(self.central, 'mirror_alarm_events'):
+                self.central.mirror_alarm_events(source.source_id, mapped)
+            if self.alarm_mirror is not None:
+                key_reader = getattr(remote, 'active_alarm_keys', None)
+                if callable(key_reader):
+                    active_keys: set[tuple[int, datetime]] = set()
+                    for remote_serid, event_time in key_reader():
+                        central_serid = self.checkpoints.store.resolve_station(source.source_id, int(remote_serid))
+                        active_keys.add((int(central_serid), event_time))
+                    handled = self.alarm_mirror.reconcile_source_active_keys(source.source_id, active_keys)
+                    if handled and hasattr(self.central, 'mark_alarm_handled'):
+                        self.central.mark_alarm_handled(handled)
         except Exception as exc:
             result.error = str(exc)
         return result

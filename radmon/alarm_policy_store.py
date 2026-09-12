@@ -257,25 +257,16 @@ ORDER BY started_at DESC LIMIT 1
             ).fetchone()
         return self._suppression_from_row(row)
 
-    def start_suppression(self, serid: int, started_at: datetime, expires_at: datetime,
-                          auto_resume_on_normal: bool, pic: str, reason: str, started_by: str,
-                          *, connection: sqlite3.Connection | None = None) -> SuppressionRecord:
-        sid = str(uuid.uuid4())
+    def start_suppression(self, serid, started_at, expires_at, auto_resume_on_normal, pic, reason, started_by, *, connection=None):
+        suppression_id = str(uuid.uuid4())
         own = connection is None
         db = connection or self.security._connection()
+        row = None
         try:
             if own:
                 self._begin(db)
-            db.execute(
-                """
-INSERT INTO alarm_suppression
-  (suppression_id, serid, started_at, expires_at, auto_resume_on_normal, pic, reason,
-   started_by, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-""",
-                (sid, int(serid), _iso(started_at), _iso(expires_at), 1 if auto_resume_on_normal else 0,
-                 str(pic), str(reason), str(started_by), _iso(started_at), _iso(started_at)),
-            )
+            db.execute('\nINSERT INTO alarm_suppression\n  (suppression_id, serid, started_at, expires_at, auto_resume_on_normal, pic, reason,\n   started_by, created_at, updated_at)\nVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n', (suppression_id, int(serid), _iso(started_at), _iso(expires_at), 1 if auto_resume_on_normal else 0, str(pic), str(reason), str(started_by), _iso(started_at), _iso(started_at)))
+            row = db.execute('\nSELECT suppression_id, serid, started_at, expires_at, auto_resume_on_normal, pic, reason,\n       started_by, ended_at, ended_reason, first_suppressed_alarm_at, created_at, updated_at\nFROM alarm_suppression WHERE suppression_id = ?\n', (suppression_id,)).fetchone()
             if own:
                 db.commit()
         except Exception:
@@ -285,9 +276,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         finally:
             if own:
                 db.close()
-        item = self.get_suppression(sid)
+        item = self._suppression_from_row(row)
         if item is None:
-            raise RuntimeError("suppression gagal dibuat")
+            raise RuntimeError('suppression gagal dibuat')
         return item
 
     def get_suppression(self, suppression_id: str) -> SuppressionRecord | None:

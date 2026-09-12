@@ -69,13 +69,15 @@ class LanRuntime:
         self.threads.append(thread)
 
     def _aggregator(self, batch_size: int | None = None) -> LanAggregator:
-        return LanAggregator(
+        aggregator = LanAggregator(
             self.central,
             self.checkpoints,
             remote_factory=lambda item: RemoteMariaDBSource(item),
             alarm_mirror=self.services.alarm_mirror,
             batch_size=self.batch_size if batch_size is None else max(1, int(batch_size)),
         )
+        aggregator.alarm_policy = getattr(self.services, "alarm_policy", None)
+        return aggregator
 
     def _run_live_source(self, source) -> None:
         aggregator = self._aggregator()

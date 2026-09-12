@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from dataclasses import asdict
+from datetime import datetime, timedelta
 import threading
 from typing import Any, Callable
 
@@ -125,6 +126,25 @@ WHERE source_id = ? AND serid = ? AND event_time = ?
                     handled.append((int(serid), datetime.fromisoformat(str(event_text))))
         return handled
 
+    def _policy_store(self):
+        from .alarm_policy_store import AlarmPolicyStore
+        store = getattr(self, "policy_store", None)
+        if store is None:
+            store = AlarmPolicyStore(self.store)
+            self.policy_store = store
+        return store
+
+    def annotate_policy(self, source_id, serid, event_time, **kwargs):
+        return self._policy_store().annotate_raw_alarm(source_id, serid, event_time, **kwargs)
+
+    def pending_source_silences(self, source_id=None, *, at=None, limit=25):
+        return self._policy_store().pending_source_silences(source_id, at=at, limit=limit)
+
+    def mark_source_silence_result(self, source_id, serid, event_time, *, state, retry_at=None):
+        return self._policy_store().mark_source_silence_result(
+            source_id, serid, event_time, state=state, retry_at=retry_at
+        )
+
 
 class AlarmControlService:
     def __init__(
@@ -172,3 +192,72 @@ class AlarmControlService:
             raise
         self.audit.record('ALARM_ACK', identity, 'alarm', target_id, before=before, after=after, source=source_id)
         return after
+
+    def _policy_store(self):
+        from .alarm_policy_store import AlarmPolicyStore
+        store = getattr(self, "policy_store", None)
+        if store is None:
+            store = AlarmPolicyStore(self.security)
+            self.policy_store = store
+        return store
+
+    def silence_source_row(self, source_id: str, serid: int, event_time: datetime, *, action: str, pic: str, reason: str) -> bool:
+        remote = self.remote_factory(str(source_id))
+        responder = getattr(remote, "respond_alarm", None)
+        if not callable(responder):
+            raise RuntimeError("source tidak mendukung alarm response")
+        at = self.now()
+        return bool(responder(int(serid), event_time, action=action, pic=pic, note=reason, at=at))
+
+    def respond_policy_event(self, identity, pin: str, event_id: str, *, action: str, pic: str, reason: str):
+        self.security.require_sensitive(identity, "ack_alarm", pin)
+        action_text = str(action or "").strip()
+        pic_text = str(pic or "").strip()
+        reason_text = str(reason or "").strip()
+        if not action_text or not pic_text:
+            raise ValueError("Action dan PIC wajib diisi")
+        store = self._policy_store()
+        event = store.get_event(str(event_id))
+        if event is None:
+            raise RuntimeError("policy event tidak ditemukan")
+        if event.status != "ACTIVE":
+            raise RuntimeError("policy event sudah ditangani")
+        at = self.now()
+        with self.security._connection() as db:
+            rows = db.execute(
+                """SELECT source_id, serid, remote_serid, event_time
+                   FROM remote_alarm_state
+                   WHERE policy_event_id=? ORDER BY event_time""",
+                (str(event_id),),
+            ).fetchall()
+        for row in rows:
+            source_id = str(row[0])
+            central_serid = int(row[1])
+            remote_serid = int(row[2]) if row[2] is not None else central_serid
+            event_time = datetime.fromisoformat(str(row[3]))
+            try:
+                if not self.silence_source_row(
+                    source_id, remote_serid, event_time,
+                    action=action_text, pic=pic_text, reason=reason_text,
+                ):
+                    raise RuntimeError("source menolak alarm response")
+                store.mark_source_silence_result(source_id, central_serid, event_time, state="CONFIRMED")
+            except Exception as exc:
+                store.mark_source_silence_result(
+                    source_id, central_serid, event_time, state="FAILED",
+                    retry_at=at + timedelta(seconds=5),
+                )
+                self.audit.record(
+                    "ALARM_POLICY_SOURCE_RESPONSE", identity, "alarm", str(event_id),
+                    success=False, reason=str(exc), source=source_id,
+                )
+        policy = getattr(self, "policy", None)
+        if policy is not None:
+            responded = policy.mark_event_responded(str(event_id), at, pic_text, action_text, reason_text)
+        else:
+            responded = store.respond_event(str(event_id), at, pic_text, action_text, reason_text)
+        self.audit.record(
+            "ALARM_POLICY_RESPONSE", identity, "alarm", str(event_id),
+            before=asdict(event), after=asdict(responded), source=event.source_id,
+        )
+        return asdict(responded)

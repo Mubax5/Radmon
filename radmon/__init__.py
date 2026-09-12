@@ -21,24 +21,9 @@ del _apply_production_integration_revision
 
 
 
-from .alarm_policy_revision import apply as _apply_alarm_policy_revision
-_apply_alarm_policy_revision()
-del _apply_alarm_policy_revision
 
-# The policy store is central SQLite state. Read back newly inserted suppression
-# rows on the same detector transaction so uncommitted state never depends on a
-# second SQLite connection.
-from .alarm_policy_store_revision import apply as _apply_alarm_policy_store_revision
-_apply_alarm_policy_store_revision()
-del _apply_alarm_policy_store_revision
 
-from .alarm_policy_security_revision import apply as _apply_alarm_policy_security_revision
-_apply_alarm_policy_security_revision()
-del _apply_alarm_policy_security_revision
 
-from .alarm_policy_runtime_revision import apply as _apply_alarm_policy_runtime_revision
-_apply_alarm_policy_runtime_revision()
-del _apply_alarm_policy_runtime_revision
 
 # Preserve the production WIB wall-clock conversion first, then layer the
 # central policy JOIN over those already-final query builders.

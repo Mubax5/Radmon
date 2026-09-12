@@ -32,9 +32,9 @@ class UserIdentity:
 
 ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
     Role.ADMINISTRATOR: frozenset({
-        "view", "ack_alarm", "manage_users", "edit_station", "manage_sources",
+        "view", "ack_alarm", "suppress_alarm", "manage_users", "edit_station", "manage_sources",
     }),
-    Role.OPERATOR: frozenset({"view", "ack_alarm"}),
+    Role.OPERATOR: frozenset({"view", "ack_alarm", "suppress_alarm"}),
     Role.VIEWER: frozenset({"view"}),
 }
 
