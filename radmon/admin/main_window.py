@@ -5,12 +5,14 @@ from dataclasses import replace
 import os
 from pathlib import Path
 import threading
+import time
 import webbrowser
 from typing import Callable
 
 from PySide6.QtCore import QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QFormLayout,
     QLabel,
@@ -29,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..grafana_bootstrap import GrafanaBootstrap
+from ..paths import ApplicationPaths
 from ..secure_context import get_context
 from ..security import Role
 from .about_dialog import AboutDialog
@@ -44,6 +47,47 @@ from .reports_page import ReportsPage
 from .station_admin_dialog import StationAdminDialog
 from .tabular_page import TabularPage
 from .ui_preferences import DesktopPreferences
+
+
+INSTALLATION_MANUAL_PATH = "docs/manual/installation.html"
+USER_MANUAL_PATH = "docs/manual/user-manual.html"
+
+
+def group_stations_by_source(stations, station_source_by_serid, sources, health_by_source):
+    groups = []
+    for source_id, source in sources.items():
+        members = [
+            station for station in stations
+            if station_source_by_serid.get(int(station.serid)) == source_id
+        ]
+        groups.append({
+            "source_id": source_id,
+            "host": str(getattr(source, "host", "")),
+            "state": str(health_by_source.get(source_id, "UNKNOWN")),
+            "stations": members,
+        })
+    return groups
+
+
+def _source_label(source_id: str) -> str:
+    text = str(source_id)
+    lower = text.lower()
+    if lower.startswith("gd") and lower[2:].isdigit():
+        return f"Gd.{lower[2:]}"
+    return text
+
+
+def _source_health_map() -> dict[str, str]:
+    context = get_context()
+    if context is None:
+        return {}
+    try:
+        return {
+            str(row["source_id"]): str(row.get("state") or "UNKNOWN")
+            for row in context.source_health.list_states()
+        }
+    except Exception:
+        return {}
 
 
 def open_external_url(
@@ -214,7 +258,7 @@ class MainWindow(QMainWindow):
         self.reload_station_sidebar(select_serid=self.settings.serid)
         return sidebar
 
-    def reload_station_sidebar(self, *, select_serid: int | None = None) -> None:
+    def _reload_station_sidebar_base(self, *, select_serid: int | None = None) -> None:
         self.station_tree.blockSignals(True)
         self.station_tree.clear()
         root = QTreeWidgetItem(self.station_tree, ["Station"])
@@ -245,7 +289,7 @@ class MainWindow(QMainWindow):
             self.station_tree.setCurrentItem(selected_item)
             self._station_changed(selected_item)
 
-    def _select_station_from_recent(self, serid: int) -> None:
+    def _select_station_from_recent_base(self, serid: int) -> None:
         root = self.station_tree.topLevelItem(0)
         if root is None:
             return
@@ -308,7 +352,7 @@ class MainWindow(QMainWindow):
         self.station_description.setPlainText(self._device_description(station.serid, fallback))
         self.refresh_current_page()
 
-    def _build_actions(self) -> None:
+    def _build_actions_base(self) -> None:
         self.monitoring_action = QAction(app_icon("monitoring"), "Monitoring", self)
         self.monitoring_action.setStatusTip("Open Grafana monitoring")
         self.monitoring_action.triggered.connect(self.open_monitoring)
@@ -617,12 +661,13 @@ class MainWindow(QMainWindow):
         AcquisitionControlDialog(self.runtime, source=self.source, parent=self).exec()
 
     def _open_manual(self, relative_path: str) -> None:
-        path = Path(relative_path).resolve()
+        path = (ApplicationPaths.discover().app_dir / relative_path).resolve()
         if not path.is_file():
             QMessageBox.information(self, "Manual", f"Manual belum tersedia: {relative_path}")
             return
-        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
-            QMessageBox.warning(self, "Manual", f"Gagal membuka manual: {path}")
+        url = QUrl.fromLocalFile(str(path)).toString()
+        if not open_external_url(url):
+            QMessageBox.warning(self, "Manual", f"Gagal membuka manual di browser: {path}")
 
     def _show_about(self) -> None:
         AboutDialog(self).exec()
@@ -694,7 +739,7 @@ class MainWindow(QMainWindow):
                 page.build_preview()
             page.print_report()
 
-    def refresh_current_page(self) -> None:
+    def _refresh_current_page_base(self) -> None:
         page = self.tabs.currentWidget()
         if page is not None and hasattr(page, "refresh_live"):
             page.refresh_live()
@@ -712,3 +757,162 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"{mode} · {self.settings.station_label} · refresh {self.preferences.refresh_interval:g}s"
             )
+
+    def reload_station_sidebar(self, *, select_serid: int | None = None) -> None:
+        context = get_context()
+        source_definitions = dict(
+            getattr(getattr(context, "device_admin", None), "source_definitions", {})
+            if context is not None else {}
+        )
+        if self.source != "lan" or not source_definitions:
+            return self._reload_station_sidebar_base(select_serid=select_serid)
+
+        expanded: dict[str, bool] = {}
+        old_root = self.station_tree.topLevelItem(0)
+        if old_root is not None:
+            for index in range(old_root.childCount()):
+                item = old_root.child(index)
+                sid = item.data(0, Qt.UserRole + 1)
+                if sid:
+                    expanded[str(sid)] = item.isExpanded()
+
+        self.station_tree.blockSignals(True)
+        self.station_tree.clear()
+        root = QTreeWidgetItem(self.station_tree, ["Station"])
+        root.setIcon(0, app_icon("station_group"))
+        root.setExpanded(True)
+        selected_item = None
+        try:
+            stations = list(self.repository.station_configs())
+            mapping = context.device_admin.security.station_source_map()
+            groups = group_stations_by_source(
+                stations, mapping, source_definitions, _source_health_map()
+            )
+        except Exception as exc:
+            self.statusBar().showMessage(f"Station list error: {exc}")
+            groups = []
+
+        for group in groups:
+            sid = str(group["source_id"])
+            state = str(group["state"])
+            host = str(group["host"])
+            parent = QTreeWidgetItem(root, [f"Server {_source_label(sid)} · {host} [{state}]"])
+            parent.setIcon(0, app_icon("station_group"))
+            parent.setData(0, Qt.UserRole + 1, sid)
+            parent.setToolTip(0, f"source={sid} · host={host} · state={state}")
+            parent.setExpanded(expanded.get(sid, True))
+            for station in group["stations"]:
+                child = QTreeWidgetItem(parent, [f"[{station.serid}] {station.room}"])
+                child.setIcon(0, app_icon("detector"))
+                child.setData(0, Qt.UserRole, station.serid)
+                child.setToolTip(
+                    0,
+                    f"[{station.serid}] {station.room} ({station.location}) · "
+                    f"Alert {station.warnlevel:g} {station.unit}, "
+                    f"Alarm {station.alarmlevel:g} {station.unit}",
+                )
+                if select_serid is not None and int(station.serid) == int(select_serid):
+                    selected_item = child
+
+        if selected_item is None:
+            for index in range(root.childCount()):
+                parent = root.child(index)
+                if parent.childCount():
+                    selected_item = parent.child(0)
+                    break
+        self.station_tree.blockSignals(False)
+        if selected_item is not None:
+            self.station_tree.setCurrentItem(selected_item)
+            self._station_changed(selected_item)
+
+    def _select_station_from_recent(self, serid: int) -> None:
+        if self.source != "lan":
+            return self._select_station_from_recent_base(serid)
+        root = self.station_tree.topLevelItem(0)
+        if root is None:
+            return
+        for group_index in range(root.childCount()):
+            parent = root.child(group_index)
+            for index in range(parent.childCount()):
+                item = parent.child(index)
+                if int(item.data(0, Qt.UserRole) or 0) == int(serid):
+                    parent.setExpanded(True)
+                    self.station_tree.setCurrentItem(item)
+                    return
+
+    def _refresh_source_parent_states(self) -> None:
+        if self.source != "lan":
+            return
+        states = _source_health_map()
+        context = get_context()
+        sources = dict(
+            getattr(getattr(context, "device_admin", None), "source_definitions", {})
+            if context is not None else {}
+        )
+        root = self.station_tree.topLevelItem(0)
+        if root is None:
+            return
+        for index in range(root.childCount()):
+            parent = root.child(index)
+            sid = parent.data(0, Qt.UserRole + 1)
+            if not sid:
+                continue
+            source = sources.get(str(sid))
+            host = str(getattr(source, "host", ""))
+            state = states.get(str(sid), "UNKNOWN")
+            parent.setText(0, f"Server {_source_label(str(sid))} · {host} [{state}]")
+
+    def refresh_all(self) -> None:
+        current_serid = getattr(self.settings, "serid", None)
+        self.reload_station_sidebar(select_serid=current_serid)
+        self._refresh_source_parent_states()
+        self.refresh_current_page()
+        context = get_context()
+        if context is not None and hasattr(self.recent_page, "set_message_rows"):
+            try:
+                messages = []
+                for item in context.source_health.list_states():
+                    state = str(item.get("state") or "UNKNOWN")
+                    message = f"[SERVER {state}] {item.get('source_id')} / {item.get('host')}"
+                    if item.get("last_error") and state in {"DEGRADED", "OFFLINE"}:
+                        message += f" - {item.get('last_error')}"
+                    messages.append((item.get("updated_at") or "", message))
+                self.recent_page.set_message_rows(messages)
+            except Exception:
+                pass
+
+    def _build_actions(self) -> None:
+        self._build_actions_base()
+        try:
+            self.refresh_action.triggered.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        self.refresh_action.triggered.connect(self.refresh_all)
+        try:
+            self.install_manual_action.triggered.disconnect()
+            self.user_manual_action.triggered.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        self.install_manual_action.triggered.connect(
+            lambda: self._open_manual(INSTALLATION_MANUAL_PATH)
+        )
+        self.user_manual_action.triggered.connect(
+            lambda: self._open_manual(USER_MANUAL_PATH)
+        )
+
+    def refresh_current_page(self) -> None:
+        self._refresh_current_page_base()
+        self._refresh_source_parent_states()
+        context = get_context()
+        if context is None:
+            return
+        try:
+            active = context.alarm_mirror.list_alarms(active_only=True, limit=1)
+        except Exception:
+            active = []
+        if active:
+            now = time.monotonic()
+            last = float(getattr(self, "_last_alarm_beep", 0.0))
+            if now - last >= 1.5:
+                QApplication.beep()
+                self._last_alarm_beep = now
