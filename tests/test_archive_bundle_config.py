@@ -30,7 +30,7 @@ def test_readme_documents_safe_quarter_lifecycle_and_direct_reporting():
     text = (ROOT / "README.md").read_text(encoding="utf-8").lower()
     for phrase in (
         "192.168.1.2",
-        "central_server.py",
+        "app\\radmon.exe",
         "diverifikasi",
         "purge",
         "monthly-recap.csv",
