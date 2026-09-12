@@ -182,14 +182,7 @@ class ArchiveReportRepository:
         rows.sort(key=lambda row: row["dtom"])
         return rows[: max(1, int(limit))]
 
-    def alarm_history(
-        self,
-        start: datetime | None = None,
-        end: datetime | None = None,
-        *,
-        serid: int | None = None,
-        limit: int = 1000,
-    ) -> list[dict[str, Any]]:
+    def alarm_history(self, start: datetime | None = None, end: datetime | None = None, *, serid: int | None = None, limit: int = 1000) -> list[dict[str, Any]]:
         if start is None or end is None:
             items = self.catalog.list_archives(limit=1000)
             complete = [item for item in items if item.get("state") in {"COMPLETE", "SEALED", "PURGING"}]
@@ -202,10 +195,10 @@ class ArchiveReportRepository:
         start_value = _as_local_naive(start, self.timezone_name)
         end_value = _as_local_naive(end, self.timezone_name)
         station_id = int(serid) if serid is not None else None
-        rows: list[dict[str, Any]] = []
+        rows = []
         for item in self._items(start, end):
             for raw in self._stream_csv(item, "alarm.csv"):
-                event_time = _parse_datetime(raw.get("dtom"))
+                event_time = _parse_datetime(raw.get("dtoa") or raw.get("dtom"))
                 if event_time is None:
                     continue
                 event_n = _as_local_naive(event_time, self.timezone_name)
@@ -214,12 +207,22 @@ class ArchiveReportRepository:
                     continue
                 if not (start_value <= event_n < end_value):
                     continue
+                level = int(raw.get("lvl") or 0)
+                alarm_type = str(raw.get("type") or ("ALARM" if level >= 2 else "ALERT"))
+                measured = raw.get("mvalue")
+                threshold = raw.get("thvalue")
+                message = str(raw.get("msg") or "")
+                if not message:
+                    message = f"dose={measured or '-'} threshold={threshold or '-'} hit={raw.get('nhit') or 0}"
                 rows.append({
-                    "alarmid": int(raw.get("alarmid") or 0),
-                    "serid": row_serid,
-                    "dtom": event_n,
-                    "type": str(raw.get("type") or ""),
-                    "msg": str(raw.get("msg") or ""),
+                    "alarmid": int(raw.get("alarmid") or 0), "serid": row_serid,
+                    "dtom": event_n, "dtoa": event_n, "type": alarm_type, "lvl": level,
+                    "msg": message,
+                    "mvalue": float(measured) if measured not in (None, "") else None,
+                    "thvalue": float(threshold) if threshold not in (None, "") else None,
+                    "nhit": int(raw.get("nhit") or 0), "ack": int(raw.get("ack") or 0),
+                    "pic": raw.get("pic"), "note": raw.get("note"),
+                    "i_op": _parse_datetime(raw.get("i_op")), "i_flag": int(raw.get("i_flag") or 0),
                 })
                 if len(rows) >= max(1, int(limit)):
                     return rows

@@ -7,23 +7,20 @@ from .quarters import Quarter
 
 
 TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
-    "device": (
-        "serid", "name", "location", "maxidlemin", "warnlevel", "alarmlevel",
-        "unit", "audiopath", "hwaddress", "hwtype", "description",
-    ),
+    "device": ("serid", "name", "location", "maxidlemin", "warnlevel", "alarmlevel", "unit", "audiopath", "hwaddress", "hwtype", "description"),
     "measurement": ("serid", "dtom", "doserate", "dose", "previnterval", "stat"),
-    "alarm": ("alarmid", "serid", "dtom", "type", "msg"),
-    "rawdata": ("rawid", "serid", "dtom", "raw"),
-    "applog": ("logid", "dtom", "msg"),
-    "news": ("newsid", "dtom", "title", "content"),
+    "alarm": ("serid", "dtoa", "lvl", "mvalue", "thvalue", "nhit", "ack", "pic", "note", "i_op", "i_flag"),
+    "rawdata": ("serid", "dtom", "val"),
+    "applog": ("ts", "id", "msg"),
+    "news": ("ts", "code", "content"),
 }
 
 TIME_COLUMNS: dict[str, str] = {
     "measurement": "dtom",
-    "alarm": "dtom",
+    "alarm": "dtoa",
     "rawdata": "dtom",
-    "applog": "dtom",
-    "news": "dtom",
+    "applog": "ts",
+    "news": "ts",
 }
 
 
@@ -122,21 +119,11 @@ class CentralArchiveStore:
         for month in months:
             for serid, device in devices.items():
                 recap[(month, serid)] = {
-                    "year": quarter.year,
-                    "month": month,
-                    "serid": serid,
-                    "name": str(device.get("name") or ""),
-                    "location": str(device.get("location") or ""),
-                    "first_measurement": None,
-                    "last_measurement": None,
-                    "sample_count": 0,
-                    "minimum": None,
-                    "average": None,
-                    "maximum": None,
-                    "dose_sum": 0.0,
-                    "rate_sum": 0.0,
-                    "alert_count": 0,
-                    "alarm_count": 0,
+                    "year": quarter.year, "month": month, "serid": serid,
+                    "name": str(device.get("name") or ""), "location": str(device.get("location") or ""),
+                    "first_measurement": None, "last_measurement": None, "sample_count": 0,
+                    "minimum": None, "average": None, "maximum": None,
+                    "dose_sum": 0.0, "rate_sum": 0.0, "alert_count": 0, "alarm_count": 0,
                 }
         for row in self.table_rows("measurement", quarter):
             serid = int(row["serid"])
@@ -147,21 +134,11 @@ class CentralArchiveStore:
             if key not in recap:
                 device = devices.get(serid, {})
                 recap[key] = {
-                    "year": measured_at.year,
-                    "month": measured_at.month,
-                    "serid": serid,
-                    "name": str(device.get("name") or ""),
-                    "location": str(device.get("location") or ""),
-                    "first_measurement": None,
-                    "last_measurement": None,
-                    "sample_count": 0,
-                    "minimum": None,
-                    "average": None,
-                    "maximum": None,
-                    "dose_sum": 0.0,
-                    "rate_sum": 0.0,
-                    "alert_count": 0,
-                    "alarm_count": 0,
+                    "year": measured_at.year, "month": measured_at.month, "serid": serid,
+                    "name": str(device.get("name") or ""), "location": str(device.get("location") or ""),
+                    "first_measurement": None, "last_measurement": None, "sample_count": 0,
+                    "minimum": None, "average": None, "maximum": None,
+                    "dose_sum": 0.0, "rate_sum": 0.0, "alert_count": 0, "alarm_count": 0,
                 }
             item = recap[key]
             rate = row.get("doserate")
@@ -179,13 +156,16 @@ class CentralArchiveStore:
             item["last_measurement"] = measured_at if last is None or measured_at > last else last
         for row in self.table_rows("alarm", quarter):
             serid = int(row["serid"])
-            event_time = row.get("dtom")
+            event_time = row.get("dtoa") or row.get("dtom")
             if not isinstance(event_time, datetime):
                 continue
             key = (event_time.month, serid)
             if key not in recap:
                 continue
-            level = str(row.get("type") or "").upper()
+            if row.get("lvl") is not None:
+                level = "ALARM" if int(row.get("lvl") or 0) >= 2 else "ALERT"
+            else:
+                level = str(row.get("type") or "").upper()
             if level == "ALERT":
                 recap[key]["alert_count"] += 1
             elif level == "ALARM":
