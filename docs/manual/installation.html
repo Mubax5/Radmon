@@ -9,12 +9,13 @@
 <body>
   <main>
     <h1>RadMon Installation Guide</h1>
-    <p>Production Windows dijalankan dari <strong>app\RadMon.exe</strong>. Python tidak perlu dipasang di PC production karena runtime sudah dibundle.</p>
+    <p>Production Windows dipasang melalui <strong>RadMon-Setup.exe</strong>. Installer menempatkan <strong>app\RadMon.exe</strong>, membuat <code>config\.env</code> bila belum ada, mendaftarkan Scheduled Task <strong>RadMon Server</strong>, dan membuka port 8090/3300 hanya untuk LocalSubnet.</p>
 
-    <h2>Portable layout</h2>
+    <h2>Layout persistent</h2>
     <pre>RadMon\
   app\
     RadMon.exe
+    web\
     docs\manual\
     grafana\
   config\
@@ -24,33 +25,39 @@
   archives\
   reports\</pre>
 
-    <h2>First run pada central PC 192.168.1.2</h2>
+    <h2>First installation pada central PC 192.168.1.2</h2>
     <ol>
-      <li>Extract artifact <code>RadMon-Windows</code> ke folder tetap, misalnya <code>C:\RadMon</code>.</li>
-      <li>Pastikan Docker Desktop tersedia jika Grafana lokal dipakai.</li>
-      <li>Copy <code>config\.env.example</code> menjadi <code>config\.env</code>.</li>
-      <li>Isi koneksi central MariaDB serta source <code>gd50</code>, <code>gd52</code>, dan <code>gd38</code>.</li>
-      <li>Double-click <code>app\RadMon.exe</code>.</li>
+      <li>Jalankan <code>RadMon-Setup.exe</code> sebagai Administrator.</li>
+      <li>Edit <code>config\.env</code> dan isi central/source database credential.</li>
+      <li>Untuk security DB baru, isi <code>RADMON_BOOTSTRAP_ADMIN_USER</code>, password, dan PIN satu kali.</li>
+      <li>Pastikan Grafana native tersedia di port 3300; isi <code>RADMON_GRAFANA_BIN</code> bila lokasinya non-standar.</li>
+      <li>Restart Scheduled Task <code>RadMon Server</code> atau reboot setelah konfigurasi lengkap.</li>
     </ol>
+
+    <h2>URL</h2>
+    <pre>http://192.168.1.2:8090/       Grafana monitoring kiosk tanpa login RadMon
+http://192.168.1.2:8090/app    RadMon Control Plane, wajib login
+http://localhost:3300          Grafana admin/editor pada PC server</pre>
+
+    <p>Viewer, Operator, dan Administrator semuanya wajib login RadMon. Anonymous hanya melihat Grafana read-only dari network BRIN/LAN yang diizinkan.</p>
+
+    <h2>Grafana persistent</h2>
+    <p>Production normal memakai Grafana native, bukan Docker Desktop. Factory dashboard hanya di-seed jika resource belum ada. Dashboard yang sudah tersimpan tidak di-overwrite pada startup. Administrator dapat Edit dan Save dari <code>localhost:3300</code>; hasil Save langsung dipakai monitoring dan tetap ada setelah restart atau upgrade.</p>
+
+    <h2>24/7 Windows lifecycle</h2>
+    <p>Scheduled Task menjalankan <code>app\RadMon.exe --server</code> sebagai SYSTEM saat startup Windows dan mencoba restart otomatis bila proses berhenti. Menutup browser tidak mematikan server.</p>
+
+    <h2>Upgrade</h2>
+    <p>Jalankan installer baru sebagai Administrator. Installer mengganti aplikasi tetapi mempertahankan <code>config\.env</code>, <code>runtime\</code>, <code>archives\</code>, dan <code>reports\</code>.</p>
 
     <h2>Source production</h2>
     <pre>gd50 -&gt; 192.168.1.50:3306 / ipradmon
 gd52 -&gt; 192.168.1.52:3306 / ipradmon
 gd38 -&gt; 192.168.1.38:3306 / ipradmon</pre>
-
-    <p><strong>Jangan mengganti source_id</strong> karena checkpoint/state menggunakan identity tersebut. RadMon tidak melakukan DDL pada database source production.</p>
-
-    <h2>Migrasi konfigurasi lama</h2>
-    <p>Jika instalasi lama memiliki <code>.env</code> di root dan <code>config\.env</code> belum ada, first run menyalin konfigurasi tersebut ke lokasi baru. File lama tetap disimpan. Target yang sudah ada tidak pernah ditimpa.</p>
-
-    <h2>Upgrade</h2>
-    <p>Tutup RadMon, backup folder instalasi, lalu pertahankan <code>config\.env</code>, <code>runtime\</code>, <code>archives\</code>, dan <code>reports\</code>. Ganti file aplikasi dari artifact baru dan jalankan kembali <code>app\RadMon.exe</code>.</p>
-
-    <h2>Lifecycle</h2>
-    <p>Satu proses RadMon menjadi owner untuk collector LAN, API, desktop Admin, alarm policy, archive lifecycle, dan bootstrap Grafana. Menutup desktop Admin menghentikan central service yang dimiliki proses tersebut.</p>
+    <p>RadMon tidak melakukan DDL pada database source production.</p>
 
     <h2>Commissioning</h2>
-    <p>Setelah instalasi atau upgrade, verifikasi source health, central MariaDB, Grafana, alarm Response/Silence, report/archive, dan konektivitas lapangan. CI/smoke-test bundle tidak menggantikan commissioning hardware nyata.</p>
+    <p>Verifikasi source health, login/RBAC, monitoring Grafana, persistence setelah restart, alarm Response/Silence, report/archive, dan konektivitas lapangan. CI dan smoke test installer tidak menggantikan commissioning hardware nyata.</p>
   </main>
 </body>
 </html>
