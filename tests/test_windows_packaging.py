@@ -33,7 +33,8 @@ def test_portable_layout_keeps_configuration_external_and_assets_beside_exe():
     workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
     normalized = workflow.replace("/", "\\")
 
-    assert "RadMon\\config\\.env.example" in normalized
-    assert "RadMon\\app\\docs\\manual" in normalized
-    assert "RadMon\\app\\grafana" in normalized
+    assert '$portable = "portable\\RadMon"' in normalized
+    assert '"$portable\\config\\.env.example"' in normalized
+    assert '"$portable\\app\\docs\\manual"' in normalized
+    assert '"$portable\\app\\grafana"' in normalized
     assert "Copy-Item .env " not in workflow
