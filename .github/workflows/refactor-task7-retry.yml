@@ -1,0 +1,45 @@
+name: One-shot Task 7 Refactor Retry
+
+on:
+  push:
+    branches: [release-cleanup]
+    paths:
+      - .github/workflows/refactor-task7-retry.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Patch refactor transform and apply consolidation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/refactor_task7.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    method = method.replace("ensure_active_schema(self)", "self._ensure_active_schema()")\n'
+          new = '    if old_name != "ensure_active_schema":\n        method = method.replace("ensure_active_schema(self)", "self._ensure_active_schema()")\n'
+          if old not in text:
+              raise SystemExit('expected transform line not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          python scripts/refactor_task7.py
+          rm -f .github/workflows/refactor-task7-retry.yml
+      - name: Commit consolidated sources
+        shell: bash
+        run: |
+          git config user.name "RadMon Refactor Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "refactor: consolidate LAN and alarm safety patches"
+          git push origin HEAD:release-cleanup
