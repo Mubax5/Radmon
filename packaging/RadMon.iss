@@ -8,7 +8,7 @@ AppVerName={#AppName}
 DefaultDirName={localappdata}\RadMon
 DefaultGroupName=RadMon
 DisableProgramGroupPage=yes
-PrivilegesRequired=lowest
+PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 WizardStyle=modern
@@ -35,10 +35,19 @@ Source: "portable\RadMon\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recu
 Source: "portable\RadMon\config\.env.example"; DestDir: "{app}\config"; Flags: ignoreversion onlyifdoesntexist
 Source: "portable\RadMon\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "portable\RadMon\SHA256SUMS.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "packaging\install_server.ps1"; DestDir: "{tmp}"; Flags: ignoreversion deleteafterinstall
 
 [Icons]
-Name: "{autoprograms}\RadMon"; Filename: "{app}\app\{#AppExeName}"; WorkingDir: "{app}"
-Name: "{autodesktop}\RadMon"; Filename: "{app}\app\{#AppExeName}"; WorkingDir: "{app}"
+Name: "{autoprograms}\RadMon"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--open-web"; WorkingDir: "{app}"
+Name: "{autodesktop}\RadMon"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--open-web"; WorkingDir: "{app}"
+Name: "{autoprograms}\RadMon Monitoring"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--open-monitoring"; WorkingDir: "{app}"
 
 [Run]
-Filename: "{app}\app\{#AppExeName}"; Description: "Jalankan RadMon"; Flags: nowait postinstall skipifsilent
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{tmp}\install_server.ps1"" -ExePath ""{app}\app\{#AppExeName}"""; StatusMsg: "Registering RadMon 24/7 server..."; Flags: runhidden waituntilterminated
+Filename: "{app}\app\{#AppExeName}"; Parameters: "--open-web"; Description: "Buka RadMon Control Plane"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""RadMon Server"""; Flags: runhidden; RunOnceId: "StopRadMonServer"
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /F /TN ""RadMon Server"""; Flags: runhidden; RunOnceId: "DeleteRadMonServer"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""RadMon Web"""; Flags: runhidden; RunOnceId: "DeleteRadMonWebFirewall"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""RadMon Grafana Monitoring"""; Flags: runhidden; RunOnceId: "DeleteRadMonGrafanaFirewall"
