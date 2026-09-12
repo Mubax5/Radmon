@@ -18,7 +18,10 @@ def test_repository_and_archive_behavior_is_not_monkey_patched():
 
 def test_lan_alarm_behavior_is_defined_in_base_modules():
     assert RemoteMariaDBSource.live_rows.__module__ == "radmon.lan"
-    assert LanAggregator.run_live_once.__module__ == "radmon.lan"
+    # Alarm Policy still wraps the public cycle until Task 9. The consolidated
+    # LAN implementation itself must already live in the canonical module.
+    assert LanAggregator._run_live_core_once.__module__ == "radmon.lan"
+    assert "    def run_live_once(self, source):" in (ROOT / "radmon" / "lan.py").read_text(encoding="utf-8")
     assert MariaCentralStore.mark_alarm_handled.__module__ == "radmon.lan"
     assert RemoteAlarmMirror.mirror.__module__ == "radmon.remote_alarm"
     assert RemoteAlarmMirror.reconcile_source_active_keys.__module__ == "radmon.remote_alarm"
@@ -42,3 +45,4 @@ def test_one_shot_task7_refactor_artifacts_are_gone():
     assert not (ROOT / ".github" / "workflows" / "refactor-task7.yml").exists()
     assert not (ROOT / ".github" / "workflows" / "refactor-task7-retry.yml").exists()
     assert not (ROOT / ".github" / "workflows" / "refactor-task7-repair.yml").exists()
+    assert not (ROOT / ".github" / "workflows" / "task7-finalize.yml").exists()
