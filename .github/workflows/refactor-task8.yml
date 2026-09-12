@@ -1,0 +1,53 @@
+name: One-shot Task 8 Refactor
+
+on:
+  push:
+    branches: [release-cleanup]
+    paths:
+      - .github/workflows/refactor-task8.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Consolidate security integration
+        run: python scripts/refactor_task8.py
+      - name: Verify syntax and structure
+        shell: bash
+        run: |
+          python -m compileall -q radmon
+          python - <<'PY'
+          from pathlib import Path
+          import ast
+          checks = {
+              'radmon/security.py': ('SecurityStore', {'require_sensitive','station_source','sensitive_lease_active'}),
+              'radmon/device_admin.py': ('DeviceAdminService', {'update_station'}),
+              'radmon/lan.py': ('RemoteMariaDBSource', {'get_device','update_device','respond_alarm','alarm_states'}),
+              'radmon/remote_alarm.py': ('AlarmControlService', {'ack'}),
+          }
+          for path, (cls_name, expected) in checks.items():
+              tree = ast.parse(Path(path).read_text(encoding='utf-8'))
+              cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == cls_name)
+              methods = {n.name for n in cls.body if isinstance(n, ast.FunctionDef)}
+              assert expected <= methods, (path, expected - methods)
+          assert not Path('radmon/production_integration_compat_revision.py').exists()
+          print('Task 8 structure OK')
+          PY
+      - name: Commit consolidated sources
+        shell: bash
+        run: |
+          git config user.name "RadMon Refactor Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "refactor: consolidate production security integration"
+          git push origin HEAD:release-cleanup
