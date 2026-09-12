@@ -4,6 +4,7 @@
 [Setup]
 AppId={{8D9CB0BD-9C4B-4ABF-92B6-89A30B1D936A}
 AppName={#AppName}
+AppVerName={#AppName}
 DefaultDirName={localappdata}\RadMon
 DefaultGroupName=RadMon
 DisableProgramGroupPage=yes
