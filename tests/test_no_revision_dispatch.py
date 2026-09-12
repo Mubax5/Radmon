@@ -60,5 +60,6 @@ def test_one_shot_refactor_artifacts_are_gone():
         ".github/workflows/refactor-task7-repair.yml",
         ".github/workflows/task7-finalize.yml",
         ".github/workflows/refactor-task8.yml",
+        ".github/workflows/task8-fix.yml",
     ):
         assert not (ROOT / relative).exists()
