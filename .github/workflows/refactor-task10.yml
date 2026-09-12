@@ -1,0 +1,45 @@
+name: One-shot Task 10 Refactor
+
+on:
+  push:
+    branches: [release-cleanup]
+    paths:
+      - scripts/refactor_task10.py
+      - .github/workflows/refactor-task10.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Consolidate final runtime revisions
+        run: python scripts/refactor_task10.py
+      - name: Verify Python syntax
+        run: python -m compileall -q radmon
+      - name: Verify no revision dispatch remains
+        shell: bash
+        run: |
+          test -z "$(find radmon -maxdepth 1 -name '*_revision.py' -print)"
+          ! grep -q '_revision' radmon/__init__.py
+          test ! -e scripts/refactor_task10.py
+          test ! -e .github/workflows/refactor-task10.yml
+      - name: Commit consolidated sources
+        shell: bash
+        run: |
+          git config user.name "RadMon Refactor Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 1
+          fi
+          git commit -m "refactor: consolidate final runtime patches"
+          git push origin HEAD:release-cleanup
