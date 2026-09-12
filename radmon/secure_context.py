@@ -30,6 +30,15 @@ _context: SecurityContext | None = None
 
 def set_context(value: SecurityContext | None) -> None:
     global _context
+    current = _context
+    if current is not None and (
+        value is None
+        or getattr(value, "identity", None) != getattr(current, "identity", None)
+    ):
+        try:
+            current.security.clear_sensitive_lease(current.identity.username)
+        except Exception:
+            pass
     _context = value
 
 

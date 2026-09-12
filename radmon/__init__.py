@@ -3,13 +3,7 @@
 __version__ = "0.1.0"
 
 
-from .lan_revision import apply as _apply_lan_revision
-_apply_lan_revision()
-del _apply_lan_revision
 
-from .remote_alarm_revision import apply as _apply_remote_alarm_revision
-_apply_remote_alarm_revision()
-del _apply_remote_alarm_revision
 
 
 
@@ -29,9 +23,6 @@ from .production_integration_compat_revision import apply as _apply_production_i
 _apply_production_integration_compat_revision()
 del _apply_production_integration_compat_revision
 
-from .production_safety_revision import apply as _apply_production_safety_revision
-_apply_production_safety_revision()
-del _apply_production_safety_revision
 
 from .alarm_policy_revision import apply as _apply_alarm_policy_revision
 _apply_alarm_policy_revision()

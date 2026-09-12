@@ -17,9 +17,6 @@ def apply() -> None:
     _patch_security()
     _patch_remote_source()
     _patch_device_admin()
-    _patch_secure_services()
-    _patch_alarm_mirror_and_control()
-    _patch_live_collector()
     _patch_admin_ui()
     _patch_grafana()
 
