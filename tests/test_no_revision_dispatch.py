@@ -2,9 +2,11 @@ from pathlib import Path
 
 from radmon.archive_reports import ArchiveReportRepository
 from radmon.archive_store import CentralArchiveStore
+from radmon.device_admin import DeviceAdminService
 from radmon.lan import LanAggregator, MariaCentralStore, RemoteMariaDBSource
-from radmon.remote_alarm import RemoteAlarmMirror
+from radmon.remote_alarm import AlarmControlService, RemoteAlarmMirror
 from radmon.repository import MariaDBRepository
+from radmon.security import SecurityStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +27,14 @@ def test_lan_alarm_behavior_is_defined_in_base_modules():
     assert MariaCentralStore.mark_alarm_handled.__module__ == "radmon.lan"
     assert RemoteAlarmMirror.mirror.__module__ == "radmon.remote_alarm"
     assert RemoteAlarmMirror.reconcile_source_active_keys.__module__ == "radmon.remote_alarm"
+
+
+def test_security_write_through_and_ack_are_defined_in_base_modules():
+    assert SecurityStore.require_sensitive.__module__ == "radmon.security"
+    assert SecurityStore.station_source.__module__ == "radmon.security"
+    assert DeviceAdminService.update_station.__module__ == "radmon.device_admin"
+    assert AlarmControlService.ack.__module__ == "radmon.remote_alarm"
+    assert RemoteMariaDBSource.respond_alarm.__module__ == "radmon.lan"
 
 
 def test_consolidated_revision_files_are_gone():
