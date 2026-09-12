@@ -29,6 +29,16 @@ def test_windows_workflow_builds_smokes_and_uploads_portable_exe():
     assert "actions/upload-artifact" in workflow
 
 
+def test_windowed_exe_smoke_test_waits_for_process_and_reads_exit_code():
+    workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
+
+    assert "Start-Process" in workflow
+    assert "-Wait" in workflow
+    assert "-PassThru" in workflow
+    assert ".ExitCode" in workflow
+    assert "$LASTEXITCODE" not in workflow.split("Smoke test packaged EXE", 1)[1].split("- name:", 1)[0]
+
+
 def test_portable_layout_keeps_configuration_external_and_assets_beside_exe():
     workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
     normalized = workflow.replace("/", "\\")
