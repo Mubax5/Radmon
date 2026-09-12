@@ -34,3 +34,11 @@ def test_consolidated_revision_files_are_gone():
         "production_safety_revision.py",
     ):
         assert not (ROOT / "radmon" / name).exists()
+
+
+def test_one_shot_task7_refactor_artifacts_are_gone():
+    assert not (ROOT / "scripts" / "refactor_task7.py").exists()
+    assert not (ROOT / "scripts" / "refactor_task7_fixed.py").exists()
+    assert not (ROOT / ".github" / "workflows" / "refactor-task7.yml").exists()
+    assert not (ROOT / ".github" / "workflows" / "refactor-task7-retry.yml").exists()
+    assert not (ROOT / ".github" / "workflows" / "refactor-task7-repair.yml").exists()
