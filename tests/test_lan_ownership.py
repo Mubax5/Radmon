@@ -20,10 +20,11 @@ def test_static_station_catalog_is_not_seeded_in_lan_desktop_mode():
 
 def test_production_supervisor_starts_central_before_admin_view():
     source = (ROOT / "radmon" / "production_app.py").read_text(encoding="utf-8")
-    assert "CentralService(" in source
+    assert "central_factory: Callable[..., Any] = CentralService" in source
+    assert "central = central_factory(" in source
     assert "central.start()" in source
-    assert "run_admin_ui(" in source
-    assert source.index("central.start()") < source.index("run_admin_ui(")
+    assert "desktop_runner(" in source
+    assert source.index("central.start()") < source.index("desktop_runner(")
 
 
 def test_production_supervisor_stops_central_after_admin_view_exits():
