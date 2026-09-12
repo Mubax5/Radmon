@@ -33,6 +33,7 @@ Name: "{app}\reports"; Flags: uninsneveruninstall
 [Files]
 Source: "portable\RadMon\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "portable\RadMon\config\.env.example"; DestDir: "{app}\config"; Flags: ignoreversion onlyifdoesntexist
+Source: "portable\RadMon\config\.env.example"; DestDir: "{app}\config"; DestName: ".env"; Flags: ignoreversion onlyifdoesntexist
 Source: "portable\RadMon\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "portable\RadMon\SHA256SUMS.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "packaging\install_server.ps1"; DestDir: "{tmp}"; Flags: ignoreversion deleteafterinstall
