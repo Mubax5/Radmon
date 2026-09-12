@@ -697,26 +697,6 @@ def _patch_admin_ui() -> None:
 
     auth_dialogs.PinDialog.get_pin = get_pin
 
-    original_station_init = station_admin_dialog.StationAdminDialog.__init__
-    original_station_values = station_admin_dialog.StationAdminDialog._values
-
-    def station_init(self, *args, **kwargs):
-        original_station_init(self, *args, **kwargs)
-        if getattr(self, "source", "") == "lan":
-            self.hwaddress.setEnabled(False)
-            self.hwtype.setEnabled(False)
-            self.hwaddress.setToolTip("Identity hardware dikelola oleh source LAN.")
-            self.hwtype.setToolTip("Identity hardware dikelola oleh source LAN.")
-
-    def station_values(self):
-        values = original_station_values(self)
-        if getattr(self, "source", "") == "lan":
-            values.pop("hwaddress", None)
-            values.pop("hwtype", None)
-        return values
-
-    station_admin_dialog.StationAdminDialog.__init__ = station_init
-    station_admin_dialog.StationAdminDialog._values = station_values
 
     def group_stations_by_source(stations, station_source_by_serid, sources, health_by_source):
         groups = []

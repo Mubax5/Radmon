@@ -133,7 +133,7 @@ class StationAdminDialog(QDialog):
             self.audio_path.setText(filename)
 
     def _values(self) -> dict:
-        return {
+        values = {
             "name": self.name.text().strip(),
             "location": self.location.text().strip(),
             "description": self.description.toPlainText().strip(),
@@ -145,6 +145,10 @@ class StationAdminDialog(QDialog):
             "hwaddress": self.hw_address.text().strip(),
             "hwtype": self.hw_type.text().strip() or "detector",
         }
+        if self.source == "lan":
+            values.pop("hwaddress", None)
+            values.pop("hwtype", None)
+        return values
 
     def _save(self) -> None:
         if self.warn.value() > self.alarm.value() and self.alarm.value() > 0:
