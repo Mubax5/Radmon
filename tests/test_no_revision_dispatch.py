@@ -104,6 +104,7 @@ def test_one_shot_refactor_artifacts_are_gone():
         "scripts/refactor_task7_fixed.py",
         "scripts/refactor_task8.py",
         "scripts/refactor_task9.py",
+        "scripts/refactor_task10.py",
         ".github/workflows/refactor-task7.yml",
         ".github/workflows/refactor-task7-retry.yml",
         ".github/workflows/refactor-task7-repair.yml",
@@ -112,5 +113,6 @@ def test_one_shot_refactor_artifacts_are_gone():
         ".github/workflows/task8-fix.yml",
         ".github/workflows/refactor-task9.yml",
         ".github/workflows/refactor-task9-retry.yml",
+        ".github/workflows/refactor-task10.yml",
     ):
         assert not (ROOT / relative).exists()
