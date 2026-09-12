@@ -55,9 +55,9 @@ jobs:
       - name: Smoke test packaged EXE
         shell: pwsh
         run: |
-          & "portable\RadMon\app\RadMon.exe" --smoke-test
-          if ($LASTEXITCODE -ne 0) {
-            throw "RadMon.exe smoke test failed with exit code $LASTEXITCODE"
+          $process = Start-Process -FilePath "portable\RadMon\app\RadMon.exe" -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "RadMon.exe smoke test failed with exit code $($process.ExitCode)"
           }
 
       - name: Write executable checksum
