@@ -31,7 +31,7 @@ def test_readme_documents_safe_quarter_lifecycle_and_direct_reporting():
     for phrase in (
         "192.168.1.2",
         "app\\radmon.exe",
-        "diverifikasi",
+        "terverifikasi",
         "purge",
         "monthly-recap.csv",
         "manifest.json",
