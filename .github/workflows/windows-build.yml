@@ -5,17 +5,14 @@ on:
   push:
     branches:
       - main
-      - release-cleanup
-    tags:
-      - 'v*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +27,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-build.txt
+          choco install innosetup --no-progress -y
 
       - name: Build RadMon.exe
         shell: pwsh
@@ -66,6 +64,47 @@ jobs:
           $hash = (Get-FileHash "portable\RadMon\app\RadMon.exe" -Algorithm SHA256).Hash.ToLower()
           "$hash  app\RadMon.exe" | Set-Content "portable\RadMon\SHA256SUMS.txt" -Encoding ascii
 
+      - name: Build RadMon installer
+        shell: pwsh
+        run: |
+          $compiler = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $compiler)) {
+            throw "Inno Setup compiler was not found at $compiler"
+          }
+          & $compiler "packaging\RadMon.iss"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed with exit code $LASTEXITCODE"
+          }
+          if (-not (Test-Path "installer\RadMon-Setup.exe")) {
+            throw "Inno Setup did not create installer\RadMon-Setup.exe"
+          }
+
+      - name: Smoke test installed RadMon
+        shell: pwsh
+        run: |
+          $installRoot = Join-Path $env:RUNNER_TEMP "RadMon-Install-Test"
+          if (Test-Path $installRoot) {
+            Remove-Item $installRoot -Recurse -Force
+          }
+          $setup = Start-Process -FilePath "installer\RadMon-Setup.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installRoot" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) {
+            throw "RadMon installer smoke test failed with exit code $($setup.ExitCode)"
+          }
+          $installedExe = Join-Path $installRoot "app\RadMon.exe"
+          if (-not (Test-Path $installedExe)) {
+            throw "Installer did not create $installedExe"
+          }
+          $app = Start-Process -FilePath $installedExe -ArgumentList "--smoke-test" -Wait -PassThru
+          if ($app.ExitCode -ne 0) {
+            throw "Installed RadMon.exe smoke test failed with exit code $($app.ExitCode)"
+          }
+
+      - name: Write installer checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash "installer\RadMon-Setup.exe" -Algorithm SHA256).Hash.ToLower()
+          "$hash  RadMon-Setup.exe" | Set-Content "installer\RadMon-Setup.exe.sha256" -Encoding ascii
+
       - name: Upload portable Windows package
         uses: actions/upload-artifact@v4
         with:
@@ -74,3 +113,37 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RadMon-Setup
+          path: |
+            installer\RadMon-Setup.exe
+            installer\RadMon-Setup.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish current RadMon release
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "latest"
+          $title = "RadMon"
+          $notes = "Current production Windows installer built from the main branch. Download RadMon-Setup.exe and run it on the central Windows PC. Existing config, runtime, archives, and reports are preserved across reinstall/upgrade."
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f $tag $env:GITHUB_SHA
+          git push origin "refs/tags/$tag" --force
+
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag "installer\RadMon-Setup.exe" "installer\RadMon-Setup.exe.sha256" --clobber --repo $env:GITHUB_REPOSITORY
+            gh release edit $tag --title $title --latest --notes $notes --repo $env:GITHUB_REPOSITORY
+          }
+          else {
+            gh release create $tag "installer\RadMon-Setup.exe" "installer\RadMon-Setup.exe.sha256" --title $title --latest --notes $notes --repo $env:GITHUB_REPOSITORY
+          }
