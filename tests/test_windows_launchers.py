@@ -29,7 +29,8 @@ def test_production_supervisor_is_single_process_owner():
 def test_runtime_collision_is_prevented_by_single_instance_lock():
     source = read("radmon/production_app.py")
     assert "SingleInstanceLock" in source
-    assert "sudah berjalan" in source
+    assert "if not lock.acquire():" in source
+    assert "return 2" in source
 
 
 def test_refresh_interval_is_two_seconds_everywhere_live():
