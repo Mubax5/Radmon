@@ -1,4 +1,5 @@
 # Canonical ownership gate: no runtime monkey-patch layer is allowed back in.
+# Public entry points must remain class/module-owned after consolidation.
 from pathlib import Path
 
 import radmon.grafana_tv as grafana_tv
