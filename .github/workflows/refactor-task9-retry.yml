@@ -1,0 +1,65 @@
+name: One-shot Task 9 Refactor Retry
+
+on:
+  push:
+    branches: [release-cleanup]
+    paths:
+      - .github/workflows/refactor-task9-retry.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refactor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Correct insertion point and consolidate alarm policy
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/refactor_task9.py')
+          text = path.read_text(encoding='utf-8')
+          old = '    lines[cls.lineno - 1:cls.lineno - 1] = textwrap.dedent(block).strip().splitlines() + [""]\n'
+          new = '    start = min([cls.lineno] + [item.lineno for item in cls.decorator_list]) - 1\n    lines[start:start] = textwrap.dedent(block).strip().splitlines() + [""]\n'
+          if old not in text:
+              raise SystemExit('expected insertion line not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          python scripts/refactor_task9.py
+          rm -f .github/workflows/refactor-task9-retry.yml
+      - name: Verify syntax and revision removal
+        shell: bash
+        run: |
+          python -m compileall -q radmon
+          python - <<'PY'
+          from pathlib import Path
+          import ast
+          for name in (
+              'alarm_policy_revision.py',
+              'alarm_policy_store_revision.py',
+              'alarm_policy_security_revision.py',
+              'alarm_policy_runtime_revision.py',
+          ):
+              assert not (Path('radmon') / name).exists()
+          tree = ast.parse(Path('radmon/alarm_policy.py').read_text(encoding='utf-8'))
+          cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AlarmPolicyService')
+          methods = {n.name for n in cls.body if isinstance(n, ast.FunctionDef)}
+          assert {'process_cycle','get_policy','observe_source_alarm','_snapshot'} <= methods
+          print('Task 9 structure OK')
+          PY
+      - name: Commit consolidated sources
+        shell: bash
+        run: |
+          git config user.name "RadMon Refactor Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "refactor: consolidate alarm policy patches"
+          git push origin HEAD:release-cleanup
