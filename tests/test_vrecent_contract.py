@@ -13,7 +13,7 @@ def test_production_station_ids_match_live_databases():
 
 def test_live_monitoring_sql_uses_vrecent_not_latest_measurement_scan():
     repository = Path("radmon/repository.py").read_text(encoding="utf-8")
-    grafana = Path("radmon/grafana_revision.py").read_text(encoding="utf-8")
+    grafana = Path("radmon/grafana_tv.py").read_text(encoding="utf-8")
     recent_page = Path("radmon/admin/recent_page.py").read_text(encoding="utf-8")
 
     assert "FROM vrecent" in repository
