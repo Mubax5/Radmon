@@ -48,3 +48,24 @@ def test_portable_layout_keeps_configuration_external_and_assets_beside_exe():
     assert '"$portable\\app\\docs\\manual"' in normalized
     assert '"$portable\\app\\grafana"' in normalized
     assert "Copy-Item .env " not in workflow
+
+
+def test_windows_installer_release_has_fixed_unversioned_name():
+    installer_path = ROOT / "packaging/RadMon.iss"
+    assert installer_path.exists(), "Inno Setup installer definition is required"
+
+    installer = installer_path.read_text(encoding="utf-8")
+    workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
+    normalized = workflow.replace("/", "\\")
+
+    assert "OutputBaseFilename=RadMon-Setup" in installer
+    assert "AppVersion=" not in installer
+    assert "VersionInfoVersion=" not in installer
+    assert "RadMon-Setup.exe" in normalized
+    assert "innosetup" in workflow.lower()
+    assert "RadMon.iss" in workflow
+    assert 'tag = "latest"' in workflow
+    assert 'title = "RadMon"' in workflow
+    assert "gh release" in workflow
+    assert "--clobber" in workflow
+    assert "contents: write" in workflow
