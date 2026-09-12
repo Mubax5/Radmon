@@ -18,6 +18,8 @@ from .lan_runtime import LanRuntime
 from .repository import MariaDBRepository
 from .secure_api import attach_secure_routes
 from .secure_services import build_secure_services
+from .web_api import attach_web_api_routes
+from .web_host import attach_web_routes
 from .whatsapp import SeleniumWhatsAppSender, WhatsAppAlarmDispatcher
 
 
@@ -32,13 +34,7 @@ class ManagedUvicornServer:
         self.host = host
         self.port = int(port)
         self._server = uvicorn.Server(
-            uvicorn.Config(
-                app,
-                host=host,
-                port=self.port,
-                reload=False,
-                log_config=None,
-            )
+            uvicorn.Config(app, host=host, port=self.port, reload=False, log_config=None)
         )
         self._thread: threading.Thread | None = None
 
@@ -51,11 +47,7 @@ class ManagedUvicornServer:
             return
         self._server.should_exit = False
         self._server.force_exit = False
-        self._thread = threading.Thread(
-            target=self._server.run,
-            name="radmon-central-api",
-            daemon=False,
-        )
+        self._thread = threading.Thread(target=self._server.run, name="radmon-central-api", daemon=False)
         self._thread.start()
         deadline = time.monotonic() + max(0.1, timeout)
         while time.monotonic() < deadline:
@@ -114,7 +106,8 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
             timezone_name=settings.archive_timezone,
         )
 
-    app = create_central_app(CentralMariaDBRepository(settings), settings)
+    repository = CentralMariaDBRepository(settings)
+    app = create_central_app(repository, settings)
     app.state.radmon_lan_enabled = bool(settings.lan_enabled)
     app.state.radmon_lan_source_count = len(services.sources) if settings.lan_enabled else 0
     attach_secure_routes(
@@ -131,13 +124,17 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         alarm_policy=services.alarm_policy,
         alarm_suppression=services.alarm_suppression,
     )
+    attach_web_api_routes(
+        app,
+        security=services.security,
+        repository=repository,
+        source_health=services.source_health,
+    )
+    attach_web_routes(app, settings=settings)
 
     whatsapp = None
     if _enabled("RADMON_WHATSAPP_ENABLED"):
-        whatsapp = WhatsAppAlarmDispatcher(
-            services.alarm_policy,
-            SeleniumWhatsAppSender.from_env(),
-        )
+        whatsapp = WhatsAppAlarmDispatcher(services.alarm_policy, SeleniumWhatsAppSender.from_env())
 
     lan_runtime = None
     if settings.lan_enabled:
@@ -148,12 +145,7 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
             archive_service=archive_service,
         )
 
-    return CentralRuntime(
-        app=app,
-        services=services,
-        archive_catalog=archive_catalog,
-        lan_runtime=lan_runtime,
-    )
+    return CentralRuntime(app=app, services=services, archive_catalog=archive_catalog, lan_runtime=lan_runtime)
 
 
 class CentralService:
@@ -222,7 +214,7 @@ class CentralService:
             if runtime is not None and runtime.lan_runtime is not None:
                 try:
                     runtime.lan_runtime.stop()
-                except Exception as exc:  # preserve API cleanup even if LAN stop fails
+                except Exception as exc:
                     error = exc
             if api is not None:
                 try:
