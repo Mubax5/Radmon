@@ -25,6 +25,7 @@ button, input, select { font: inherit; }
 .login-card p { margin: 0 0 24px; color: #6b7280; font-size: 14px; line-height: 1.55; }
 .login-form { display: grid; gap: 18px; }
 .form-error { border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; padding: 10px 12px; border-radius: 6px; font-size: 13px; }
+.form-success { border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; padding: 10px 12px; border-radius: 6px; font-size: 13px; }
 
 .brand-mark {
   width: 42px;
@@ -70,9 +71,21 @@ button, input, select { font: inherit; }
 .filter-card select { min-width: 320px; border: 1px solid #d1d5db; background: white; border-radius: 6px; padding: 8px 10px; color: #111827; }
 .system-card pre { white-space: pre-wrap; margin: 0; font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; color: #374151; }
 
+.action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-bottom: 18px; }
+.action-grid > .form-error, .action-grid > .form-success { grid-column: 1 / -1; }
+.action-card { padding: 20px; }
+.action-card h2 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+.action-card > p { margin: 0 0 18px; color: #6b7280; font-size: 13px; line-height: 1.5; }
+.action-form { display: grid; gap: 13px; }
+.action-form > label { color: #4b5563; font-size: 12px; font-weight: 500; }
+.action-form select { width: 100%; min-height: 36px; border: 1px solid #d1d5db; background: white; border-radius: 6px; padding: 7px 9px; color: #111827; }
+.action-form > button { justify-self: start; }
+.user-create-card { margin-bottom: 18px; max-width: 720px; }
+
 @media (max-width: 980px) {
   .content-shell { padding: 24px 22px 48px; }
   .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .action-grid { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
