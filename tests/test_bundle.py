@@ -3,11 +3,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_operator_surface_is_small_and_has_single_python_entrypoint():
-    assert (ROOT / "RADMON.bat").is_file()
-    assert (ROOT / "RUN_DUMMY.bat").is_file()
-    assert (ROOT / "main.py").is_file()
+def test_operator_surface_is_exe_oriented_and_legacy_launchers_are_removed():
+    assert (ROOT / "radmon/__main__.py").is_file()
+    assert (ROOT / "radmon/production_app.py").is_file()
+    assert (ROOT / "radmon/dev_app.py").is_file()
+    assert not list(ROOT.glob("*.bat"))
     for removed in (
+        "main.py",
+        "central_server.py",
         "admin_app.py",
         "public_app.py",
         "sync_agent.py",
@@ -39,10 +42,10 @@ def test_grafana_assets_are_part_of_the_bundle():
     assert not (ROOT / "grafana/provisioning/dashboards/radmon.yaml").exists()
 
 
-def test_readme_documents_two_click_workflows_user_schema_grafana_playlist_and_preview():
+def test_readme_documents_monitoring_schema_and_operator_outputs():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     for phrase in (
-        "RADMON.bat", "RUN_DUMMY.bat", "5202", "IS-1 Koridor", "2 detik", "measurement", "alarm", "Grafana", "Playlist", "10 detik", "Preview", "Print", "Export PDF", "server pusat",
+        "5202", "IS-1 Koridor", "2 detik", "measurement", "alarm", "Grafana", "Playlist", "10 detik", "Preview", "Print", "Export PDF", "server pusat",
     ):
         assert phrase.lower() in text.lower(), phrase
     assert "schema_extension.sql" not in text
