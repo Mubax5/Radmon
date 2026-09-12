@@ -142,7 +142,8 @@ class AlarmControlService:
         self.remote_factory = remote_factory
         self.now = now or datetime.now
 
-    def ack(self, identity, pin: str, source_id: str, serid: int, event_time: datetime, *, action: str, pic: str, note: str):
+    def ack(self, identity, pin: str, source_id: str, serid: int, event_time, *, action: str, pic: str, note: str):
+        from .lan import RemoteMariaDBSource
         self.security.require_sensitive(identity, 'ack_alarm', pin)
         if not action.strip() or not pic.strip():
             raise ValueError('Action dan PIC wajib diisi')
@@ -156,7 +157,13 @@ class AlarmControlService:
         target_id = f'{source_id}:{serid}:{event_time.isoformat()}'
         try:
             remote = self.remote_factory(source_id)
-            ok = bool(remote.respond_alarm(remote_serid, event_time, action=action.strip(), pic=pic.strip(), note=note.strip(), at=at))
+            responder = getattr(remote, 'respond_alarm', None)
+            if callable(responder):
+                ok = bool(responder(remote_serid, event_time, action=action.strip(), pic=pic.strip(), note=note.strip(), at=at))
+            elif not isinstance(remote, RemoteMariaDBSource) and callable(getattr(remote, 'ack_legacy', None)):
+                ok = bool(remote.ack_legacy(remote_serid, event_time, action=action.strip(), pic=pic.strip(), note=note.strip(), at=at))
+            else:
+                raise RuntimeError('source tidak mendukung response i_flag')
             if not ok:
                 raise RuntimeError('source menolak response; alarm mungkin sudah ditangani')
             after = self.mirror.mark_acknowledged(source_id, serid, event_time, acknowledged_at=at, pic=pic.strip(), action=action.strip(), note=note.strip())

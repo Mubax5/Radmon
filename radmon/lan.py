@@ -28,6 +28,11 @@ class PullResult:
     error: str | None = None
 
 
+LAN_EDITABLE_DEVICE_FIELDS = {
+    "name", "location", "description", "warnlevel", "alarmlevel",
+    "maxidlemin", "unit", "audiopath",
+}
+
 LIVE_KEYS = (
     "serid", "name", "location", "warnlevel", "alarmlevel", "unit", "audiopath",
     "description", "maxidlemin", "dtom", "doserate", "dose", "lastrate",
@@ -307,6 +312,71 @@ WHERE serid = ? AND dtoa = ? AND i_op IS NULL""",
                 if serid is not None and isinstance(dtoa, datetime):
                     result.append((int(serid), dtoa))
             return result
+        finally:
+            connection.close()
+
+    def get_device(self, serid: int) -> dict[str, Any] | None:
+        connection = self._connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute('\nSELECT serid, name, location, description, warnlevel, alarmlevel,\n       maxidlemin, unit, audiopath, hwaddress, hwtype\nFROM device WHERE serid = ?\n', (int(serid),))
+                row = cursor.fetchone()
+            if row is None:
+                return None
+            keys = ('serid', 'name', 'location', 'description', 'warnlevel', 'alarmlevel', 'maxidlemin', 'unit', 'audiopath', 'hwaddress', 'hwtype')
+            return dict(row) if isinstance(row, dict) else dict(zip(keys, row))
+        finally:
+            connection.close()
+
+    def update_device(self, serid: int, changes: dict[str, Any]) -> dict[str, Any]:
+        fields = list(changes)
+        unknown = set(fields) - LAN_EDITABLE_DEVICE_FIELDS
+        if unknown:
+            raise ValueError('field station LAN tidak diizinkan: ' + ', '.join(sorted(unknown)))
+        if not fields:
+            current = self.get_device(serid)
+            if current is None:
+                raise ValueError('station source tidak ditemukan')
+            return current
+        connection = self._connection()
+        try:
+            with connection.cursor() as cursor:
+                sql = 'UPDATE device SET ' + ', '.join((f'{field} = ?' for field in fields)) + ' WHERE serid = ?'
+                cursor.execute(sql, tuple((changes[field] for field in fields)) + (int(serid),))
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        current = self.get_device(serid)
+        if current is None:
+            raise RuntimeError('station source hilang setelah update')
+        return current
+
+    def respond_alarm(self, serid: int, dtoa: datetime, *, action: str, pic: str, note: str, at: datetime) -> bool:
+        source_note = f'[{action.strip()}] {note.strip()}'.strip()[:255]
+        connection = self._connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute('\nUPDATE alarm\nSET i_op = ?, pic = ?, note = ?, i_flag = 1\nWHERE serid = ? AND dtoa = ? AND i_flag = 0\n', (at, pic.strip(), source_note, int(serid), dtoa))
+                changed = int(getattr(cursor, 'rowcount', 0))
+            connection.commit()
+            return changed == 1
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def alarm_states(self, limit: int=2000) -> list[dict[str, Any]]:
+        connection = self._connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute('\nSELECT serid, dtoa, lvl, mvalue, thvalue, nhit, ack, i_flag, i_op, pic, note\nFROM alarm\nWHERE i_flag = 0 OR dtoa >= DATE_SUB(NOW(), INTERVAL 7 DAY)\nORDER BY dtoa DESC, serid DESC\nLIMIT ?\n', (max(1, int(limit)),))
+                rows = cursor.fetchall()
+            keys = ('serid', 'dtoa', 'lvl', 'mvalue', 'thvalue', 'nhit', 'ack', 'i_flag', 'i_op', 'pic', 'note')
+            return self._dict_rows(rows, keys)
         finally:
             connection.close()
 
@@ -642,7 +712,8 @@ class LanAggregator:
             return result
         try:
             remote = self.remote_factory(source)
-            state_rows = remote.alarm_states(2000)
+            state_reader = getattr(remote, "alarm_states", None)
+            state_rows = state_reader(2000) if callable(state_reader) else []
             mapped: list[dict[str, Any]] = []
             for row in state_rows:
                 item = dict(row)

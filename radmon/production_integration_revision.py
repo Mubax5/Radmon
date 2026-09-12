@@ -14,9 +14,6 @@ from typing import Any
 
 
 def apply() -> None:
-    _patch_security()
-    _patch_remote_source()
-    _patch_device_admin()
     _patch_admin_ui()
     _patch_grafana()
 

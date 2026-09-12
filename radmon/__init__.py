@@ -19,9 +19,6 @@ from .production_integration_revision import apply as _apply_production_integrat
 _apply_production_integration_revision()
 del _apply_production_integration_revision
 
-from .production_integration_compat_revision import apply as _apply_production_integration_compat_revision
-_apply_production_integration_compat_revision()
-del _apply_production_integration_compat_revision
 
 
 from .alarm_policy_revision import apply as _apply_alarm_policy_revision

@@ -77,6 +77,11 @@ class StationAdminDialog(QDialog):
         self.hw_type = QLineEdit(str(station.get("hwtype") or "detector"))
         self.hw_address = QLineEdit(str(station.get("hwaddress") or ""))
         self.unit = QLineEdit(str(station.get("unit") or "µSv/h"))
+        if source == "lan":
+            self.hw_type.setEnabled(False)
+            self.hw_address.setEnabled(False)
+            self.hw_type.setToolTip("Identity hardware dikelola oleh source LAN.")
+            self.hw_address.setToolTip("Identity hardware dikelola oleh source LAN.")
 
         tabs = QTabWidget()
         tabs.addTab(self._attributes_tab(), "Attributes")

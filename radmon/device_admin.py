@@ -20,11 +20,28 @@ _ALLOWED_FIELDS = {
 }
 
 
+
+LAN_EDITABLE_FIELDS = {
+    "name", "location", "description", "warnlevel", "alarmlevel",
+    "maxidlemin", "unit", "audiopath",
+}
+
 class DeviceAdminService:
-    def __init__(self, security: SecurityStore, repository: Any, audit: AuditTrail) -> None:
-        self.security = security
-        self.repository = repository
-        self.audit = audit
+    def __init__(
+        self,
+        security,
+        repository,
+        audit,
+        *,
+        station_source=None,
+        remote_factory=None,
+        write_through: bool = False,
+    ) -> None:
+        self._init_base(security, repository, audit)
+        self.station_source = station_source
+        self.remote_factory = remote_factory
+        self.write_through = bool(write_through)
+        self.source_definitions: dict[str, Any] = {}
 
     @staticmethod
     def _validate(changes: dict[str, Any]) -> None:
@@ -61,33 +78,36 @@ class DeviceAdminService:
         self.audit.record("DEVICE_CREATE", identity, "station", target, after=after)
         return after
 
-    def update_station(
-        self,
-        identity: UserIdentity,
-        pin: str,
-        serid: int,
-        changes: dict[str, Any],
-    ) -> dict[str, Any]:
-        self.security.require_sensitive(identity, "edit_station", pin)
+    def update_station(self, identity, pin: str, serid: int, changes: dict[str, Any]):
+        if not self.write_through:
+            return self._update_station_base(identity, pin, serid, changes)
+        self.security.require_sensitive(identity, 'edit_station', pin)
+        forbidden = set(changes) - LAN_EDITABLE_FIELDS
+        if forbidden:
+            raise ValueError('field identity/hardware LAN tidak dapat diedit: ' + ', '.join(sorted(forbidden)))
         before = self.repository.get_device(int(serid))
         if not before:
-            raise ValueError("station tidak ditemukan")
+            raise ValueError('station tidak ditemukan')
         merged = dict(before)
         merged.update(changes)
         self._validate(merged)
-        target = f"station:{serid}"
+        if self.station_source is None or self.remote_factory is None:
+            raise RuntimeError('source station LAN belum dikonfigurasi')
+        mapping = self.station_source(int(serid))
+        if mapping is None:
+            raise RuntimeError(f'source station untuk SERID {int(serid)} tidak ditemukan')
+        source_id, remote_serid = mapping
+        target = f'station:{int(serid)}'
         try:
-            after = self.repository.update_device(int(serid), changes)
+            remote = self.remote_factory(source_id)
+            confirmed = remote.update_device(int(remote_serid), dict(changes))
+            central_changes = {key: confirmed.get(key, changes.get(key)) for key in LAN_EDITABLE_FIELDS if key in changes}
+            actual_changes = {key: value for key, value in central_changes.items() if before.get(key) != value}
+            after = self.repository.update_device(int(serid), actual_changes) if actual_changes else dict(before)
         except Exception as exc:
-            self.audit.record(
-                "DEVICE_UPDATE", identity, "station", target,
-                before=before, after=changes, success=False, reason=str(exc)
-            )
+            self.audit.record('DEVICE_UPDATE', identity, 'station', target, before=before, after=changes, success=False, reason=str(exc), source=source_id)
             raise
-        self.audit.record(
-            "DEVICE_UPDATE", identity, "station", target,
-            before=before, after=after
-        )
+        self.audit.record('DEVICE_UPDATE', identity, 'station', target, before=before, after=after, source=source_id)
         return after
 
     def migrate_serid(
@@ -117,6 +137,28 @@ class DeviceAdminService:
             "DEVICE_SERID_MIGRATE", identity, "station", target,
             before=before, after=after
         )
+        return after
+
+    def _init_base(self, security: SecurityStore, repository: Any, audit: AuditTrail) -> None:
+        self.security = security
+        self.repository = repository
+        self.audit = audit
+
+    def _update_station_base(self, identity: UserIdentity, pin: str, serid: int, changes: dict[str, Any]) -> dict[str, Any]:
+        self.security.require_sensitive(identity, 'edit_station', pin)
+        before = self.repository.get_device(int(serid))
+        if not before:
+            raise ValueError('station tidak ditemukan')
+        merged = dict(before)
+        merged.update(changes)
+        self._validate(merged)
+        target = f'station:{serid}'
+        try:
+            after = self.repository.update_device(int(serid), changes)
+        except Exception as exc:
+            self.audit.record('DEVICE_UPDATE', identity, 'station', target, before=before, after=changes, success=False, reason=str(exc))
+            raise
+        self.audit.record('DEVICE_UPDATE', identity, 'station', target, before=before, after=after)
         return after
 
 
