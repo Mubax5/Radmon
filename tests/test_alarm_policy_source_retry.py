@@ -2,9 +2,9 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from radmon.alarm_policy import AlarmPolicyService
-from radmon.alarm_policy_revision import _retry_source_silences
 from radmon.alarm_policy_store import AlarmPolicyStore
 from radmon.audit import AuditTrail
+from radmon.lan import _retry_source_silences
 from radmon.remote_alarm import RemoteAlarmMirror
 from radmon.security import SecurityStore
 
