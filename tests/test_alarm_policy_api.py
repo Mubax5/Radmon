@@ -66,6 +66,14 @@ def test_unauthenticated_policy_controls_return_401(tmp_path):
     assert client.get("/api/v1/control/suppressions").status_code == 401
 
 
+def test_viewer_cannot_read_operator_alarm_workflow(tmp_path):
+    client, _ = fixture(tmp_path)
+    login(client, "viewer")
+    assert client.get("/api/v1/control/alarm-events").status_code == 403
+    assert client.get("/api/v1/control/alarm-policy/5201").status_code == 403
+    assert client.get("/api/v1/control/suppressions").status_code == 403
+
+
 def test_viewer_cannot_start_suppression(tmp_path):
     client, _ = fixture(tmp_path)
     login(client, "viewer")
