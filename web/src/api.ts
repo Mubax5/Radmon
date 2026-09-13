@@ -18,6 +18,11 @@ export type Station = {
   dtom?: string | null;
 };
 
+export type WebEvent = {
+  type: string;
+  [key: string]: unknown;
+};
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
@@ -57,4 +62,16 @@ export async function login(username: string, password: string): Promise<Session
 
 export async function logout(): Promise<void> {
   await api<{ status: string }>("/auth/logout", { method: "POST" });
+}
+
+export function subscribeWebEvents(onEvent: (event: WebEvent) => void): () => void {
+  const source = new EventSource("/api/v1/web/events", { withCredentials: true });
+  source.onmessage = (message) => {
+    try {
+      onEvent(JSON.parse(message.data) as WebEvent);
+    } catch {
+      // Ignore malformed/partial refresh hints. REST remains authoritative.
+    }
+  };
+  return () => source.close();
 }
