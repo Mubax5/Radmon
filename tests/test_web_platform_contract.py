@@ -37,7 +37,6 @@ def test_frontend_sources_use_cloudflare_kumo_and_have_no_public_signin_overlay(
     app = (ROOT / "web/src/App.tsx").read_text(encoding="utf-8")
     assert "@cloudflare/kumo" in package
     assert "@phosphor-icons/react" in package
-    assert "Sidebar" in app
     assert "Viewer" in app and "Operator" in app and "Administrator" in app
 
 
@@ -46,3 +45,36 @@ def test_web_build_is_locked_and_node_is_build_time_only() -> None:
     package = (ROOT / "web/package.json").read_text(encoding="utf-8")
     assert '"build": "tsc -b && vite build"' in package
     assert '"start"' not in package
+
+
+def test_web_control_plane_is_split_into_focused_modules() -> None:
+    expected = [
+        "web/src/auth.tsx",
+        "web/src/layout.tsx",
+        "web/src/pages/OverviewPage.tsx",
+        "web/src/pages/StationsPage.tsx",
+        "web/src/pages/HistoryPage.tsx",
+        "web/src/pages/ArchivesPage.tsx",
+    ]
+    for relative in expected:
+        assert (ROOT / relative).is_file(), relative
+
+    app = (ROOT / "web/src/App.tsx").read_text(encoding="utf-8")
+    assert "AuthProvider" in app
+    assert "AppLayout" in app
+    assert "function OverviewPage" not in app
+    assert "function StationsPage" not in app
+    assert "function HistoryPage" not in app
+    assert "function ArchivesPage" not in app
+
+
+def test_web_uses_kumo_as_primary_component_system_without_browser_secret_storage() -> None:
+    combined = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "web/src").rglob("*.tsx")
+    )
+    assert "@cloudflare/kumo" in combined
+    for forbidden in ("material-ui", "@mui/", "antd", "bootstrap"):
+        assert forbidden not in combined.lower()
+    assert "localStorage" not in combined
+    assert "sessionStorage" not in combined
