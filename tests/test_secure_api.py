@@ -70,10 +70,41 @@ def login(client, username, password="Password123!"):
     return response
 
 
+def ack_payload(pin: str) -> dict[str, object]:
+    return {
+        "event_time": "2026-09-08T14:00:00",
+        "action": "Confirm to Location",
+        "pic": "Budi",
+        "note": "checked",
+        "pin": pin,
+    }
+
+
+def user_payload(pin: str) -> dict[str, object]:
+    return {
+        "pin": pin,
+        "username": "new-user",
+        "display_name": "New User",
+        "role": "Viewer",
+        "password": "Password123!",
+        "user_pin": "4321",
+    }
+
+
 def test_anonymous_control_routes_are_rejected(tmp_path):
     client, _, _ = make_client(tmp_path)
     assert client.get("/api/v1/control/alarms").status_code == 401
     assert client.get("/auth/me").status_code == 401
+
+
+def test_anonymous_mutations_are_rejected(tmp_path):
+    client, _, _ = make_client(tmp_path)
+    assert client.post("/api/v1/control/alarms/gd52/5201/ack", json=ack_payload("1357")).status_code == 401
+    assert client.post(
+        "/api/v1/control/stations/5201",
+        json={"pin": "2468", "changes": {"name": "Nope"}},
+    ).status_code == 401
+    assert client.post("/api/v1/control/users", json=user_payload("2468")).status_code == 401
 
 
 def test_login_uses_httponly_session_cookie_and_logout_revokes_it(tmp_path):
@@ -92,27 +123,51 @@ def test_operator_can_ack_via_pin_gated_endpoint(tmp_path):
     login(client, "op")
     response = client.post(
         "/api/v1/control/alarms/gd52/5201/ack",
-        json={
-            "event_time": "2026-09-08T14:00:00",
-            "action": "Confirm to Location",
-            "pic": "Budi",
-            "note": "checked",
-            "pin": "1357",
-        },
+        json=ack_payload("1357"),
     )
     assert response.status_code == 200
     assert control.calls[0][0] == "op"
     assert control.calls[0][1] == "1357"
 
 
-def test_viewer_cannot_use_mutating_control_endpoint(tmp_path):
+def test_viewer_cannot_ack_or_use_admin_mutations(tmp_path):
     client, _, _ = make_client(tmp_path)
     login(client, "view")
-    response = client.post(
+    assert client.post(
+        "/api/v1/control/alarms/gd52/5201/ack",
+        json=ack_payload("9999"),
+    ).status_code == 403
+    assert client.post(
         "/api/v1/control/stations/5201",
         json={"pin": "9999", "changes": {"name": "Nope"}},
+    ).status_code == 403
+    assert client.post("/api/v1/control/users", json=user_payload("9999")).status_code == 403
+
+
+def test_operator_cannot_use_administrator_mutations(tmp_path):
+    client, _, _ = make_client(tmp_path)
+    login(client, "op")
+    assert client.post(
+        "/api/v1/control/stations/5201",
+        json={"pin": "1357", "changes": {"name": "Nope"}},
+    ).status_code == 403
+    assert client.post("/api/v1/control/users", json=user_payload("1357")).status_code == 403
+
+
+def test_administrator_can_use_station_and_user_mutations(tmp_path):
+    client, _, _ = make_client(tmp_path)
+    login(client, "admin")
+    station = client.post(
+        "/api/v1/control/stations/5201",
+        json={"pin": "2468", "changes": {"name": "Updated"}},
     )
-    assert response.status_code == 403
+    assert station.status_code == 200
+    assert station.json()["name"] == "Updated"
+
+    created = client.post("/api/v1/control/users", json=user_payload("2468"))
+    assert created.status_code == 200
+    assert created.json()["username"] == "new-user"
+    assert created.json()["role"] == "Viewer"
 
 
 def test_admin_can_list_users_without_exposing_secret_hashes(tmp_path):
