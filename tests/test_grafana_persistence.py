@@ -25,6 +25,7 @@ def test_existing_grafana_resources_are_never_overwritten(tmp_path: Path) -> Non
 
     bootstrap._request_json = request  # type: ignore[method-assign]
     assert bootstrap._provision_via_api("http://localhost:3300") is True
+    assert bootstrap._provision_via_api("http://localhost:3300") is True
     assert writes == []
 
 
