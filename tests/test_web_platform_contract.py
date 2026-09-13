@@ -62,6 +62,9 @@ def test_web_control_plane_is_split_into_focused_modules() -> None:
         "web/src/pages/StationsPage.tsx",
         "web/src/pages/HistoryPage.tsx",
         "web/src/pages/ArchivesPage.tsx",
+        "web/src/pages/AlarmsPage.tsx",
+        "web/src/pages/UsersPage.tsx",
+        "web/src/pages/SystemPage.tsx",
     ]
     for relative in expected:
         assert (ROOT / relative).is_file(), relative
@@ -69,10 +72,16 @@ def test_web_control_plane_is_split_into_focused_modules() -> None:
     app = (ROOT / "web/src/App.tsx").read_text(encoding="utf-8")
     assert "AuthProvider" in app
     assert "AppLayout" in app
-    assert "function OverviewPage" not in app
-    assert "function StationsPage" not in app
-    assert "function HistoryPage" not in app
-    assert "function ArchivesPage" not in app
+    for page in (
+        "OverviewPage",
+        "StationsPage",
+        "HistoryPage",
+        "ArchivesPage",
+        "AlarmsPage",
+        "UsersPage",
+        "SystemPage",
+    ):
+        assert f"function {page}" not in app
 
 
 def test_web_uses_kumo_as_primary_component_system_without_browser_secret_storage() -> None:
