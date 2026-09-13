@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -100,4 +101,4 @@ def test_sensitive_alarm_actions_use_kumo_dialogs_and_native_kumo_selects() -> N
     assert "Dialog.Trigger" in actions
     assert "Dialog.Close" in actions
     assert "<Select" in actions
-    assert "<select" not in combined.lower()
+    assert re.search(r"<select(?:\s|>)", combined) is None
