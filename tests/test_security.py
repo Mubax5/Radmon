@@ -87,3 +87,31 @@ def test_explicit_wrong_pin_is_rejected_even_with_active_lease(tmp_path):
     assert store.sensitive_lease_active(identity)
     with pytest.raises(SecurityError, match="PIN"):
         store.require_sensitive(identity, "ack_alarm", "0000")
+
+
+def test_empty_production_store_imports_legacy_python_users_without_rehash(tmp_path):
+    legacy = SecurityStore(tmp_path / "legacy" / "radmon-security.db")
+    legacy.create_user("admin", "Administrator", Role.ADMINISTRATOR, "OldPassword123!", "2468")
+
+    production = SecurityStore(tmp_path / "production" / "radmon-security.db")
+    assert production.authenticate("admin", "OldPassword123!") is None
+
+    imported = production.import_users_from_database(legacy.path)
+
+    assert imported == 1
+    identity = production.authenticate("admin", "OldPassword123!")
+    assert identity is not None
+    assert identity.role is Role.ADMINISTRATOR
+    assert production.verify_pin("admin", "2468") is True
+
+
+def test_legacy_import_never_merges_into_nonempty_production_store(tmp_path):
+    legacy = SecurityStore(tmp_path / "legacy" / "radmon-security.db")
+    legacy.create_user("legacy", "Legacy", Role.OPERATOR, "LegacyPass123!", "1357")
+
+    production = SecurityStore(tmp_path / "production" / "radmon-security.db")
+    production.create_user("current", "Current", Role.ADMINISTRATOR, "CurrentPass123!", "2468")
+
+    assert production.import_users_from_database(legacy.path) == 0
+    assert production.authenticate("legacy", "LegacyPass123!") is None
+    assert production.authenticate("current", "CurrentPass123!") is not None
