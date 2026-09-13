@@ -43,6 +43,7 @@ class CentralRepositoryProtocol(Protocol):
     def ingest_batch(self, measurements: list[dict[str, Any]], station: dict[str, Any], source_name: str) -> int: ...
     def stations(self) -> list[dict[str, Any]]: ...
     def latest(self, serid: int) -> dict[str, Any] | None: ...
+    def history(self, serid: int, limit: int = 240) -> list[dict[str, Any]]: ...
 
 
 class CentralMariaDBRepository:
@@ -81,42 +82,20 @@ ON DUPLICATE KEY UPDATE
   hwaddress = VALUES(hwaddress), description = VALUES(description)
 """,
                     (
-                        station["serid"],
-                        station["name"],
-                        station["location"],
-                        station["maxidlemin"],
-                        station["warnlevel"],
-                        station["alarmlevel"],
-                        station["unit"],
-                        source_name[:50],
+                        station["serid"], station["name"], station["location"], station["maxidlemin"],
+                        station["warnlevel"], station["alarmlevel"], station["unit"], source_name[:50],
                         f"Synced from {source_name}"[:255],
                     ),
                 )
                 for item in measurements:
                     cursor.execute(
-                        """
-SELECT dtom, doserate, dose
-FROM measurement
-WHERE serid = ? AND dtom < ?
-ORDER BY dtom DESC
-LIMIT 1
-""",
+                        "SELECT dtom, doserate, dose FROM measurement WHERE serid = ? AND dtom < ? ORDER BY dtom DESC LIMIT 1",
                         (item["serid"], item["dtom"]),
                     )
                     previous = cursor.fetchone()
                     cursor.execute(
-                        """
-INSERT IGNORE INTO measurement (serid, dtom, doserate, dose, previnterval, stat)
-VALUES (?, ?, ?, ?, ?, ?)
-""",
-                        (
-                            item["serid"],
-                            item["dtom"],
-                            item["doserate"],
-                            item.get("dose", 0.0),
-                            item["previnterval"],
-                            item["stat"],
-                        ),
+                        "INSERT IGNORE INTO measurement (serid, dtom, doserate, dose, previnterval, stat) VALUES (?, ?, ?, ?, ?, ?)",
+                        (item["serid"], item["dtom"], item["doserate"], item.get("dose", 0.0), item["previnterval"], item["stat"]),
                     )
                     if getattr(cursor, "rowcount", 0) == 1:
                         inserted += 1
@@ -128,17 +107,11 @@ VALUES (?, ?, ?, ?, ?, ?)
                             previous_rate = previous.get("doserate") if isinstance(previous, dict) else (previous[1] if previous else None)
                             previous_dose = previous.get("dose") if isinstance(previous, dict) else (previous[2] if previous else None)
                             measurement = Measurement(
-                                serid=int(item["serid"]),
-                                measured_at=item["dtom"],
-                                dose_rate=float(item["doserate"]),
-                                previnterval=int(item["previnterval"]),
-                                stat=int(item["stat"]),
+                                serid=int(item["serid"]), measured_at=item["dtom"], dose_rate=float(item["doserate"]),
+                                previnterval=int(item["previnterval"]), stat=int(item["stat"]),
                             )
                             upsert_recent(
-                                cursor,
-                                measurement,
-                                dose=float(item.get("dose") or 0.0),
-                                previous_time=previous_time,
+                                cursor, measurement, dose=float(item.get("dose") or 0.0), previous_time=previous_time,
                                 previous_rate=float(previous_rate) if previous_rate is not None else None,
                                 previous_dose=float(previous_dose) if previous_dose is not None else None,
                                 interval=int(item["previnterval"]),
@@ -178,9 +151,25 @@ VALUES (?, ?, ?, ?, ?, ?)
         finally:
             connection.close()
 
+    def history(self, serid: int, limit: int = 240) -> list[dict[str, Any]]:
+        bounded = max(1, min(int(limit), 2000))
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT serid, dtom, doserate, dose, previnterval, stat FROM measurement WHERE serid = ? ORDER BY dtom DESC LIMIT ?",
+                    (int(serid), bounded),
+                )
+                rows = cursor.fetchall()
+            keys = ("serid", "dtom", "doserate", "dose", "previnterval", "stat")
+            return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
+        finally:
+            connection.close()
+
 
 def create_central_app(repository: CentralRepositoryProtocol, settings: Settings) -> FastAPI:
     app = FastAPI(title="Radmon Central API", docs_url=None, redoc_url=None)
+    app.state.radmon_repository = repository
 
     def require_token(authorization: str | None = Header(default=None)) -> None:
         expected = f"Bearer {settings.central_token}"

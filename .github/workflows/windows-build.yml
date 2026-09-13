@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - feature
 
 permissions:
   contents: write
@@ -12,7 +13,7 @@ permissions:
 jobs:
   build-windows:
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +23,10 @@ jobs:
           architecture: x64
           cache: pip
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Install runtime and build dependencies
         shell: pwsh
         run: |
@@ -29,12 +34,26 @@ jobs:
           python -m pip install -r requirements.txt -r requirements-build.txt
           choco install innosetup --no-progress -y
 
+      - name: Build Kumo web frontend
+        shell: pwsh
+        working-directory: web
+        run: |
+          npm install --no-audit --no-fund
+          npm run check
+          npm run build
+          if (-not (Test-Path "dist\index.html")) {
+            throw "Vite did not create web\dist\index.html"
+          }
+
       - name: Build RadMon.exe
         shell: pwsh
         run: |
           python -m PyInstaller --clean --noconfirm RadMon.spec
           if (-not (Test-Path "dist\RadMon\RadMon.exe")) {
             throw "PyInstaller did not create dist\RadMon\RadMon.exe"
+          }
+          if (-not (Test-Path "dist\RadMon\web\index.html")) {
+            throw "PyInstaller did not bundle the RadMon web frontend"
           }
 
       - name: Assemble portable RadMon layout
@@ -53,7 +72,7 @@ jobs:
       - name: Smoke test packaged EXE
         shell: pwsh
         run: |
-          $process = Start-Process -FilePath "portable\RadMon\app\RadMon.exe" -ArgumentList "--smoke-test" -Wait -PassThru
+          $process = Start-Process -FilePath "portable\RadMon\app\RadMon.exe" -ArgumentList "--server", "--smoke-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) {
             throw "RadMon.exe smoke test failed with exit code $($process.ExitCode)"
           }
@@ -94,7 +113,7 @@ jobs:
           if (-not (Test-Path $installedExe)) {
             throw "Installer did not create $installedExe"
           }
-          $app = Start-Process -FilePath $installedExe -ArgumentList "--smoke-test" -Wait -PassThru
+          $app = Start-Process -FilePath $installedExe -ArgumentList "--server", "--smoke-test" -Wait -PassThru
           if ($app.ExitCode -ne 0) {
             throw "Installed RadMon.exe smoke test failed with exit code $($app.ExitCode)"
           }
@@ -132,7 +151,7 @@ jobs:
         run: |
           $tag = "latest"
           $title = "RadMon"
-          $notes = "Current production Windows installer built from the main branch. Download RadMon-Setup.exe and run it on the central Windows PC. Existing config, runtime, archives, and reports are preserved across reinstall/upgrade."
+          $notes = "Current production Windows installer. It runs the RadMon web platform headlessly at Windows startup, serves the authenticated Kumo control plane, and preserves editable Grafana monitoring data across restart and upgrade. Existing config, runtime, archives, and reports are preserved."
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

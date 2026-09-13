@@ -1,15 +1,34 @@
 # Radiation Monitoring
 
-RadMon adalah sistem monitoring radiasi untuk central PC `192.168.1.2`. Build production Windows dijalankan dari **`app\RadMon.exe`**; satu executable tersebut menjadi lifecycle owner untuk collector LAN, secure API, desktop Admin, alarm policy, archive lifecycle, dan bootstrap Grafana. Saat desktop Admin ditutup, central service yang dimiliki proses yang sama ikut dihentikan.
+RadMon adalah platform monitoring radiasi untuk central PC **`192.168.1.2`**. Production Windows dipasang melalui **`RadMon-Setup.exe`** dan dijalankan 24/7 oleh Scheduled Task `RadMon Server` menggunakan **`app\RadMon.exe --server`**. Operator tidak perlu login Windows atau membiarkan desktop PySide terbuka agar collector/API/web tetap hidup.
+
+## Surface production
+
+Di network BRIN/LAN yang diizinkan:
+
+```text
+http://192.168.1.2:8090/       -> Grafana monitoring fullscreen/kiosk, tanpa login RadMon
+http://192.168.1.2:8090/app    -> RadMon Control Plane, wajib login
+http://localhost:3300          -> Grafana admin/editor di PC server
+```
+
+Anonymous hanya mendapat monitoring Grafana read-only. **Viewer tetap wajib login RadMon**. Role aplikasi:
+
+- **Viewer** — Overview, Stations, History, Archives/Reports read-only.
+- **Operator** — Viewer + Alarm, Response/Silence, dan timed Suppression.
+- **Administrator** — Operator + user/station/system administration dan akses editor Grafana.
+
+Frontend `/app` dibuild dari React + TypeScript + **Cloudflare Kumo UI** + Phosphor Icons. Node.js hanya dipakai saat build; production menyajikan static assets dari FastAPI sehingga tidak ada Node server 24/7.
 
 ## Paket production Windows
 
-Artifact `RadMon-Windows` mempunyai layout portable:
+Installer mempunyai layout persistent berikut:
 
 ```text
 RadMon\
   app\
     RadMon.exe
+    web\
     docs\manual\
     grafana\
   config\
@@ -18,49 +37,51 @@ RadMon\
   runtime\
   archives\
   reports\
-  README.md
-  SHA256SUMS.txt
 ```
 
-`runtime`, `archives`, `reports`, dan `config\.env` adalah data instalasi lokal dan **tidak boleh dihapus saat upgrade**. Paket build tidak pernah membawa credential production.
+`config\.env`, `runtime`, `archives`, dan `reports` adalah data lokal dan **tidak ditimpa saat upgrade**. Installer mendaftarkan Scheduled Task `RadMon Server` saat boot Windows sebagai SYSTEM dengan restart otomatis bila proses berhenti. Firewall hanya membuka port `8090` dan `3300` untuk `LocalSubnet`.
 
-### First run
+### First installation
 
-1. Extract artifact ke folder tetap, misalnya `C:\RadMon`.
-2. Pastikan Docker Desktop tersedia bila Grafana lokal akan dipakai.
-3. Copy `config\.env.example` menjadi `config\.env`, lalu isi credential database lokal/LAN.
-4. Double-click `app\RadMon.exe`.
-5. Pada first run, buat Administrator awal bila security store belum memiliki user.
+1. Jalankan `RadMon-Setup.exe` sebagai Administrator.
+2. Edit `config\.env` dan isi credential database central + source LAN.
+3. Untuk security store yang belum mempunyai user, isi sekali:
 
-Deployment lama yang masih mempunyai `.env` di root instalasi dimigrasikan aman: RadMon hanya **menyalin** root `.env` ke `config\.env` bila target belum ada. File lama tidak dihapus dan `config\.env` yang sudah ada tidak pernah ditimpa.
+```env
+RADMON_BOOTSTRAP_ADMIN_USER=admin-radmon
+RADMON_BOOTSTRAP_ADMIN_PASSWORD=GANTI_PASSWORD_KUAT
+RADMON_BOOTSTRAP_ADMIN_PIN=GANTI_PIN
+```
 
-### Upgrade
+4. Pastikan Grafana native tersedia; bila lokasinya non-standar isi `RADMON_GRAFANA_BIN`.
+5. Restart task `RadMon Server` atau reboot Windows setelah konfigurasi lengkap.
+6. Login RadMon di `/app`; setelah Administrator berhasil terbentuk, bootstrap password/PIN dapat dihapus dari `.env`.
 
-Tutup RadMon, backup folder instalasi, lalu ganti file aplikasi dari artifact baru. Pertahankan:
+Production normal **tidak memerlukan Docker Desktop**. `RADMON_GRAFANA_DOCKER_FALLBACK=0` adalah default untuk menjaga penggunaan RAM rendah pada host 6 GB.
+
+## Grafana editable dan persistent
+
+Grafana production menggunakan port stabil **3300**. Dashboard/playlist default hanya menjadi **initial seed**. Startup berikutnya tidak mengembalikan dashboard ke template Python.
+
+Alur editing:
 
 ```text
-config\.env
-runtime\
-archives\
-reports\
+localhost:3300 -> login Grafana (default admin/admin) -> Edit -> Save
+                                                |
+                                                v
+                                  state tersimpan di runtime/grafana
+                                                |
+                                                v
+                        monitoring anonymous menampilkan dashboard yang sama
 ```
 
-Sesudah update, jalankan lagi `app\RadMon.exe`. Jangan mengganti `source_id` production karena checkpoint dan state menggunakan identity tersebut.
+Jika dashboard hasil versi RadMon lama masih `editable=false`, bootstrap baru melakukan migrasi satu kali dengan mempertahankan JSON dashboard yang tersimpan (layout/panel/query) dan hanya membuka flag edit. Sesudah itu dashboard Grafana menjadi authoritative. Restart RadMon, Grafana, atau Windows **tidak rollback hasil Save**.
 
-## Mode developer
-
-Detector serial dan dummy tidak menjadi launcher production. Untuk pengembangan dari source checkout:
-
-```text
-python -m radmon.dev_app --source detector
-python -m radmon.dev_app --source dummy
-```
-
-Dataset demo tetap mencakup detector contoh **5202 / IS-1 Koridor** agar workflow multi-station bisa diuji tanpa hardware production.
+Anonymous Grafana tetap role Viewer; form login Grafana tetap tersedia di `localhost:3300` untuk Administrator. Landing monitoring `/` langsung redirect ke Playlist kiosk sehingga tidak mempunyai tombol Sign in RadMon, sidebar RadMon, atau wrapper aplikasi.
 
 ## Database production
 
-Nama database tetap **`ipradmon`** dan runtime mengikuti schema production aktual:
+Database tetap **`ipradmon`** dengan schema production aktual:
 
 ```text
 device
@@ -73,9 +94,9 @@ news
 rawdata
 ```
 
-`measurement` menyimpan history untuk Chart, Reports, export, dan archive. `recent` adalah snapshot operasional satu row per detector. `vrecent` adalah sumber authoritative monitoring realtime. `alarm` mengikuti schema legacy production `serid + dtoa` dengan `lvl`, `mvalue`, `thvalue`, `nhit`, `ack`, `pic`, `note`, `i_op`, dan `i_flag`.
+`measurement` menyimpan history untuk History/Chart, Reports, export, dan archive. `recent` adalah snapshot operasional satu row per detector. `vrecent` adalah sumber authoritative monitoring realtime. `alarm` mengikuti schema legacy production `serid + dtoa` dengan `lvl`, `mvalue`, `thvalue`, `nhit`, `ack`, `pic`, `note`, `i_op`, dan `i_flag`.
 
-**RadMon tidak melakukan DDL pada database source production.** State policy/suppression, audit, checkpoint, retry metadata, dan security disimpan di central/runtime storage.
+**RadMon tidak melakukan DDL pada database source production.** State policy/suppression, audit, checkpoint, retry metadata, session, dan security disimpan di central/runtime storage.
 
 ## Central LAN PC `.2`
 
@@ -106,11 +127,15 @@ RADMON_LAN_OFFLINE_AFTER_FAILURES=3
 RADMON_BACKFILL_ENABLED=1
 RADMON_BACKFILL_BATCH_SIZE=500
 RADMON_BACKFILL_INTERVAL=2
-RADMON_LAN_BATCH_SIZE=1000
-RADMON_REFRESH_INTERVAL=2
+RADMON_GRAFANA_PORT=3300
+RADMON_GRAFANA_USER=admin
+RADMON_GRAFANA_PASSWORD=admin
+RADMON_GRAFANA_DOCKER_FALLBACK=0
 ```
 
-Credential production tidak disimpan di Git. Realtime worker per source berjalan default setiap **2 detik**. History backfill berjalan terpisah dengan checkpoint `source_id + production SERID`, sehingga kegagalan satu source tidak menghentikan source lain dan history central yang sudah tersimpan tidak dihapus.
+Realtime worker per source berjalan default setiap **2 detik**. History backfill mempunyai checkpoint `source_id + SERID production`; kegagalan satu source tidak menghentikan source lain dan history central yang sudah tersimpan tidak dihapus.
+
+Dataset developer tetap mencakup detector contoh **5202 / IS-1 Koridor** untuk regression multi-station.
 
 ## Alarm Policy dan control
 
@@ -126,56 +151,29 @@ WHERE serid = ? AND dtoa = ? AND i_flag = 0
 
 Kolom `ack` dipertahankan. Jika source sedang gagal, silence/response diretry dengan backoff `5s, 15s, 30s, 60s` dan maksimum 25 pending row per live cycle.
 
-## Admin realtime
+## Reports dan quarterly archive
 
-Desktop Admin mempunyai tab:
+Workflow report tetap **Preview -> Print / Export PDF / Export CSV**. Quarter lama dapat dipindah ke archive **terverifikasi** melalui lifecycle `PENDING_DRAIN -> EXPORTING -> VERIFYING -> SEALED -> PURGING -> COMPLETE`. Sebelum **purge** central, backlog source sampai cutoff harus selesai dan bundle archive harus terverifikasi; source production tidak pernah dipurge oleh archive service.
 
-```text
-Recent | Tabular | Chart | Reports | Alarm | Logs
-```
-
-`Recent` membaca `vrecent`. `Alarm` menampilkan policy event beserta underlying dose condition. Panel Message menampilkan source health, active operator-facing ALARM, serta suppression/retrigger-lock tanpa mengubah `SUPPRESSED` menjadi audible alarm baru.
-
-Role utama:
-
-- **Administrator** — monitoring, response/suppression, user management, edit station, archive admin.
-- **Operator** — monitoring/report, response, dan suppression.
-- **Viewer** — read-only.
-
-Security store default berada di `runtime/radmon-security.db`.
+Bundle archive mencakup `manifest.json` dan `monthly-recap.csv`. Checkpoint/drain tetap diikat ke `source_id + SERID production`. Retensi minimum default **5 tahun** dan report archive dapat dibaca **tanpa restore** SQL.
 
 ## Grafana Monitoring TV
 
-Tombol **Monitoring** membuka Grafana Playlist `Realtime -> Trends -> Operations`. Generator menghasilkan dashboard TV dengan refresh **2 detik** dan perpindahan Playlist **10 detik**. Page realtime/status membaca `vrecent`; history trend membaca `measurement`. Status operasional membedakan `OFFLINE`, `SUPPRESSED`, `ALARM`, `ALERT`, dan `NORMAL`, sementara dose aktual tetap terlihat saat suppression aktif.
-
-## Reports dan quarterly archive
-
-Reports mendukung workflow **Preview -> Print / Export PDF / Export CSV**. Quarter lama dapat dipindah ke archive terverifikasi melalui lifecycle `PENDING_DRAIN -> EXPORTING -> VERIFYING -> SEALED -> PURGING -> COMPLETE`. Sebelum purge central, backlog source sampai cutoff harus selesai dan bundle archive harus terverifikasi; source production tidak pernah dipurge oleh archive service.
-
-Bundle archive mencakup metadata verifikasi dan export yang diperlukan untuk pembacaan langsung, termasuk `manifest.json` dan `monthly-recap.csv`. Checkpoint/drain tetap diikat ke `source_id + SERID production`. Retensi minimum default **5 tahun** dan report archive dapat dibaca **tanpa restore** SQL.
+Generator factory tetap menyediakan dashboard `Realtime -> Trends -> Operations`, refresh **2 detik**, dan **Playlist** interval **10 detik** untuk first seed/reset terkontrol. Sesudah resource ada di Grafana, saved dashboard/playlist tidak ditimpa oleh startup RadMon.
 
 ## WhatsApp alarm
 
-WhatsApp disabled by default. Dispatcher hanya mengirim persisted policy event `kind=ALARM`, `status=ACTIVE`, dan belum mempunyai `notification_sent_at`. `SUPPRESSED`, responded event, retrigger-locked state, dan historical seed tidak dikirim sebagai alarm baru.
+WhatsApp default OFF. Dispatcher hanya mengirim persisted policy event `kind=ALARM`, `status=ACTIVE`, dan belum mempunyai `notification_sent_at`. `SUPPRESSED`, responded event, retrigger-locked state, dan historical seed tidak dikirim sebagai alarm baru.
 
-## Existing push sync / server pusat
+## Mode developer
 
-Mekanisme push SyncAgent ke server pusat tetap tersedia dan default OFF melalui `RADMON_SYNC_ENABLED`. Mekanisme ini terpisah dari direct LAN pull PC `.2`.
-
-## Struktur source utama
+Detector serial dan dummy hanya untuk development/source checkout:
 
 ```text
-RadMon.spec
-packaging/
-radmon/
-grafana/
-docs/
-tests/
-.github/workflows/
+python -m radmon.dev_app --source detector
+python -m radmon.dev_app --source dummy
 ```
-
-Tidak ada batch launcher atau root Python launcher untuk production. Build production dibuat oleh GitHub Actions Windows dan menghasilkan artifact `RadMon-Windows`.
 
 ## Verification vs commissioning
 
-GitHub Actions memverifikasi unit/integration tests, Python compile, kontrak payload Grafana, build Windows `RadMon.exe`, dan packaged smoke test. Itu **bukan** pengganti commissioning LAN/hardware nyata di PC `.2`; koneksi ke `.50/.52/.38`, device lapangan, alarm write-through, dan service Grafana tetap harus divalidasi di environment production sebelum release operasional penuh.
+GitHub Actions memverifikasi Python tests, frontend TypeScript/Kumo build, compile validation, kontrak payload Grafana, Windows `RadMon.exe`, installer, dan packaged smoke test. Itu **bukan** pengganti commissioning nyata di PC `.2`; koneksi `.50/.52/.38`, Grafana native, alarm write-through, firewall/network BRIN, dan source hardware harus divalidasi sebelum penggunaan operasional penuh.

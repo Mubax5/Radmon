@@ -82,6 +82,11 @@ def attach_secure_routes(
             raise HTTPException(status_code=401, detail="authentication required")
         return identity
 
+    def require_operator(identity: UserIdentity = Depends(current_user)) -> UserIdentity:
+        if not security.role_allows(identity.role, "ack_alarm"):
+            raise HTTPException(status_code=403, detail="operator permission required")
+        return identity
+
     def require_admin(identity: UserIdentity = Depends(current_user)) -> UserIdentity:
         if identity.role is not Role.ADMINISTRATOR:
             raise HTTPException(status_code=403, detail="administrator required")
@@ -132,13 +137,13 @@ def attach_secure_routes(
         return alarm_mirror.list_alarms(limit=500)
 
     @app.get("/api/v1/control/alarm-events")
-    def alarm_events(identity: UserIdentity = Depends(current_user)):
+    def alarm_events(identity: UserIdentity = Depends(require_operator)):
         if alarm_policy is None:
             raise HTTPException(status_code=404, detail="alarm policy unavailable")
         return alarm_policy.list_events(limit=500)
 
     @app.get("/api/v1/control/alarm-policy/{serid}")
-    def alarm_policy_status(serid: int, identity: UserIdentity = Depends(current_user)):
+    def alarm_policy_status(serid: int, identity: UserIdentity = Depends(require_operator)):
         if alarm_policy is None:
             raise HTTPException(status_code=404, detail="alarm policy unavailable")
         try:
@@ -150,12 +155,10 @@ def attach_secure_routes(
     def respond_policy_event(
         event_id: str,
         payload: PolicyResponseRequest,
-        identity: UserIdentity = Depends(current_user),
+        identity: UserIdentity = Depends(require_operator),
     ):
         if alarm_policy is None:
             raise HTTPException(status_code=404, detail="alarm policy unavailable")
-        if not security.role_allows(identity.role, "ack_alarm"):
-            raise HTTPException(status_code=403, detail="operator permission required")
         try:
             return alarm_control.respond_policy_event(
                 identity, payload.pin, event_id,
@@ -168,7 +171,7 @@ def attach_secure_routes(
             raise HTTPException(status_code=code, detail=str(exc)) from exc
 
     @app.get("/api/v1/control/suppressions")
-    def suppressions(identity: UserIdentity = Depends(current_user)):
+    def suppressions(identity: UserIdentity = Depends(require_operator)):
         if alarm_suppression is None:
             raise HTTPException(status_code=404, detail="alarm suppression unavailable")
         return alarm_suppression.list(active_only=False)
@@ -177,12 +180,10 @@ def attach_secure_routes(
     def start_suppression(
         serid: int,
         payload: SuppressionRequest,
-        identity: UserIdentity = Depends(current_user),
+        identity: UserIdentity = Depends(require_operator),
     ):
         if alarm_suppression is None:
             raise HTTPException(status_code=404, detail="alarm suppression unavailable")
-        if not security.role_allows(identity.role, "suppress_alarm"):
-            raise HTTPException(status_code=403, detail="operator permission required")
         try:
             return alarm_suppression.start(
                 identity,
@@ -209,10 +210,8 @@ def attach_secure_routes(
         source_id: str,
         serid: int,
         payload: AckRequest,
-        identity: UserIdentity = Depends(current_user),
+        identity: UserIdentity = Depends(require_operator),
     ):
-        if not security.role_allows(identity.role, "ack_alarm"):
-            raise HTTPException(status_code=403, detail="operator permission required")
         try:
             return alarm_control.ack(
                 identity, payload.pin, source_id, serid, payload.event_time,
@@ -227,10 +226,8 @@ def attach_secure_routes(
     def update_station(
         serid: int,
         payload: StationUpdateRequest,
-        identity: UserIdentity = Depends(current_user),
+        identity: UserIdentity = Depends(require_admin),
     ):
-        if identity.role is not Role.ADMINISTRATOR:
-            raise HTTPException(status_code=403, detail="administrator required")
         try:
             return device_admin.update_station(identity, payload.pin, serid, payload.changes)
         except Exception as exc:

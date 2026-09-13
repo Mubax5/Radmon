@@ -9,6 +9,7 @@ hiddenimports += collect_submodules("selenium")
 
 datas = [
     ("radmon/admin/icons", "radmon/admin/icons"),
+    ("web/dist", "web"),
 ]
 datas += collect_data_files("tzdata")
 

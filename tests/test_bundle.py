@@ -45,7 +45,7 @@ def test_grafana_assets_are_part_of_the_bundle():
 def test_readme_documents_monitoring_schema_and_operator_outputs():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     for phrase in (
-        "5202", "IS-1 Koridor", "2 detik", "measurement", "alarm", "Grafana", "Playlist", "10 detik", "Preview", "Print", "Export PDF", "server pusat",
+        "5202", "IS-1 Koridor", "2 detik", "measurement", "alarm", "Grafana", "Playlist", "10 detik", "Preview", "Print", "Export PDF", "central PC",
     ):
         assert phrase.lower() in text.lower(), phrase
     assert "schema_extension.sql" not in text
