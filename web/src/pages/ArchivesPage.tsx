@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { useWebRefresh } from "../live";
 import { ErrorCard, JsonTable, LoadingCard, PageHeading } from "../ui";
 
 export function ArchivesPage() {
   const [items, setItems] = useState<Array<Record<string, unknown>> | null>(null);
   const [error, setError] = useState("");
+  const load = () => api<Array<Record<string, unknown>>>("/api/v1/control/archives")
+    .then((rows) => { setItems(rows); setError(""); })
+    .catch((e) => setError(e.message));
 
-  useEffect(() => {
-    api<Array<Record<string, unknown>>>("/api/v1/control/archives")
-      .then(setItems)
-      .catch((e) => setError(e.message));
-  }, []);
+  useEffect(() => { void load(); }, []);
+  useWebRefresh(() => { void load(); }, ["archive_update"]);
 
   return (
     <>
