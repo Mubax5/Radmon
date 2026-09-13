@@ -115,9 +115,15 @@ def test_viewer_cannot_use_mutating_control_endpoint(tmp_path):
     assert response.status_code == 403
 
 
-def test_admin_can_list_users(tmp_path):
+def test_admin_can_list_users_without_exposing_secret_hashes(tmp_path):
     client, _, _ = make_client(tmp_path)
     login(client, "admin")
     response = client.get("/api/v1/control/users")
     assert response.status_code == 200
-    assert {row["username"] for row in response.json()} == {"admin", "op", "view"}
+    rows = response.json()
+    assert {row["username"] for row in rows} == {"admin", "op", "view"}
+    for row in rows:
+        assert "password_hash" not in row
+        assert "pin_hash" not in row
+        assert "password" not in row
+        assert "pin" not in row
