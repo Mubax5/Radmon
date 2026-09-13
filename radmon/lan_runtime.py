@@ -31,11 +31,13 @@ class LanRuntime:
         whatsapp_dispatcher: Any | None = None,
         archive_service: Any | None = None,
         archive_check_interval: float | None = None,
+        web_event_broker: Any | None = None,
     ) -> None:
         self.settings = settings
         self.services = services
         self.whatsapp_dispatcher = whatsapp_dispatcher
         self.archive_service = archive_service
+        self.web_event_broker = web_event_broker
         self.stop_event = threading.Event()
         self.threads: list[threading.Thread] = []
 
@@ -79,6 +81,10 @@ class LanRuntime:
         aggregator.alarm_policy = getattr(self.services, "alarm_policy", None)
         return aggregator
 
+    def _publish_web_event(self, event: dict[str, Any]) -> None:
+        if self.web_event_broker is not None:
+            self.web_event_broker.publish(event)
+
     def _run_live_source(self, source) -> None:
         aggregator = self._aggregator()
         while not self.stop_event.is_set():
@@ -107,6 +113,12 @@ class LanRuntime:
                     result.live_stations,
                     result.mirrored_alarms,
                 )
+            self._publish_web_event({
+                "type": "live_update",
+                "source_id": source.source_id,
+                "connected": not bool(result.error),
+                "alarms_new": int(result.mirrored_alarms or 0),
+            })
             self.stop_event.wait(self.interval)
 
     def _run_backfill_source(self, source) -> None:
@@ -256,6 +268,8 @@ class LanRuntime:
                 active_quarter=current,
             )
             status = "COMPLETE"
+        if status == "COMPLETE":
+            self._publish_web_event({"type": "archive_update"})
         return status
 
     def _run_archive_lifecycle(self) -> None:
