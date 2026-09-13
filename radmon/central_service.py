@@ -19,6 +19,7 @@ from .repository import MariaDBRepository
 from .secure_api import attach_secure_routes
 from .secure_services import build_secure_services
 from .web_api import attach_web_api_routes
+from .web_events import WebEventBroker
 from .web_host import attach_web_routes
 from .whatsapp import SeleniumWhatsAppSender, WhatsAppAlarmDispatcher
 
@@ -107,9 +108,11 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         )
 
     repository = CentralMariaDBRepository(settings)
+    web_events = WebEventBroker(max_queue=32)
     app = create_central_app(repository, settings)
     app.state.radmon_lan_enabled = bool(settings.lan_enabled)
     app.state.radmon_lan_source_count = len(services.sources) if settings.lan_enabled else 0
+    app.state.radmon_web_events = web_events
     attach_secure_routes(
         app,
         security=services.security,
@@ -129,6 +132,7 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         security=services.security,
         repository=repository,
         source_health=services.source_health,
+        event_broker=web_events,
     )
     attach_web_routes(app, settings=settings)
 
@@ -143,6 +147,7 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
             services,
             whatsapp_dispatcher=whatsapp,
             archive_service=archive_service,
+            web_event_broker=web_events,
         )
 
     return CentralRuntime(app=app, services=services, archive_catalog=archive_catalog, lan_runtime=lan_runtime)
