@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { LayerCard, Table } from "@cloudflare/kumo";
 import { api, type Station } from "../api";
+import { useWebRefresh } from "../live";
 import { ErrorCard, LoadingCard, PageHeading } from "../ui";
 
 export function HistoryPage() {
@@ -19,20 +20,23 @@ export function HistoryPage() {
       .catch((e) => setError(e.message));
   }, []);
 
-  useEffect(() => {
+  const loadHistory = () => {
     if (!selected) {
       setLoading(false);
-      return;
+      return Promise.resolve();
     }
     setLoading(true);
-    api<Array<Record<string, unknown>>>(`/api/v1/web/stations/${selected}/history?limit=240`)
+    return api<Array<Record<string, unknown>>>(`/api/v1/web/stations/${selected}/history?limit=240`)
       .then((items) => {
         setRows(items);
         setError("");
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
-  }, [selected]);
+  };
+
+  useEffect(() => { void loadHistory(); }, [selected]);
+  useWebRefresh(() => { void loadHistory(); });
 
   return (
     <>
