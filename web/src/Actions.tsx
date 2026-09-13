@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Button, Input, LayerCard } from "@cloudflare/kumo";
+import { Button, Dialog, Input, LayerCard, Select } from "@cloudflare/kumo";
 import { api, type Role } from "./api";
 
 type AlarmEvent = {
@@ -19,6 +19,12 @@ function Feedback({ state }: { state: { kind: "ok" | "error"; text: string } | n
 
 export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; onChanged: () => void }) {
   const active = useMemo(() => events.filter((event) => event.kind === "ALARM" && event.status === "ACTIVE"), [events]);
+  const eventItems = useMemo(
+    () => Object.fromEntries(active.map((item) => [item.event_id, `SERID ${item.serid} · ${item.measured_value ?? "—"}`])),
+    [active],
+  );
+  const [respondOpen, setRespondOpen] = useState(false);
+  const [suppressionOpen, setSuppressionOpen] = useState(false);
   const [eventId, setEventId] = useState("");
   const [action, setAction] = useState("Confirm");
   const [pic, setPic] = useState("");
@@ -37,7 +43,6 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
     setPic("");
     setReason("");
     setPin("");
-    setFeedback(null);
   }
 
   function resetSuppression() {
@@ -46,7 +51,16 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
     setSuppressPic("");
     setSuppressReason("");
     setSuppressPin("");
-    setFeedback(null);
+  }
+
+  function changeRespondOpen(open: boolean) {
+    setRespondOpen(open);
+    if (!open) resetResponse();
+  }
+
+  function changeSuppressionOpen(open: boolean) {
+    setSuppressionOpen(open);
+    if (!open) resetSuppression();
   }
 
   async function respond(event: React.FormEvent) {
@@ -59,8 +73,8 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
         body: JSON.stringify({ pin, action, pic, reason }),
       });
       setFeedback({ kind: "ok", text: "Alarm response saved." });
-      setEventId("");
-      setReason("");
+      resetResponse();
+      setRespondOpen(false);
       onChanged();
     } catch (error) {
       setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Response failed" });
@@ -87,8 +101,8 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
         }),
       });
       setFeedback({ kind: "ok", text: `Station ${station} suppressed for ${minutes} minutes.` });
-      setSerid("");
-      setSuppressReason("");
+      resetSuppression();
+      setSuppressionOpen(false);
       onChanged();
     } catch (error) {
       setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Suppression failed" });
@@ -100,39 +114,60 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
   return (
     <div className="action-grid">
       <LayerCard className="action-card">
-        <h2>Respond to alarm</h2>
-        <p>Operator PIN is verified by the RadMon backend before source write-through.</p>
-        <form className="action-form" onSubmit={respond}>
-          <label>Active event</label>
-          <select value={eventId} onChange={(e) => setEventId(e.target.value)}>
-            <option value="">Select event…</option>
-            {active.map((item) => <option key={item.event_id} value={item.event_id}>SERID {item.serid} · {item.measured_value ?? "—"}</option>)}
-          </select>
-          <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} />
-          <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} />
-          <Input label="Reason" value={reason} onChange={(e) => setReason(e.target.value)} />
-          <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} />
-          <div className="form-actions">
-            <Button type="submit" variant="primary">Submit response</Button>
-            <Button type="button" variant="secondary" onClick={resetResponse}>Cancel</Button>
-          </div>
-        </form>
+        <h2>Alarm response</h2>
+        <p>Respond to an active alarm after confirming the event, PIC, action, reason, and operator PIN.</p>
+        <Dialog.Root open={respondOpen} onOpenChange={changeRespondOpen}>
+          <Dialog.Trigger render={(props) => <Button {...props} variant="primary">Respond to alarm</Button>} />
+          <Dialog>
+            <Dialog.Title>Respond to alarm</Dialog.Title>
+            <Dialog.Description>
+              Operator PIN is verified by the RadMon backend before the response is accepted.
+            </Dialog.Description>
+            <form className="action-form dialog-form" onSubmit={respond}>
+              <Select
+                label="Active event"
+                placeholder="Select event…"
+                items={eventItems}
+                value={eventId || undefined}
+                onValueChange={(value) => setEventId(String(value ?? ""))}
+                disabled={active.length === 0}
+              />
+              <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} />
+              <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} />
+              <Input label="Reason" value={reason} onChange={(e) => setReason(e.target.value)} />
+              <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} />
+              <div className="form-actions">
+                <Button type="submit" variant="primary">Submit response</Button>
+                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary">Cancel</Button>} />
+              </div>
+            </form>
+          </Dialog>
+        </Dialog.Root>
       </LayerCard>
 
       <LayerCard className="action-card">
         <h2>Timed suppression</h2>
-        <p>Suppress alarm surfacing while dose measurements continue uninterrupted.</p>
-        <form className="action-form" onSubmit={suppress}>
-          <Input label="Station SERID" inputMode="numeric" value={serid} onChange={(e) => setSerid(e.target.value)} />
-          <Input label="Duration (minutes)" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} />
-          <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} />
-          <Input label="Reason" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} />
-          <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} />
-          <div className="form-actions">
-            <Button type="submit" variant="primary">Start suppression</Button>
-            <Button type="button" variant="secondary" onClick={resetSuppression}>Cancel</Button>
-          </div>
-        </form>
+        <p>Temporarily suppress alarm surfacing while dose measurements continue uninterrupted.</p>
+        <Dialog.Root open={suppressionOpen} onOpenChange={changeSuppressionOpen}>
+          <Dialog.Trigger render={(props) => <Button {...props} variant="primary">Start suppression</Button>} />
+          <Dialog>
+            <Dialog.Title>Timed suppression</Dialog.Title>
+            <Dialog.Description>
+              Suppression lasts from 1 minute up to 24 hours and auto-resumes when the detector returns to NORMAL.
+            </Dialog.Description>
+            <form className="action-form dialog-form" onSubmit={suppress}>
+              <Input label="Station SERID" inputMode="numeric" value={serid} onChange={(e) => setSerid(e.target.value)} />
+              <Input label="Duration (minutes)" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+              <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} />
+              <Input label="Reason" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} />
+              <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} />
+              <div className="form-actions">
+                <Button type="submit" variant="primary">Start suppression</Button>
+                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary">Cancel</Button>} />
+              </div>
+            </form>
+          </Dialog>
+        </Dialog.Root>
       </LayerCard>
       <Feedback state={feedback} />
     </div>
@@ -194,12 +229,12 @@ export function CreateUserPanel({ onCreated }: { onCreated: () => void }) {
       <form className="action-form" onSubmit={submit}>
         <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
         <Input label="Display name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-        <label>Role</label>
-        <select value={role} onChange={(e) => setRole(e.target.value as Role)}>
-          <option value="Viewer">Viewer</option>
-          <option value="Operator">Operator</option>
-          <option value="Administrator">Administrator</option>
-        </select>
+        <Select
+          label="Role"
+          items={{ Viewer: "Viewer", Operator: "Operator", Administrator: "Administrator" }}
+          value={role}
+          onValueChange={(value) => setRole((value ?? "Viewer") as Role)}
+        />
         <Input label="Initial password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
         <Input label="User PIN" type="password" value={userPin} onChange={(e) => setUserPin(e.target.value)} />
         <Input label="Administrator PIN" type="password" value={adminPin} onChange={(e) => setAdminPin(e.target.value)} />
