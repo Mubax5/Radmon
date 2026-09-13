@@ -1,0 +1,74 @@
+import { useEffect, useState } from "react";
+import { LayerCard, Table } from "@cloudflare/kumo";
+import { api, type Station } from "../api";
+import { ErrorCard, LoadingCard, PageHeading } from "../ui";
+
+export function HistoryPage() {
+  const [stations, setStations] = useState<Station[]>([]);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api<Station[]>("/api/v1/web/stations")
+      .then((items) => {
+        setStations(items);
+        setSelected(items[0]?.serid ?? null);
+      })
+      .catch((e) => setError(e.message));
+  }, []);
+
+  useEffect(() => {
+    if (!selected) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    api<Array<Record<string, unknown>>>(`/api/v1/web/stations/${selected}/history?limit=240`)
+      .then((items) => {
+        setRows(items);
+        setError("");
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, [selected]);
+
+  return (
+    <>
+      <PageHeading title="History" description="Recent measurements retained by the central database." />
+      <LayerCard className="filter-card">
+        <label>Station</label>
+        <select value={selected ?? ""} onChange={(e) => setSelected(Number(e.target.value))}>
+          {stations.map((station) => (
+            <option key={station.serid} value={station.serid}>{station.name} — {station.location}</option>
+          ))}
+        </select>
+      </LayerCard>
+      {error ? <ErrorCard message={error} /> : loading ? <LoadingCard /> : (
+        <LayerCard className="table-card">
+          <Table>
+            <Table.Header>
+              <Table.Row>
+                <Table.Head>Time</Table.Head>
+                <Table.Head>Dose rate</Table.Head>
+                <Table.Head>Dose</Table.Head>
+                <Table.Head>Status</Table.Head>
+              </Table.Row>
+            </Table.Header>
+            <Table.Body>
+              {rows.map((row, index) => (
+                <Table.Row key={`${row.dtom}-${index}`}>
+                  <Table.Cell>{String(row.dtom ?? "")}</Table.Cell>
+                  <Table.Cell>{String(row.doserate ?? "")}</Table.Cell>
+                  <Table.Cell>{String(row.dose ?? "")}</Table.Cell>
+                  <Table.Cell>{String(row.stat ?? "")}</Table.Cell>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table>
+        </LayerCard>
+      )}
+    </>
+  );
+}
