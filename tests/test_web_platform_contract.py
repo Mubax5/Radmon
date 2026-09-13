@@ -91,3 +91,13 @@ def test_web_uses_kumo_as_primary_component_system_without_browser_secret_storag
         assert forbidden not in combined.lower()
     assert "localStorage" not in combined
     assert "sessionStorage" not in combined
+
+
+def test_sensitive_alarm_actions_use_kumo_dialogs_and_native_kumo_selects() -> None:
+    actions = (ROOT / "web/src/Actions.tsx").read_text(encoding="utf-8")
+    combined = _frontend_sources()
+    assert "Dialog.Root" in actions
+    assert "Dialog.Trigger" in actions
+    assert "Dialog.Close" in actions
+    assert "<Select" in actions
+    assert "<select" not in combined.lower()
