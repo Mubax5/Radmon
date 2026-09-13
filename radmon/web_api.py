@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import queue
 from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from .security import Role, SecurityStore, UserIdentity
 from .secure_api import SESSION_COOKIE
@@ -34,8 +37,9 @@ def attach_web_api_routes(
     security: SecurityStore,
     repository: Any,
     source_health: Any | None = None,
+    event_broker: Any | None = None,
 ) -> FastAPI:
-    """Authenticated read models for the browser UI."""
+    """Authenticated read models and lightweight browser refresh events."""
 
     viewer = require_role(security, Role.VIEWER)
     admin = require_role(security, Role.ADMINISTRATOR)
@@ -73,6 +77,35 @@ def attach_web_api_routes(
         identity: UserIdentity = Depends(viewer),
     ):
         return repository.history(serid, limit=limit)
+
+    @app.get("/api/v1/web/events")
+    def web_events(identity: UserIdentity = Depends(viewer)):
+        if event_broker is None:
+            raise HTTPException(status_code=503, detail="web event stream unavailable")
+        subscriber = event_broker.subscribe()
+
+        def stream():
+            try:
+                yield 'event: ready\ndata: {"type":"ready"}\n\n'
+                while True:
+                    try:
+                        event = subscriber.get(timeout=15.0)
+                    except queue.Empty:
+                        yield ": heartbeat\n\n"
+                        continue
+                    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                    yield f"data: {payload}\n\n"
+            finally:
+                event_broker.unsubscribe(subscriber)
+
+        return StreamingResponse(
+            stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     @app.get("/api/v1/web/system")
     def system(identity: UserIdentity = Depends(admin)):
