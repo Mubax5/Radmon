@@ -31,6 +31,24 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
   const [suppressPin, setSuppressPin] = useState("");
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
 
+  function resetResponse() {
+    setEventId("");
+    setAction("Confirm");
+    setPic("");
+    setReason("");
+    setPin("");
+    setFeedback(null);
+  }
+
+  function resetSuppression() {
+    setSerid("");
+    setMinutes("15");
+    setSuppressPic("");
+    setSuppressReason("");
+    setSuppressPin("");
+    setFeedback(null);
+  }
+
   async function respond(event: React.FormEvent) {
     event.preventDefault();
     setFeedback(null);
@@ -41,10 +59,13 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
         body: JSON.stringify({ pin, action, pic, reason }),
       });
       setFeedback({ kind: "ok", text: "Alarm response saved." });
-      setPin("");
+      setEventId("");
+      setReason("");
       onChanged();
     } catch (error) {
       setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Response failed" });
+    } finally {
+      setPin("");
     }
   }
 
@@ -66,10 +87,13 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
         }),
       });
       setFeedback({ kind: "ok", text: `Station ${station} suppressed for ${minutes} minutes.` });
-      setSuppressPin("");
+      setSerid("");
+      setSuppressReason("");
       onChanged();
     } catch (error) {
       setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Suppression failed" });
+    } finally {
+      setSuppressPin("");
     }
   }
 
@@ -88,7 +112,10 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
           <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} />
           <Input label="Reason" value={reason} onChange={(e) => setReason(e.target.value)} />
           <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} />
-          <Button type="submit" variant="primary">Submit response</Button>
+          <div className="form-actions">
+            <Button type="submit" variant="primary">Submit response</Button>
+            <Button type="button" variant="secondary" onClick={resetResponse}>Cancel</Button>
+          </div>
         </form>
       </LayerCard>
 
@@ -101,7 +128,10 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
           <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} />
           <Input label="Reason" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} />
           <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} />
-          <Button type="submit" variant="primary">Start suppression</Button>
+          <div className="form-actions">
+            <Button type="submit" variant="primary">Start suppression</Button>
+            <Button type="button" variant="secondary" onClick={resetSuppression}>Cancel</Button>
+          </div>
         </form>
       </LayerCard>
       <Feedback state={feedback} />
@@ -117,6 +147,16 @@ export function CreateUserPanel({ onCreated }: { onCreated: () => void }) {
   const [userPin, setUserPin] = useState("");
   const [adminPin, setAdminPin] = useState("");
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+
+  function reset() {
+    setUsername("");
+    setDisplayName("");
+    setRole("Viewer");
+    setPassword("");
+    setUserPin("");
+    setAdminPin("");
+    setFeedback(null);
+  }
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -136,12 +176,14 @@ export function CreateUserPanel({ onCreated }: { onCreated: () => void }) {
       setFeedback({ kind: "ok", text: `User ${username} created.` });
       setUsername("");
       setDisplayName("");
-      setPassword("");
-      setUserPin("");
-      setAdminPin("");
+      setRole("Viewer");
       onCreated();
     } catch (error) {
       setFeedback({ kind: "error", text: error instanceof Error ? error.message : "User creation failed" });
+    } finally {
+      setPassword("");
+      setUserPin("");
+      setAdminPin("");
     }
   }
 
@@ -161,7 +203,10 @@ export function CreateUserPanel({ onCreated }: { onCreated: () => void }) {
         <Input label="Initial password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
         <Input label="User PIN" type="password" value={userPin} onChange={(e) => setUserPin(e.target.value)} />
         <Input label="Administrator PIN" type="password" value={adminPin} onChange={(e) => setAdminPin(e.target.value)} />
-        <Button type="submit" variant="primary">Create user</Button>
+        <div className="form-actions">
+          <Button type="submit" variant="primary">Create user</Button>
+          <Button type="button" variant="secondary" onClick={reset}>Cancel</Button>
+        </div>
         <Feedback state={feedback} />
       </form>
     </LayerCard>
