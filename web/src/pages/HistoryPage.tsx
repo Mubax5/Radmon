@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { LayerCard, Table } from "@cloudflare/kumo";
+import { useEffect, useMemo, useState } from "react";
+import { LayerCard, Select, Table } from "@cloudflare/kumo";
 import { api, type Station } from "../api";
 import { useWebRefresh } from "../live";
 import { ErrorCard, LoadingCard, PageHeading } from "../ui";
@@ -10,6 +10,10 @@ export function HistoryPage() {
   const [rows, setRows] = useState<Array<Record<string, unknown>>>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const stationItems = useMemo(
+    () => Object.fromEntries(stations.map((station) => [String(station.serid), `${station.name} — ${station.location}`])),
+    [stations],
+  );
 
   useEffect(() => {
     api<Station[]>("/api/v1/web/stations")
@@ -42,12 +46,14 @@ export function HistoryPage() {
     <>
       <PageHeading title="History" description="Recent measurements retained by the central database." />
       <LayerCard className="filter-card">
-        <label>Station</label>
-        <select value={selected ?? ""} onChange={(e) => setSelected(Number(e.target.value))}>
-          {stations.map((station) => (
-            <option key={station.serid} value={station.serid}>{station.name} — {station.location}</option>
-          ))}
-        </select>
+        <Select
+          label="Station"
+          placeholder="Select station…"
+          items={stationItems}
+          value={selected == null ? undefined : String(selected)}
+          onValueChange={(value) => setSelected(value == null ? null : Number(value))}
+          disabled={stations.length === 0}
+        />
       </LayerCard>
       {error ? <ErrorCard message={error} /> : loading ? <LoadingCard /> : (
         <LayerCard className="table-card">
