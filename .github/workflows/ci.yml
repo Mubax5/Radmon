@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libmariadb-dev libegl1 libgl1
@@ -29,12 +31,17 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pyyaml
 
-      - name: Install and build Kumo web frontend
+      - name: Install Kumo web frontend
         working-directory: web
-        run: |
-          npm install --no-audit --no-fund
-          npm run check
-          npm run build
+        run: npm ci
+
+      - name: Type-check Kumo web frontend
+        working-directory: web
+        run: npm run check
+
+      - name: Build Kumo web frontend
+        working-directory: web
+        run: npm run build
 
       - name: Run tests
         shell: bash
