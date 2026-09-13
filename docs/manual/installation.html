@@ -9,7 +9,7 @@
 <body>
   <main>
     <h1>RadMon Installation Guide</h1>
-    <p>Production Windows dipasang melalui <strong>RadMon-Setup.exe</strong>. Installer menempatkan <strong>app\RadMon.exe</strong>, membuat <code>config\.env</code> bila belum ada, mendaftarkan Scheduled Task <strong>RadMon Server</strong>, dan membuka port 8090/3300 hanya untuk LocalSubnet.</p>
+    <p>Production Windows dipasang melalui <strong>RadMon-Setup.exe</strong>. Installer menempatkan <strong>app\RadMon.exe</strong>, membuat <code>config\.env</code> bila belum ada, mendaftarkan Scheduled Task <strong>RadMon Server</strong>, dan membuka hanya gateway TCP 8090 untuk client jaringan. Grafana 3300 tetap loopback-only.</p>
 
     <h2>Layout persistent</h2>
     <pre>RadMon\
@@ -37,12 +37,15 @@
     <h2>URL</h2>
     <pre>http://192.168.1.2:8090/       Grafana monitoring kiosk tanpa login RadMon
 http://192.168.1.2:8090/app    RadMon Control Plane, wajib login
-http://localhost:3300          Grafana admin/editor pada PC server</pre>
+http://localhost:3300          Grafana admin/editor hanya pada PC server</pre>
 
-    <p>Viewer, Operator, dan Administrator semuanya wajib login RadMon. Anonymous hanya melihat Grafana read-only dari network BRIN/LAN yang diizinkan.</p>
+    <p>Client BRIN-NET memakai port 8090 saja. Grafana monitoring diproxy oleh RadMon sehingga browser remote tidak perlu dan tidak diberi akses inbound langsung ke 3300. Viewer, Operator, dan Administrator semuanya wajib login RadMon; anonymous hanya melihat Grafana read-only.</p>
 
     <h2>Grafana persistent</h2>
     <p>Production normal memakai Grafana native, bukan Docker Desktop. Factory dashboard hanya di-seed jika resource belum ada. Dashboard yang sudah tersimpan tidak di-overwrite pada startup. Administrator dapat Edit dan Save dari <code>localhost:3300</code>; hasil Save langsung dipakai monitoring dan tetap ada setelah restart atau upgrade.</p>
+
+    <h2>BRIN-NET</h2>
+    <p>Windows Firewall membuka TCP 8090 untuk routed clients agar VLAN/subnet BRIN-NET tidak dibatasi ke LocalSubnet. Routing/ACL Wi-Fi BRIN tetap harus mengizinkan client menuju <code>192.168.1.2:8090</code>; client isolation atau ACL jaringan yang menolak route harus dibuka oleh pengelola jaringan BRIN.</p>
 
     <h2>24/7 Windows lifecycle</h2>
     <p>Scheduled Task menjalankan <code>app\RadMon.exe --server</code> sebagai SYSTEM saat startup Windows dan mencoba restart otomatis bila proses berhenti. Menutup browser tidak mematikan server.</p>
@@ -57,7 +60,7 @@ gd38 -&gt; 192.168.1.38:3306 / ipradmon</pre>
     <p>RadMon tidak melakukan DDL pada database source production.</p>
 
     <h2>Commissioning</h2>
-    <p>Verifikasi source health, login/RBAC, monitoring Grafana, persistence setelah restart, alarm Response/Silence, report/archive, dan konektivitas lapangan. CI dan smoke test installer tidak menggantikan commissioning hardware nyata.</p>
+    <p>Verifikasi source health, login/RBAC, monitoring Grafana, persistence setelah restart, alarm Response/Silence, report/archive, serta akses dari minimal satu client BRIN-NET selain PC server. CI dan smoke test installer tidak menggantikan commissioning hardware/jaringan nyata.</p>
   </main>
 </body>
 </html>

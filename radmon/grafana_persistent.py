@@ -96,7 +96,7 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
 
     def _native_environment(self, port: int) -> dict[str, str]:
         env = super()._native_environment(port)
-        env["GF_SERVER_HTTP_ADDR"] = "0.0.0.0"
+        env["GF_SERVER_HTTP_ADDR"] = "127.0.0.1"
         env["GF_AUTH_ANONYMOUS_ENABLED"] = "true"
         env["GF_AUTH_ANONYMOUS_ORG_ROLE"] = "Viewer"
         env["GF_AUTH_DISABLE_LOGIN_FORM"] = "false"

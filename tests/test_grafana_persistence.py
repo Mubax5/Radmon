@@ -79,10 +79,10 @@ def test_missing_grafana_resources_are_seeded_editable_without_overwrite(tmp_pat
     assert any("/playlists" in u for u, _ in posts)
 
 
-def test_native_grafana_is_lan_visible_and_persistent(tmp_path: Path) -> None:
+def test_native_grafana_is_loopback_only_and_persistent(tmp_path: Path) -> None:
     settings = Settings(runtime_dir=Path("runtime"), grafana_fallback_port=3300)
     env = PersistentGrafanaBootstrap(settings, project_root=tmp_path)._native_environment(3300)
-    assert env["GF_SERVER_HTTP_ADDR"] == "0.0.0.0"
+    assert env["GF_SERVER_HTTP_ADDR"] == "127.0.0.1"
     assert env["GF_SERVER_HTTP_PORT"] == "3300"
     assert env["GF_AUTH_ANONYMOUS_ENABLED"] == "true"
     assert env["GF_AUTH_ANONYMOUS_ORG_ROLE"] == "Viewer"

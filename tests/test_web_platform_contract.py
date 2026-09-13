@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -17,7 +18,7 @@ def _frontend_sources() -> str:
     )
 
 
-def test_monitoring_landing_is_grafana_only_redirect(tmp_path: Path) -> None:
+def test_monitoring_landing_stays_on_radmon_gateway(tmp_path: Path) -> None:
     app = FastAPI()
     settings = Settings(central_host="192.168.1.2", grafana_fallback_port=3300)
     attach_web_routes(app, settings=settings, web_dist=tmp_path / "missing")
@@ -26,8 +27,85 @@ def test_monitoring_landing_is_grafana_only_redirect(tmp_path: Path) -> None:
 
     assert response.status_code == 307
     assert response.headers["location"] == monitoring_url(settings)
-    assert "3300" in response.headers["location"]
+    assert response.headers["location"].startswith("/playlists/play/")
+    assert "3300" not in response.headers["location"]
+    assert "http://" not in response.headers["location"]
     assert "kiosk" in response.headers["location"].lower()
+
+
+def test_remote_grafana_is_proxied_through_radmon_without_client_credentials(tmp_path: Path) -> None:
+    seen: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"grafana-ok", headers={"content-type": "text/plain"})
+
+    app = FastAPI()
+    settings = Settings(central_host="192.168.1.2", grafana_fallback_port=3300)
+    attach_web_routes(
+        app,
+        settings=settings,
+        web_dist=tmp_path / "missing",
+        grafana_transport=httpx.MockTransport(upstream),
+    )
+    client = TestClient(app, client=("10.50.60.70", 50000))
+    response = client.post(
+        "/api/ds/query?requestId=Q1",
+        content=b"{}",
+        headers={"authorization": "Basic secret", "cookie": "grafana_session=secret"},
+    )
+
+    assert response.status_code == 200
+    assert response.text == "grafana-ok"
+    assert len(seen) == 1
+    forwarded = seen[0]
+    assert str(forwarded.url) == "http://127.0.0.1:3300/api/ds/query?requestId=Q1"
+    assert "authorization" not in forwarded.headers
+    assert "cookie" not in forwarded.headers
+
+
+def test_remote_clients_cannot_open_grafana_login_through_gateway(tmp_path: Path) -> None:
+    calls = 0
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, text="login")
+
+    app = FastAPI()
+    attach_web_routes(
+        app,
+        settings=Settings(grafana_fallback_port=3300),
+        web_dist=tmp_path / "missing",
+        grafana_transport=httpx.MockTransport(upstream),
+    )
+    client = TestClient(app, client=("10.50.60.70", 50000))
+
+    response = client.get("/login")
+
+    assert response.status_code == 404
+    assert calls == 0
+
+
+def test_grafana_redirects_are_rewritten_to_same_origin(tmp_path: Path) -> None:
+    def upstream(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(302, headers={"location": "http://localhost:3300/d/radmon?kiosk=1"})
+
+    app = FastAPI()
+    attach_web_routes(
+        app,
+        settings=Settings(grafana_fallback_port=3300),
+        web_dist=tmp_path / "missing",
+        grafana_transport=httpx.MockTransport(upstream),
+    )
+
+    response = TestClient(app, client=("10.50.60.70", 50000)).get(
+        "/somewhere",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "/d/radmon?kiosk=1"
 
 
 def test_web_app_returns_clear_503_when_build_is_missing(tmp_path: Path) -> None:

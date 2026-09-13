@@ -53,7 +53,7 @@ def test_portable_layout_keeps_configuration_external_and_assets_beside_exe():
     assert "Copy-Item .env " not in workflow
 
 
-def test_installer_registers_resilient_server_at_windows_boot_and_limits_firewall_to_lan():
+def test_installer_registers_resilient_server_and_exposes_only_brin_web_gateway():
     installer = (ROOT / "packaging/RadMon.iss").read_text(encoding="utf-8")
     helper = (ROOT / "packaging/install_server.ps1").read_text(encoding="utf-8")
 
@@ -67,8 +67,9 @@ def test_installer_registers_resilient_server_at_windows_boot_and_limits_firewal
     assert 'New-ScheduledTaskPrincipal -UserId "SYSTEM"' in helper
     assert "-RestartCount 999" in helper
     assert "-RestartInterval" in helper
-    assert "localport=8090" in helper and "localport=3300" in helper
-    assert "remoteip=LocalSubnet" in helper
+    assert "localport=8090" in helper
+    assert "remoteip=any" in helper.lower()
+    assert "localport=3300" not in helper
 
 
 def test_windows_installer_release_has_fixed_unversioned_name():

@@ -4,13 +4,15 @@ RadMon adalah platform monitoring radiasi untuk central PC **`192.168.1.2`**. Pr
 
 ## Surface production
 
-Di network BRIN/LAN yang diizinkan:
+Dari perangkat yang tersambung ke jaringan BRIN dan mempunyai route ke server:
 
 ```text
 http://192.168.1.2:8090/       -> Grafana monitoring fullscreen/kiosk, tanpa login RadMon
 http://192.168.1.2:8090/app    -> RadMon Control Plane, wajib login
-http://localhost:3300          -> Grafana admin/editor di PC server
+http://localhost:3300          -> Grafana admin/editor hanya di PC server
 ```
+
+Port **8090** adalah satu-satunya gateway yang dibuka Windows Firewall untuk client jaringan. Grafana native tetap bind ke loopback `127.0.0.1:3300`; browser remote menerima Grafana melalui reverse proxy RadMon pada origin yang sama (`:8090`), sehingga user BRIN-NET tidak perlu koneksi langsung ke port 3300.
 
 Anonymous hanya mendapat monitoring Grafana read-only. **Viewer tetap wajib login RadMon**. Role aplikasi:
 
@@ -39,7 +41,7 @@ RadMon\
   reports\
 ```
 
-`config\.env`, `runtime`, `archives`, dan `reports` adalah data lokal dan **tidak ditimpa saat upgrade**. Installer mendaftarkan Scheduled Task `RadMon Server` saat boot Windows sebagai SYSTEM dengan restart otomatis bila proses berhenti. Firewall hanya membuka port `8090` dan `3300` untuk `LocalSubnet`.
+`config\.env`, `runtime`, `archives`, dan `reports` adalah data lokal dan **tidak ditimpa saat upgrade**. Installer mendaftarkan Scheduled Task `RadMon Server` saat boot Windows sebagai SYSTEM dengan restart otomatis bila proses berhenti. Firewall membuka TCP `8090` untuk routed clients agar VLAN/subnet BRIN-NET dapat mencapai server; `3300` tidak mempunyai inbound rule. Routing/ACL BRIN tetap menjadi boundary jaringan di luar host Windows.
 
 ### First installation
 
@@ -61,7 +63,7 @@ Production normal **tidak memerlukan Docker Desktop**. `RADMON_GRAFANA_DOCKER_FA
 
 ## Grafana editable dan persistent
 
-Grafana production menggunakan port stabil **3300**. Dashboard/playlist default hanya menjadi **initial seed**. Startup berikutnya tidak mengembalikan dashboard ke template Python.
+Grafana production menggunakan port stabil **3300** tetapi hanya pada loopback server. Dashboard/playlist default hanya menjadi **initial seed**. Startup berikutnya tidak mengembalikan dashboard ke template Python.
 
 Alur editing:
 
@@ -72,12 +74,12 @@ localhost:3300 -> login Grafana (default admin/admin) -> Edit -> Save
                                   state tersimpan di runtime/grafana
                                                 |
                                                 v
-                        monitoring anonymous menampilkan dashboard yang sama
+              http://192.168.1.2:8090/ menampilkan dashboard yang sama
 ```
 
 Jika dashboard hasil versi RadMon lama masih `editable=false`, bootstrap baru melakukan migrasi satu kali dengan mempertahankan JSON dashboard yang tersimpan (layout/panel/query) dan hanya membuka flag edit. Sesudah itu dashboard Grafana menjadi authoritative. Restart RadMon, Grafana, atau Windows **tidak rollback hasil Save**.
 
-Anonymous Grafana tetap role Viewer; form login Grafana tetap tersedia di `localhost:3300` untuk Administrator. Landing monitoring `/` langsung redirect ke Playlist kiosk sehingga tidak mempunyai tombol Sign in RadMon, sidebar RadMon, atau wrapper aplikasi.
+Anonymous Grafana tetap role Viewer; form login Grafana tersedia langsung di `localhost:3300` untuk Administrator pada Dell. Landing monitoring `/` redirect ke Playlist kiosk melalui gateway `8090`. Gateway remote membuang cookie/Authorization Grafana dan memblokir endpoint login/admin, sehingga anonymous monitoring tidak berubah menjadi jalur editor.
 
 ## Database production
 
@@ -176,4 +178,4 @@ python -m radmon.dev_app --source dummy
 
 ## Verification vs commissioning
 
-GitHub Actions memverifikasi Python tests, frontend TypeScript/Kumo build, compile validation, kontrak payload Grafana, Windows `RadMon.exe`, installer, dan packaged smoke test. Itu **bukan** pengganti commissioning nyata di PC `.2`; koneksi `.50/.52/.38`, Grafana native, alarm write-through, firewall/network BRIN, dan source hardware harus divalidasi sebelum penggunaan operasional penuh.
+GitHub Actions memverifikasi Python tests, frontend TypeScript/Kumo build, compile validation, kontrak payload Grafana, Windows `RadMon.exe`, installer, dan packaged smoke test. Itu **bukan** pengganti commissioning nyata di PC `.2`; koneksi `.50/.52/.38`, Grafana native, alarm write-through, routing BRIN-NET menuju `192.168.1.2:8090`, dan source hardware harus divalidasi sebelum penggunaan operasional penuh.

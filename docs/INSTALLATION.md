@@ -2,7 +2,7 @@
 
 ## Production Windows
 
-Production RadMon dipasang dengan **`RadMon-Setup.exe`** pada central PC `192.168.1.2`. Installer membutuhkan Administrator karena ia mendaftarkan Scheduled Task 24/7 dan firewall rule LocalSubnet.
+Production RadMon dipasang dengan **`RadMon-Setup.exe`** pada central PC `192.168.1.2`. Installer membutuhkan Administrator karena ia mendaftarkan Scheduled Task 24/7 dan firewall gateway untuk client BRIN.
 
 Struktur instalasi:
 
@@ -27,7 +27,7 @@ RadMon\
 
 1. Jalankan `RadMon-Setup.exe` sebagai Administrator.
 2. Installer membuat Scheduled Task **RadMon Server** dengan trigger Windows startup, user SYSTEM, restart otomatis, dan tanpa batas runtime.
-3. Installer membuat firewall inbound TCP `8090` dan `3300` hanya untuk `LocalSubnet`.
+3. Installer membuka inbound TCP **8090** untuk routed clients. Port Grafana **3300 tidak dibuka** dan Grafana bind ke loopback `127.0.0.1`.
 4. Edit `config\.env`.
 5. Isi central/source database credential serta bootstrap Administrator bila security DB masih kosong.
 
@@ -62,7 +62,7 @@ Sesudah `.env` valid, restart Scheduled Task `RadMon Server` atau reboot PC. Ser
 
 ## URL production
 
-Dari network BRIN/LAN yang diizinkan:
+Dari perangkat yang tersambung ke BRIN-NET dan mempunyai route ke server:
 
 ```text
 http://192.168.1.2:8090/       monitoring Grafana fullscreen/kiosk, tanpa login RadMon
@@ -75,7 +75,11 @@ Di PC server:
 http://localhost:3300          Grafana normal/admin/editor
 ```
 
+Browser remote tidak mengakses `3300` langsung. RadMon reverse-proxy request Grafana melalui gateway `8090`, membuang credential/cookie Grafana dari request remote, memblokir endpoint login/admin Grafana, dan menulis ulang redirect localhost agar tetap berada pada origin `192.168.1.2:8090`.
+
 Viewer, Operator, dan Administrator semuanya merupakan user RadMon yang wajib login. Anonymous hanya boleh melihat Grafana monitoring.
+
+Jika BRIN-NET berada di VLAN/subnet berbeda, Windows host sudah tidak membatasi ke `LocalSubnet`; tetapi routing/ACL Wi-Fi BRIN tetap harus mengizinkan client menuju `192.168.1.2:8090`. Software RadMon tidak dapat melewati client isolation atau ACL jaringan yang menolak route tersebut.
 
 ## Grafana native dan persistence
 
@@ -85,7 +89,7 @@ Data Grafana berada di persistent runtime storage. Bootstrap hanya membuat datas
 
 Administrator dapat login ke `http://localhost:3300` menggunakan akun Grafana (default `admin/admin` bila belum diganti), mengedit dashboard, lalu Save. Monitoring anonymous memakai UID/dashboard yang sama sehingga perubahan langsung terlihat dan tetap ada setelah restart RadMon/Grafana/Windows maupun upgrade installer.
 
-Port production Grafana sengaja stabil di `3300`; RadMon tidak diam-diam berpindah ke 3301/3302. Bila 3300 dipakai proses asing, perbaiki konflik port tersebut.
+Port production Grafana sengaja stabil di `3300`, tetapi hanya loopback. Bila 3300 dipakai proses asing, perbaiki konflik port tersebut.
 
 ## Headless 24/7 mode
 
@@ -95,7 +99,7 @@ Scheduled Task menjalankan:
 app\RadMon.exe --server
 ```
 
-Mode ini menjalankan collector LAN, secure API, archive/alarm policy, web platform, dan bootstrap Grafana tanpa membuka PySide desktop. Task Scheduler dikonfigurasi `StartWhenAvailable` dan restart setiap satu menit bila proses berhenti.
+Mode ini menjalankan collector LAN, secure API, archive/alarm policy, web platform, Grafana gateway, dan bootstrap Grafana tanpa membuka PySide desktop. Task Scheduler dikonfigurasi `StartWhenAvailable` dan restart setiap satu menit bila proses berhenti.
 
 Shortcut **RadMon** hanya membuka browser ke authenticated web control plane. Shortcut **RadMon Monitoring** membuka landing monitoring anonymous. Menutup browser tidak mematikan server.
 
@@ -104,8 +108,8 @@ Shortcut **RadMon** hanya membuka browser ke authenticated web control plane. Sh
 1. Backup instalasi production.
 2. Jalankan `RadMon-Setup.exe` terbaru sebagai Administrator.
 3. Installer mengganti `app\` tetapi mempertahankan `config\.env`, `runtime`, `archives`, dan `reports`.
-4. Scheduled Task didaftarkan ulang dan dijalankan kembali.
-5. Verifikasi `/`, `/app`, Grafana `localhost:3300`, source health, alarm response/suppression, dan report.
+4. Scheduled Task dan firewall gateway didaftarkan ulang dan dijalankan kembali.
+5. Verifikasi `/`, `/app`, Grafana `localhost:3300`, source health, alarm response/suppression, dan report dari PC server serta satu client BRIN-NET lain.
 
 Jangan mengganti label `gd50`, `gd52`, atau `gd38`; checkpoint dan policy state menggunakan `source_id` tersebut.
 
@@ -126,8 +130,8 @@ CI dan smoke test memastikan source, Kumo frontend, executable, serta installer 
 
 - konektivitas `.50`, `.52`, `.38`;
 - central MariaDB `ipradmon`;
-- Grafana native pada port 3300 dan persistence setelah restart;
-- anonymous monitoring hanya dari network BRIN yang diizinkan;
+- Grafana native pada loopback 3300 dan persistence setelah restart;
+- akses `192.168.1.2:8090` dari client BRIN-NET di luar PC server;
 - login Viewer/Operator/Administrator dan backend RBAC;
 - response/silence source `i_flag=1` tanpa mengubah `ack`;
 - source health/recovery;

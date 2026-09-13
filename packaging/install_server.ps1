@@ -32,10 +32,12 @@ foreach ($rule in @("RadMon Web", "RadMon Grafana Monitoring")) {
     & $netsh advfirewall firewall delete rule name=$rule | Out-Null
 }
 
-& $netsh advfirewall firewall add rule name="RadMon Web" dir=in action=allow protocol=TCP localport=8090 remoteip=LocalSubnet profile=any | Out-Null
+# 8090 is the single BRIN-facing gateway. Using Any here allows routed BRIN-NET
+# VLANs/subnets to reach the Dell; upstream BRIN routing/ACL remains the network boundary.
+& $netsh advfirewall firewall add rule name="RadMon Web" dir=in action=allow protocol=TCP localport=8090 remoteip=any profile=any | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Failed to open RadMon web port 8090" }
 
-& $netsh advfirewall firewall add rule name="RadMon Grafana Monitoring" dir=in action=allow protocol=TCP localport=3300 remoteip=LocalSubnet profile=any | Out-Null
-if ($LASTEXITCODE -ne 0) { throw "Failed to open Grafana monitoring port 3300" }
+# Grafana 3300 intentionally has no inbound firewall rule and binds loopback-only.
+# Remote monitoring is reverse-proxied through RadMon on port 8090.
 
 Start-ScheduledTask -TaskName $taskName
