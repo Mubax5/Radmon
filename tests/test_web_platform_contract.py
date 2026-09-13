@@ -188,9 +188,9 @@ def test_branding_uses_centered_brin_logo_and_no_letter_r_badges() -> None:
     css = (ROOT / "web/src/radmon.css").read_text(encoding="utf-8")
     combined = auth + "\n" + layout
 
-    assert (ROOT / "web/src/assets/brin-logo.svg").is_file()
-    assert auth.count("brin-logo.svg") == 1
-    assert layout.count("brin-logo.svg") == 1
+    assert (ROOT / "web/src/assets/brin-logo.png").is_file()
+    assert auth.count("brin-logo.png") == 1
+    assert layout.count("brin-logo.png") == 1
     assert "brand-mark" not in combined
     assert "brand-mark" not in css
     assert re.search(r">\s*R\s*<", combined) is None

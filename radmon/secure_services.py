@@ -15,6 +15,7 @@ from .lan import LanSource, RemoteMariaDBSource, parse_lan_sources
 from .remote_alarm import AlarmControlService, RemoteAlarmMirror
 from .runtime_status import RuntimeStatusProjector
 from .security import SecurityStore
+from .security_migration import migrate_legacy_users
 from .source_health import SourceHealthService
 from .user_admin import UserAdminService
 
@@ -42,6 +43,7 @@ def security_db_path(settings) -> Path:
 
 def build_secure_services(settings) -> SecureServices:
     security = SecurityStore(security_db_path(settings))
+    migrate_legacy_users(security)
     logger = MariaApplicationLogWriter(settings)
     audit = AuditTrail(security, logger)
 

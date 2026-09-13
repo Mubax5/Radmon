@@ -21,30 +21,18 @@ button, input, select { font: inherit; }
 }
 
 .login-card { width: min(430px, 100%); padding: 32px; }
-.login-card h1 { margin: 20px 0 8px; font-size: 26px; font-weight: 600; letter-spacing: -.02em; }
-.login-card p { margin: 0 0 24px; color: #6b7280; font-size: 14px; line-height: 1.55; }
+.login-brand { display: flex; align-items: center; justify-content: center; margin-bottom: 20px; }
+.login-brand img { display: block; width: min(280px, 84%); height: auto; }
+.login-card h1 { margin: 0 0 8px; text-align: center; font-size: 26px; font-weight: 600; letter-spacing: -.02em; }
+.login-card > p { margin: 0 0 24px; text-align: center; color: #6b7280; font-size: 14px; line-height: 1.55; }
 .login-form { display: grid; gap: 18px; }
 .form-error { border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; padding: 10px 12px; border-radius: 6px; font-size: 13px; }
 .form-success { border: 1px solid #bbf7d0; background: #f0fdf4; color: #166534; padding: 10px 12px; border-radius: 6px; font-size: 13px; }
 
-.brand-mark {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: #f6821f;
-  color: white;
-  font-weight: 700;
-  font-size: 20px;
-}
-.brand-mark.small { width: 32px; height: 32px; border-radius: 6px; font-size: 15px; flex: 0 0 auto; }
-
 .app-shell { min-height: 100vh; display: flex; background: #f7f7f8; }
-.sidebar-brand { display: flex; gap: 10px; align-items: center; padding: 4px 2px; }
-.sidebar-brand > div:last-child { display: grid; line-height: 1.15; }
-.sidebar-brand strong { font-size: 14px; font-weight: 600; }
-.sidebar-brand span:last-child { font-size: 11px; color: #6b7280; letter-spacing: .08em; text-transform: uppercase; }
+.sidebar-brand { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 5px 2px; }
+.sidebar-logo { display: block; width: 112px; max-width: calc(100% - 58px); height: auto; flex: 0 1 auto; }
+.sidebar-brand strong { font-size: 14px; font-weight: 600; white-space: nowrap; }
 .account-card { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px; }
 .account-card > div { min-width: 0; display: grid; }
 .account-card strong { overflow: hidden; text-overflow: ellipsis; font-size: 13px; white-space: nowrap; }
@@ -93,4 +81,6 @@ button, input, select { font: inherit; }
   .content-shell { padding: 18px 14px 40px; }
   .page-heading { display: grid; }
   .metric-grid, .system-metrics { grid-template-columns: 1fr; }
+  .login-card { padding: 26px 22px; }
+  .login-brand img { width: min(250px, 88%); }
 }

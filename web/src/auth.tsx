@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Input, LayerCard } from "@cloudflare/kumo";
+import brinLogo from "./assets/brin-logo.png";
 import {
   currentUser,
   login as loginRequest,
@@ -87,9 +88,11 @@ export function LoginPage() {
   return (
     <main className="login-shell">
       <LayerCard className="login-card">
-        <div className="brand-mark">R</div>
+        <div className="login-brand">
+          <img src={brinLogo} alt="BRIN" />
+        </div>
         <h1>Sign in to RadMon</h1>
-        <p>Radiation monitoring control plane for authorized BRIN users.</p>
+        <p>Radiation monitoring control plane for authorized users.</p>
         <form onSubmit={submit} className="login-form">
           <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
           <Input label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />

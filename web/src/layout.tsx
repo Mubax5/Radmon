@@ -12,6 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { Button, Sidebar } from "@cloudflare/kumo";
 import type { Role, SessionUser } from "./api";
+import brinLogo from "./assets/brin-logo.png";
 
 export type AppRoute = "overview" | "stations" | "history" | "archives" | "alarms" | "users" | "system";
 
@@ -76,8 +77,8 @@ export function AppLayout({
         <Sidebar>
           <Sidebar.Header>
             <div className="sidebar-brand">
-              <span className="brand-mark small">R</span>
-              <div><strong>RadMon</strong><span>BRIN</span></div>
+              <img className="sidebar-logo" src={brinLogo} alt="BRIN" />
+              <strong>RadMon</strong>
             </div>
           </Sidebar.Header>
           <Sidebar.Content>

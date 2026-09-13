@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from radmon.security import Role, SecurityStore, SecurityError
+from radmon.security_migration import import_users_from_database, migrate_legacy_users
 
 
 def test_user_password_and_pin_are_hashed_and_verified(tmp_path):
@@ -96,7 +97,7 @@ def test_empty_production_store_imports_legacy_python_users_without_rehash(tmp_p
     production = SecurityStore(tmp_path / "production" / "radmon-security.db")
     assert production.authenticate("admin", "OldPassword123!") is None
 
-    imported = production.import_users_from_database(legacy.path)
+    imported = import_users_from_database(production, legacy.path)
 
     assert imported == 1
     identity = production.authenticate("admin", "OldPassword123!")
@@ -112,6 +113,18 @@ def test_legacy_import_never_merges_into_nonempty_production_store(tmp_path):
     production = SecurityStore(tmp_path / "production" / "radmon-security.db")
     production.create_user("current", "Current", Role.ADMINISTRATOR, "CurrentPass123!", "2468")
 
-    assert production.import_users_from_database(legacy.path) == 0
+    assert import_users_from_database(production, legacy.path) == 0
     assert production.authenticate("legacy", "LegacyPass123!") is None
     assert production.authenticate("current", "CurrentPass123!") is not None
+
+
+def test_legacy_migration_honors_explicit_security_database(tmp_path, monkeypatch):
+    legacy = SecurityStore(tmp_path / "old-checkout" / "runtime" / "radmon-security.db")
+    legacy.create_user("operator", "Operator", Role.OPERATOR, "LegacyPass123!", "1357")
+    production = SecurityStore(tmp_path / "installed" / "runtime" / "radmon-security.db")
+    monkeypatch.setenv("RADMON_LEGACY_SECURITY_DB", str(legacy.path))
+
+    migrated = migrate_legacy_users(production)
+
+    assert migrated == legacy.path.resolve()
+    assert production.authenticate("operator", "LegacyPass123!") is not None
