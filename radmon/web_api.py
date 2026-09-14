@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 import json
 import queue
 from typing import Any, Callable
@@ -31,6 +32,29 @@ def require_role(security: SecurityStore, minimum: Role) -> Callable[[Request], 
     return dependency
 
 
+def _measurement_is_stale(row: dict[str, Any], station: dict[str, Any]) -> bool:
+    """Apply device max-idle semantics when that metadata is available."""
+    if "maxidlemin" not in station:
+        return False
+
+    measured_at = row.get("dtom")
+    if isinstance(measured_at, str):
+        try:
+            measured_at = datetime.fromisoformat(measured_at.replace("Z", "+00:00"))
+        except ValueError:
+            return True
+    if not isinstance(measured_at, datetime):
+        return True
+
+    try:
+        max_idle_minutes = max(1, int(station.get("maxidlemin") or 30))
+    except (TypeError, ValueError):
+        max_idle_minutes = 30
+
+    now = datetime.now(measured_at.tzinfo) if measured_at.tzinfo is not None else datetime.now()
+    return (now - measured_at) > timedelta(minutes=max_idle_minutes)
+
+
 def attach_web_api_routes(
     app: FastAPI,
     *,
@@ -56,7 +80,9 @@ def attach_web_api_routes(
             if row is not None:
                 dose_rate = float(row.get("doserate") or 0.0)
                 measured_at = row.get("dtom")
-                if dose_rate >= float(station.get("alarmlevel") or 0.0):
+                if _measurement_is_stale(row, station):
+                    status = "offline"
+                elif dose_rate >= float(station.get("alarmlevel") or 0.0):
                     status = "alarm"
                 elif dose_rate >= float(station.get("warnlevel") or 0.0):
                     status = "warning"
