@@ -72,6 +72,36 @@ def test_installer_registers_resilient_server_and_exposes_only_brin_web_gateway(
     assert "localport=3300" not in helper
 
 
+def test_installer_stops_existing_runtime_before_replacing_app_tree():
+    installer = (ROOT / "packaging/RadMon.iss").read_text(encoding="utf-8")
+    stop_helper_path = ROOT / "packaging/stop_server.ps1"
+
+    assert stop_helper_path.exists(), "upgrade needs a pre-install stop helper"
+    helper = stop_helper_path.read_text(encoding="utf-8")
+
+    assert 'Source: "packaging\\stop_server.ps1"; Flags: dontcopy' in installer
+    assert "function PrepareToInstall" in installer
+    assert "ExtractTemporaryFile('stop_server.ps1')" in installer
+    assert "ewWaitUntilTerminated" in installer
+    assert '-AppDir "' in installer
+
+    assert '$taskName = "RadMon Server"' in helper
+    assert "Stop-ScheduledTask" in helper
+    assert "Unregister-ScheduledTask" in helper
+    assert "Win32_Process" in helper
+    assert "$AppDir" in helper
+    assert "Stop-Process" in helper
+
+
+def test_windows_installer_smoke_tests_upgrade_over_running_server():
+    workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
+
+    assert "Smoke test installer upgrade over running RadMon" in workflow
+    assert 'Get-ScheduledTask -TaskName "RadMon Server"' in workflow
+    assert "RadMon Server process did not start before upgrade smoke test" in workflow
+    assert "RadMon installer upgrade smoke test failed" in workflow
+
+
 def test_windows_installer_release_has_fixed_unversioned_name():
     installer_path = ROOT / "packaging/RadMon.iss"
     assert installer_path.exists(), "Inno Setup installer definition is required"

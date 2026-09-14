@@ -37,6 +37,7 @@ Source: "portable\RadMon\config\.env.example"; DestDir: "{app}\config"; DestName
 Source: "portable\RadMon\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "portable\RadMon\SHA256SUMS.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "packaging\install_server.ps1"; DestDir: "{tmp}"; Flags: ignoreversion deleteafterinstall
+Source: "packaging\stop_server.ps1"; Flags: dontcopy
 
 [Icons]
 Name: "{autoprograms}\RadMon"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--open-web"; WorkingDir: "{app}"
@@ -52,3 +53,34 @@ Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""RadMon Server"""; Flags:
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /F /TN ""RadMon Server"""; Flags: runhidden; RunOnceId: "DeleteRadMonServer"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""RadMon Web"""; Flags: runhidden; RunOnceId: "DeleteRadMonWebFirewall"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""RadMon Grafana Monitoring"""; Flags: runhidden; RunOnceId: "DeleteRadMonGrafanaFirewall"
+
+[Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+  PowerShellPath: String;
+  ScriptPath: String;
+  AppDir: String;
+begin
+  Result := '';
+  ExtractTemporaryFile('stop_server.ps1');
+  PowerShellPath := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+  ScriptPath := ExpandConstant('{tmp}\stop_server.ps1');
+  AppDir := ExpandConstant('{app}\app');
+
+  if not Exec(
+    PowerShellPath,
+    '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + ScriptPath + '" -AppDir "' + AppDir + '"',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  ) then
+  begin
+    Result := 'Tidak dapat menjalankan pre-upgrade shutdown RadMon.';
+    exit;
+  end;
+
+  if ResultCode <> 0 then
+    Result := 'RadMon yang sedang berjalan tidak dapat dihentikan sebelum upgrade (exit code ' + IntToStr(ResultCode) + ').';
+end;

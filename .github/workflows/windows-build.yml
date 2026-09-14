@@ -118,6 +118,45 @@ jobs:
             throw "Installed RadMon.exe smoke test failed with exit code $($app.ExitCode)"
           }
 
+      - name: Smoke test installer upgrade over running RadMon
+        shell: pwsh
+        run: |
+          $installRoot = Join-Path $env:RUNNER_TEMP "RadMon-Install-Test"
+          $installedExe = Join-Path $installRoot "app\RadMon.exe"
+          $task = Get-ScheduledTask -TaskName "RadMon Server" -ErrorAction Stop
+          if ($null -eq $task) {
+            throw "RadMon Server scheduled task was not registered by the first install"
+          }
+
+          Start-ScheduledTask -TaskName "RadMon Server"
+          $deadline = [DateTime]::UtcNow.AddSeconds(15)
+          $serverProcess = $null
+          do {
+            Start-Sleep -Milliseconds 500
+            $serverProcess = @(
+              Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.ExecutablePath -and ([System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -eq [System.IO.Path]::GetFullPath($installedExe))
+                }
+            ) | Select-Object -First 1
+          } while ($null -eq $serverProcess -and [DateTime]::UtcNow -lt $deadline)
+
+          if ($null -eq $serverProcess) {
+            throw "RadMon Server process did not start before upgrade smoke test"
+          }
+
+          $upgrade = Start-Process -FilePath "installer\RadMon-Setup.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=$installRoot" -Wait -PassThru
+          if ($upgrade.ExitCode -ne 0) {
+            throw "RadMon installer upgrade smoke test failed with exit code $($upgrade.ExitCode)"
+          }
+          if (-not (Test-Path $installedExe)) {
+            throw "RadMon installer upgrade removed $installedExe"
+          }
+          $taskAfterUpgrade = Get-ScheduledTask -TaskName "RadMon Server" -ErrorAction Stop
+          if ($null -eq $taskAfterUpgrade) {
+            throw "RadMon Server scheduled task was not restored after upgrade"
+          }
+
       - name: Write installer checksum
         shell: pwsh
         run: |
