@@ -128,8 +128,8 @@ def parse_lan_sources() -> list[LanSource]:
     raw = os.getenv("RADMON_LAN_SOURCES", "").strip()
     if not raw:
         return []
-    user = os.getenv("RADMON_LAN_DB_USER", "").strip()
-    password = os.getenv("RADMON_LAN_DB_PASSWORD", "")
+    user = os.getenv("RADMON_LAN_DB_USER", "").strip() or os.getenv("RADMON_DB_USER", "root").strip()
+    password = os.getenv("RADMON_LAN_DB_PASSWORD", "") or os.getenv("RADMON_DB_PASSWORD", "")
     database = os.getenv("RADMON_LAN_DB_NAME", "ipradmon").strip() or "ipradmon"
     port = int(os.getenv("RADMON_LAN_DB_PORT", "3306"))
     result: list[LanSource] = []
