@@ -8,15 +8,23 @@ from radmon.grafana_persistent import PersistentGrafanaBootstrap
 from radmon.grafana_tv import DASHBOARD_UIDS, PLAYLIST_UID
 
 
-def test_existing_grafana_resources_are_never_overwritten(tmp_path: Path) -> None:
-    bootstrap = PersistentGrafanaBootstrap(Settings(), project_root=tmp_path)
-    writes: list[tuple[str, str]] = []
+def test_existing_grafana_refreshes_datasource_credentials_without_overwriting_saved_resources(tmp_path: Path) -> None:
+    settings = Settings(
+        db_host="127.0.0.1",
+        db_port=3306,
+        db_user="radmon_reader",
+        db_password="current-secret",
+        db_name="ipradmon",
+    )
+    bootstrap = PersistentGrafanaBootstrap(settings, project_root=tmp_path)
+    writes: list[tuple[str, str, dict]] = []
 
     def request(url: str, *, method: str = "GET", payload=None, use_auth=True):
         if method != "GET":
-            writes.append((method, url))
+            writes.append((method, url, payload or {}))
+            return {"status": "ok"}
         if "/api/datasources/uid/" in url:
-            return {"uid": "ipradmon-mysql"}
+            return {"uid": "ipradmon-mysql", "name": "ipradmon"}
         if "/api/dashboards/uid/" in url:
             return {"dashboard": {"uid": url.rsplit("/", 1)[-1], "editable": True, "panels": [{"id": 99}]}}
         if "/apis/playlist.grafana.app/" in url:
@@ -25,8 +33,15 @@ def test_existing_grafana_resources_are_never_overwritten(tmp_path: Path) -> Non
 
     bootstrap._request_json = request  # type: ignore[method-assign]
     assert bootstrap._provision_via_api("http://localhost:3300") is True
-    assert bootstrap._provision_via_api("http://localhost:3300") is True
-    assert writes == []
+
+    assert len(writes) == 1
+    method, url, payload = writes[0]
+    assert method == "PUT"
+    assert url.endswith("/api/datasources/uid/ipradmon-mysql")
+    assert payload["url"] == "127.0.0.1:3306"
+    assert payload["database"] == "ipradmon"
+    assert payload["user"] == "radmon_reader"
+    assert payload["secureJsonData"]["password"] == "current-secret"
 
 
 def test_legacy_readonly_dashboard_is_unlocked_without_restoring_factory_layout(tmp_path: Path) -> None:
