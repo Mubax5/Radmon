@@ -14,7 +14,7 @@ function RadMonApplication() {
   const route = useAppRoute(user);
 
   if (loading) {
-    return <main className="login-shell"><LayerCard className="login-card">Loading RadMon…</LayerCard></main>;
+    return <main className="login-shell"><LayerCard className="login-card">Memuat RadMon…</LayerCard></main>;
   }
   if (!user) return <LoginPage />;
 
