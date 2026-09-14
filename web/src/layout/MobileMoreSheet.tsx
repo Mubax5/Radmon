@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Button, Dialog } from "@cloudflare/kumo";
+import { DotsThree, MonitorPlay, SignOut } from "@phosphor-icons/react";
 import type { SessionUser } from "../api";
 import {
   allowedRoutes,
@@ -49,15 +50,17 @@ export function MobileMoreSheet({
             type="button"
             className={`mobile-nav-button${active ? " is-active" : ""}`}
             aria-current={active ? "page" : undefined}
+            aria-label="Lainnya"
           >
-            More
+            <DotsThree size={22} weight="bold" className="mobile-nav-icon nav-icon" aria-hidden />
+            <span className="mobile-nav-label">Lainnya</span>
           </button>
         )}
       />
       <Dialog className="radmon-dialog" style={{ zIndex: 90 }}>
-        <Dialog.Title>More</Dialog.Title>
+        <Dialog.Title>Lainnya</Dialog.Title>
         <Dialog.Description>
-          Additional RadMon views and account actions for {user.display_name}.
+          Halaman tambahan dan tindakan akun RadMon untuk {user.display_name}.
         </Dialog.Description>
         <div
           className="mobile-more-sheet"
@@ -81,8 +84,14 @@ export function MobileMoreSheet({
             </div>
           ) : null}
           <div className="mobile-more-actions">
-            <Button variant="secondary" onClick={openMonitoring}>Full monitoring</Button>
-            <Button variant="secondary" onClick={() => void signOut()}>Sign out</Button>
+            <Button variant="secondary" onClick={openMonitoring}>
+              <MonitorPlay size={18} weight="regular" aria-hidden />
+              Monitoring penuh
+            </Button>
+            <Button variant="secondary" onClick={() => void signOut()}>
+              <SignOut size={18} weight="regular" aria-hidden />
+              Keluar
+            </Button>
           </div>
         </div>
       </Dialog>
