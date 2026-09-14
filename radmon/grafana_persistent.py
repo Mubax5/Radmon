@@ -36,13 +36,23 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
     def _provision_via_api(self, base_url: str) -> bool:
         base = base_url.rstrip("/")
         datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
+        datasource_payload = self._datasource_payload()
         try:
             self._request_json(datasource_endpoint)
         except Exception:
             self._request_json(
                 f"{base}/api/datasources",
                 method="POST",
-                payload=self._datasource_payload(),
+                payload=datasource_payload,
+            )
+        else:
+            # Dashboard state is persistent and operator-owned, but datasource
+            # connection settings must follow the current RadMon config. This
+            # also repairs credentials after an installer upgrade or .env edit.
+            self._request_json(
+                datasource_endpoint,
+                method="PUT",
+                payload=datasource_payload,
             )
 
         for factory_dashboard in self._dashboard_payloads():
