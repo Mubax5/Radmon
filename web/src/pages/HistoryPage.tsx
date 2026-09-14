@@ -49,7 +49,7 @@ export function HistoryPage() {
           : items[0]?.serid ?? null;
         setSelected(initial);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Unable to load stations"));
+      .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat stasiun"));
   }, []);
 
   function changeStation(value: string | number | null | undefined) {
@@ -74,7 +74,7 @@ export function HistoryPage() {
         setRows(items);
         setError("");
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Unable to load history"))
+      .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat riwayat"))
       .finally(() => setLoading(false));
   };
 
@@ -103,11 +103,11 @@ export function HistoryPage() {
 
   return (
     <div className="page-stack">
-      <PageHeading title="History" description="Recent central measurements, trend, and range statistics for a selected station." />
+      <PageHeading title="Riwayat" description="Measurement terbaru, tren, dan statistik rentang untuk stasiun yang dipilih." />
       <LayerCard className="filter-card history-filter">
         <Select
-          label="Station"
-          placeholder="Select station…"
+          label="Stasiun"
+          placeholder="Pilih stasiun…"
           items={stationItems}
           value={selected == null ? undefined : String(selected)}
           onValueChange={changeStation}
@@ -118,29 +118,29 @@ export function HistoryPage() {
       {loading ? <LoadingCard /> : (
         <>
           <div className="metric-grid history-summary">
-            <MetricCard label="Latest" value={fmt(history.latest)} />
+            <MetricCard label="Terbaru" value={fmt(history.latest)} />
             <MetricCard label="Minimum" value={fmt(history.min)} />
-            <MetricCard label="Maximum" value={fmt(history.max)} />
-            <MetricCard label="Average" value={fmt(history.average)} />
+            <MetricCard label="Maksimum" value={fmt(history.max)} />
+            <MetricCard label="Rata-rata" value={fmt(history.average)} />
           </div>
 
           <PageSection
-            title="Dose-rate trend"
-            description={`${history.points.length} measurements loaded from the central database.`}
+            title="Tren dose rate"
+            description={`${history.points.length} measurement dimuat dari database central.`}
           >
             <LayerCard className="action-card">
               <TrendChart points={history.points} unit={unit} />
             </LayerCard>
           </PageSection>
 
-          <PageSection title="Recent measurements" description="Most recent records are listed first.">
+          <PageSection title="Rekaman measurement terbaru" description="Rekaman terbaru ditampilkan lebih dulu.">
             <ResponsiveDataView
               desktop={(
                 <LayerCard className="table-card">
                   <Table>
                     <Table.Header>
                       <Table.Row>
-                        <Table.Head>Time</Table.Head>
+                        <Table.Head>Waktu</Table.Head>
                         <Table.Head>Dose rate</Table.Head>
                         <Table.Head>Dose</Table.Head>
                         <Table.Head>Status</Table.Head>
@@ -174,7 +174,7 @@ export function HistoryPage() {
                     </LayerCard>
                   ))}
                 </div>
-              ) : <LayerCard className="empty-card">No measurements for this station.</LayerCard>}
+              ) : <LayerCard className="empty-card">Belum ada measurement untuk stasiun ini.</LayerCard>}
             />
           </PageSection>
         </>
