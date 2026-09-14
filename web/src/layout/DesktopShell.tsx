@@ -1,8 +1,31 @@
 import type { ReactNode } from "react";
 import { Button, Sidebar } from "@cloudflare/kumo";
+import {
+  ArchiveBox,
+  Bell,
+  Broadcast,
+  ClockCounterClockwise,
+  GearSix,
+  MonitorPlay,
+  SquaresFour,
+  UsersThree,
+} from "@phosphor-icons/react";
 import type { SessionUser } from "../api";
 import brinLogo from "../assets/brin-logo.png";
 import { allowedRoutes, navigate, type AppRoute } from "../navigation";
+
+function NavigationIcon({ route }: { route: AppRoute }) {
+  const common = { size: 18, weight: "regular" as const, className: "nav-icon", "aria-hidden": true };
+  switch (route) {
+    case "overview": return <SquaresFour {...common} />;
+    case "stations": return <Broadcast {...common} />;
+    case "history": return <ClockCounterClockwise {...common} />;
+    case "archives": return <ArchiveBox {...common} />;
+    case "alarms": return <Bell {...common} />;
+    case "users": return <UsersThree {...common} />;
+    case "system": return <GearSix {...common} />;
+  }
+}
 
 export function DesktopShell({
   user,
@@ -29,7 +52,7 @@ export function DesktopShell({
           </Sidebar.Header>
           <Sidebar.Content>
             <Sidebar.Group>
-              <Sidebar.GroupLabel>Control plane</Sidebar.GroupLabel>
+              <Sidebar.GroupLabel>Panel kontrol</Sidebar.GroupLabel>
               <Sidebar.Menu>
                 {allowed.map((item) => (
                   <Sidebar.MenuButton
@@ -37,7 +60,8 @@ export function DesktopShell({
                     active={route === item.id}
                     onClick={() => navigate(item.id)}
                   >
-                    {item.label}
+                    <NavigationIcon route={item.id} />
+                    <span>{item.label}</span>
                   </Sidebar.MenuButton>
                 ))}
               </Sidebar.Menu>
@@ -46,7 +70,8 @@ export function DesktopShell({
               <Sidebar.GroupLabel>Monitoring</Sidebar.GroupLabel>
               <Sidebar.Menu>
                 <Sidebar.MenuButton onClick={() => window.open("/", "_blank", "noopener,noreferrer") }>
-                  Full monitoring
+                  <MonitorPlay size={18} weight="regular" className="nav-icon" aria-hidden />
+                  <span>Monitoring penuh</span>
                 </Sidebar.MenuButton>
               </Sidebar.Menu>
             </Sidebar.Group>
@@ -57,8 +82,8 @@ export function DesktopShell({
                 <strong>{user.display_name}</strong>
                 <span>{user.role}</span>
               </div>
-              <Button variant="secondary" aria-label="Sign out" onClick={() => void onSignOut()}>
-                Sign out
+              <Button variant="secondary" aria-label="Keluar" onClick={() => void onSignOut()}>
+                Keluar
               </Button>
             </div>
             <Sidebar.Trigger />
