@@ -80,8 +80,9 @@ def test_remote_live_rows_reads_authoritative_latest_measurement_not_only_vrecen
     assert rows[0]["dtom"] == fresh_at
     assert rows[0]["doserate"] == 0.27
     assert "from device" in connection.c.sql
-    assert "measurement" in connection.c.sql
-    assert "max(dtom)" in connection.c.sql
+    assert "from measurement" in connection.c.sql
+    assert "select max(" in connection.c.sql
+    assert ".dtom)" in connection.c.sql
 
 
 def test_central_overview_snapshot_reads_all_latest_measurements_with_one_connection() -> None:
@@ -134,7 +135,9 @@ def test_central_overview_snapshot_reads_all_latest_measurements_with_one_connec
     assert rows[0]["serid"] == 5201
     assert rows[0]["dtom"] == fresh_at
     assert rows[0]["doserate"] == 0.27
-    assert "max(dtom)" in connection.c.sql
+    assert "from measurement" in connection.c.sql
+    assert "select max(" in connection.c.sql
+    assert ".dtom)" in connection.c.sql
 
 
 def test_web_overview_uses_batched_snapshot_instead_of_n_plus_one_latest_queries(tmp_path) -> None:
