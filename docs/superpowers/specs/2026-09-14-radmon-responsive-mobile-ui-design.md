@@ -38,8 +38,9 @@ The redesign must fix these structural issues rather than only adding more CSS p
 
 Use one shared route/data/state layer with two presentation shells:
 
-- `DesktopShell` for desktop and large tablet landscape.
-- `MobileShell` for small screens.
+- `DesktopShell` for viewports at or above 1024 px, including large landscape tablet layouts.
+- `MobileShell` for viewports below 640 px.
+- The 640-1023 px band uses an adaptive tablet layout derived from the shared shell/components without duplicating data or authorization logic.
 - Shared page/domain components underneath, with desktop/mobile presentation variants only when the information shape genuinely differs.
 
 Do not build two separate applications. Do not duplicate API calls or authorization logic. Shared state survives responsive transitions where valid.
@@ -229,7 +230,7 @@ Station detail should expose relevant metadata already present in the shared sta
 Desktop:
 
 - Station selector.
-- Range/record-window controls where supported by the existing backend.
+- Record-window/range controls only to the extent supported by existing API data; do not invent unsupported time-range semantics.
 - Dose-rate trend visualization.
 - Summary metrics: Latest, Minimum, Maximum, Average over the currently loaded range.
 - Recent measurement table.
@@ -438,7 +439,8 @@ Representative viewport coverage:
 | Common mobile | 390x844 |
 | Large mobile | 430x932 |
 | Tablet portrait | 768x1024 |
-| Tablet landscape | 1024x768 |
+| Tablet adaptive landscape | 1023x768 |
+| Desktop breakpoint | 1024x768 |
 | Laptop | 1366x768 |
 | Desktop | 1920x1080 |
 
