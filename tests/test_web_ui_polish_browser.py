@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from test_web_responsive_browser import _serve_ui, _set_viewport, _wait_for
+from test_web_responsive_browser import _serve_ui, _set_viewport, _wait_for, chrome_driver
 
 
 def test_history_live_refresh_preserves_mobile_scroll_position(chrome_driver):
