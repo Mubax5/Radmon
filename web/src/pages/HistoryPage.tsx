@@ -89,7 +89,8 @@ export function HistoryPage() {
       })
       .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
     const values = points.map((point) => point.value);
-    const latest = points.at(-1)?.value ?? null;
+    const latestPoint = points.length ? points[points.length - 1] : null;
+    const latest = latestPoint?.value ?? null;
     const min = values.length ? Math.min(...values) : null;
     const max = values.length ? Math.max(...values) : null;
     const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
