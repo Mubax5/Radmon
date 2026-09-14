@@ -9,6 +9,14 @@ function statusVariant(status?: string): "success" | "warning" | "error" | "seco
   return "secondary";
 }
 
+function statusLabel(status?: string): string {
+  if (status === "normal") return "normal";
+  if (status === "warning") return "peringatan";
+  if (status === "alarm") return "alarm";
+  if (status === "offline") return "offline";
+  return "terkonfigurasi";
+}
+
 function formatTimestamp(value?: string | null): string {
   if (!value) return "—";
   const parsed = new Date(value);
@@ -16,16 +24,16 @@ function formatTimestamp(value?: string | null): string {
 }
 
 function freshnessLabel(value?: string | null): string {
-  if (!value) return "No live measurement";
+  if (!value) return "Belum ada measurement live";
   const parsed = new Date(value);
   const delta = Date.now() - parsed.getTime();
-  if (!Number.isFinite(delta)) return "Unknown age";
+  if (!Number.isFinite(delta)) return "Umur data tidak diketahui";
   const minutes = Math.max(0, Math.floor(delta / 60000));
-  if (minutes < 1) return "Just now";
-  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 1) return "Baru saja";
+  if (minutes < 60) return `${minutes} mnt lalu`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours} h ago`;
-  return `${Math.floor(hours / 24)} d ago`;
+  if (hours < 48) return `${hours} jam lalu`;
+  return `${Math.floor(hours / 24)} hari lalu`;
 }
 
 export function StationTable({
@@ -42,12 +50,12 @@ export function StationTable({
       <Table>
         <Table.Header>
           <Table.Row>
-            <Table.Head>Station</Table.Head>
-            <Table.Head>Location</Table.Head>
+            <Table.Head>Stasiun</Table.Head>
+            <Table.Head>Lokasi</Table.Head>
             <Table.Head>Status</Table.Head>
             <Table.Head>Dose rate</Table.Head>
-            <Table.Head>Updated</Table.Head>
-            {(onOpen || onHistory) ? <Table.Head>Action</Table.Head> : null}
+            <Table.Head>Diperbarui</Table.Head>
+            {(onOpen || onHistory) ? <Table.Head>Aksi</Table.Head> : null}
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -59,7 +67,7 @@ export function StationTable({
               </Table.Cell>
               <Table.Cell>{station.location}</Table.Cell>
               <Table.Cell>
-                <Badge variant={statusVariant(station.status)}>{station.status || "configured"}</Badge>
+                <Badge variant={statusVariant(station.status)}>{statusLabel(station.status)}</Badge>
               </Table.Cell>
               <Table.Cell>
                 {station.doserate == null ? "—" : `${station.doserate.toFixed(3)} ${station.unit}`}
@@ -71,8 +79,8 @@ export function StationTable({
               {(onOpen || onHistory) ? (
                 <Table.Cell>
                   <div className="card-actions">
-                    {onOpen ? <Button variant="secondary" onClick={() => onOpen(station)}>Details</Button> : null}
-                    {onHistory ? <Button variant="secondary" onClick={() => onHistory(station)}>History</Button> : null}
+                    {onOpen ? <Button variant="secondary" onClick={() => onOpen(station)}>Detail</Button> : null}
+                    {onHistory ? <Button variant="secondary" onClick={() => onHistory(station)}>Riwayat</Button> : null}
                   </div>
                 </Table.Cell>
               ) : null}
@@ -93,7 +101,7 @@ export function StationCards({
   onOpen?: (station: Station) => void;
   onHistory?: (station: Station) => void;
 }) {
-  if (!stations.length) return <LayerCard className="empty-card">No stations match the current view.</LayerCard>;
+  if (!stations.length) return <LayerCard className="empty-card">Tidak ada stasiun yang cocok dengan tampilan saat ini.</LayerCard>;
   return (
     <div className="mobile-card-list">
       {stations.map((station) => (
@@ -103,17 +111,17 @@ export function StationCards({
               <h3>{station.name}</h3>
               <div className="cell-subtle">SERID {station.serid} · {station.location}</div>
             </div>
-            <Badge variant={statusVariant(station.status)}>{station.status || "configured"}</Badge>
+            <Badge variant={statusVariant(station.status)}>{statusLabel(station.status)}</Badge>
           </div>
           <div className="card-meta">
             <span>Dose rate: <strong>{station.doserate == null ? "—" : `${station.doserate.toFixed(3)} ${station.unit}`}</strong></span>
-            <span>Updated: {formatTimestamp(station.dtom)}</span>
+            <span>Diperbarui: {formatTimestamp(station.dtom)}</span>
             <span>{freshnessLabel(station.dtom)}</span>
           </div>
           {(onOpen || onHistory) ? (
             <div className="card-actions">
-              {onOpen ? <Button variant="secondary" onClick={() => onOpen(station)}>Details</Button> : null}
-              {onHistory ? <Button variant="secondary" onClick={() => onHistory(station)}>History</Button> : null}
+              {onOpen ? <Button variant="secondary" onClick={() => onOpen(station)}>Detail</Button> : null}
+              {onHistory ? <Button variant="secondary" onClick={() => onHistory(station)}>Riwayat</Button> : null}
             </div>
           ) : null}
         </LayerCard>
@@ -136,7 +144,7 @@ export function ResponsiveStationView(props: {
 }
 
 export function StationDetail({ station, onHistory }: { station: Station | null; onHistory?: (station: Station) => void }) {
-  if (!station) return <LayerCard className="empty-card">Select a station to inspect its current state.</LayerCard>;
+  if (!station) return <LayerCard className="empty-card">Pilih stasiun untuk melihat status saat ini.</LayerCard>;
   return (
     <LayerCard className="station-card station-detail">
       <div className="station-card-header">
@@ -144,16 +152,16 @@ export function StationDetail({ station, onHistory }: { station: Station | null;
           <h3>{station.name}</h3>
           <div className="cell-subtle">SERID {station.serid} · {station.location}</div>
         </div>
-        <Badge variant={statusVariant(station.status)}>{station.status || "configured"}</Badge>
+        <Badge variant={statusVariant(station.status)}>{statusLabel(station.status)}</Badge>
       </div>
       <div className="station-detail-grid">
         <div className="station-detail-item"><span>Dose rate</span><strong>{station.doserate == null ? "—" : `${station.doserate.toFixed(3)} ${station.unit}`}</strong></div>
-        <div className="station-detail-item"><span>Freshness</span><strong>{freshnessLabel(station.dtom)}</strong></div>
-        <div className="station-detail-item"><span>Warning</span><strong>{station.warnlevel} {station.unit}</strong></div>
+        <div className="station-detail-item"><span>Kesegaran data</span><strong>{freshnessLabel(station.dtom)}</strong></div>
+        <div className="station-detail-item"><span>Peringatan</span><strong>{station.warnlevel} {station.unit}</strong></div>
         <div className="station-detail-item"><span>Alarm</span><strong>{station.alarmlevel} {station.unit}</strong></div>
       </div>
-      <div className="card-meta"><span>Last measurement: {formatTimestamp(station.dtom)}</span></div>
-      {onHistory ? <div className="card-actions"><Button variant="primary" onClick={() => onHistory(station)}>View history</Button></div> : null}
+      <div className="card-meta"><span>Measurement terakhir: {formatTimestamp(station.dtom)}</span></div>
+      {onHistory ? <div className="card-actions"><Button variant="primary" onClick={() => onHistory(station)}>Lihat riwayat</Button></div> : null}
     </LayerCard>
   );
 }
