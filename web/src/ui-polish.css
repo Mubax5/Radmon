@@ -265,6 +265,7 @@
 }
 
 @media (max-width: 639px) {
+  body [role="dialog"]:has(.mobile-sheet-content),
   body [role="dialog"].mobile-sheet-dialog,
   body .mobile-sheet-dialog {
     position: fixed !important;
