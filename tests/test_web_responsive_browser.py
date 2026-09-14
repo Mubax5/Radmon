@@ -35,7 +35,18 @@ STATIONS = [
     _station(3801, "Kolam Reaktor", "Gd. 38", "normal", 0.12),
     _station(5001, "Server 50", "Gd. 50", "warning", 21.4),
     _station(5201, "Server 52", "Gd. 52", "offline", 0.0),
+    *[
+        _station(6000 + index, f"Detector {index:02d}", f"Area {index:02d}", "normal", 0.1 + index / 1000)
+        for index in range(1, 13)
+    ],
 ]
+
+
+def _overview_counts():
+    return {
+        status: sum(1 for station in STATIONS if station["status"] == status)
+        for status in ("normal", "warning", "alarm", "offline")
+    }
 
 
 def _send_json(handler: BaseHTTPRequestHandler, payload, status: int = 200):
@@ -58,6 +69,8 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
         path = parsed.path
 
         if path == "/auth/me":
+            if not getattr(self.server, "authenticated", True):
+                return _send_json(self, {"detail": "authentication required"}, status=401)
             return _send_json(
                 self,
                 {"username": "admin", "display_name": "RadMon Administrator With A Long Name", "role": "Administrator"},
@@ -67,7 +80,7 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
             return _send_json(
                 self,
                 {
-                    "counts": {"normal": 1, "warning": 1, "alarm": 0, "offline": 1},
+                    "counts": _overview_counts(),
                     "stations": STATIONS,
                     "role": "Administrator",
                 },
@@ -93,6 +106,8 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
             return _send_json(
                 self,
                 [
+                    {"quarter_id": "2025-Q4", "state": "COMPLETE", "start_at": "2025-10-01T00:00:00+00:00", "end_at": "2025-12-31T23:59:59+00:00"},
+                    {"quarter_id": "2026-Q1", "state": "COMPLETE", "start_at": "2026-01-01T00:00:00+00:00", "end_at": "2026-03-31T23:59:59+00:00"},
                     {"quarter_id": "2026-Q2", "state": "COMPLETE", "start_at": "2026-04-01T00:00:00+00:00", "end_at": "2026-06-30T23:59:59+00:00"},
                     {"quarter_id": "2026-Q3", "state": "COMPLETE", "start_at": "2026-07-01T00:00:00+00:00", "end_at": "2026-09-30T23:59:59+00:00"},
                 ],
@@ -110,7 +125,16 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
                         "measured_value": 27.1,
                         "threshold": 25.0,
                         "surfaced_at": "2026-09-14T03:40:00+00:00",
-                    }
+                    },
+                    {
+                        "event_id": "locked-1",
+                        "serid": 5001,
+                        "status": "ACTIVE",
+                        "kind": "RETRIGGER_LOCKED",
+                        "measured_value": 27.4,
+                        "threshold": 25.0,
+                        "surfaced_at": "2026-09-14T03:41:00+00:00",
+                    },
                 ],
             )
 
@@ -120,6 +144,7 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
                 [
                     {"username": "admin", "display_name": "RadMon Administrator With A Long Name", "role": "Administrator", "enabled": True, "updated_at": "2026-09-14T03:00:00+00:00"},
                     {"username": "operator", "display_name": "Operator", "role": "Operator", "enabled": True, "updated_at": "2026-09-14T03:00:00+00:00"},
+                    {"username": "viewer", "display_name": "Viewer", "role": "Viewer", "enabled": True, "updated_at": "2026-09-14T03:00:00+00:00"},
                 ],
             )
 
@@ -152,6 +177,17 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
                             "last_history_import": None,
                             "last_error": "connection refused",
                             "consecutive_failures": 3,
+                        },
+                        {
+                            "source_id": "server52",
+                            "host": "192.168.1.52",
+                            "state": "DEGRADED",
+                            "last_success": "2026-09-14T03:30:00+00:00",
+                            "last_live_poll": "2026-09-14T03:30:00+00:00",
+                            "last_failure": "2026-09-14T03:44:00+00:00",
+                            "last_history_import": None,
+                            "last_error": "timeout",
+                            "consecutive_failures": 1,
                         },
                     ],
                 },
@@ -196,10 +232,11 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _serve_ui():
+def _serve_ui(*, authenticated: bool = True):
     if not (DIST / "index.html").exists():
         pytest.skip("web/dist is missing; build the Vite frontend before browser UI tests")
     server = ThreadingHTTPServer(("127.0.0.1", 0), RadMonUIHandler)
+    server.authenticated = authenticated
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -259,6 +296,40 @@ def _assert_no_horizontal_overflow(driver):
     assert overflow <= 1, f"page-level horizontal overflow: {overflow}px"
 
 
+def _assert_mobile_content_not_covered(driver):
+    driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
+    final_gap = driver.execute_script(
+        "const page=document.querySelector('.mobile-content > .page-stack');"
+        "const nav=document.querySelector('.mobile-bottom-nav');"
+        "return page.getBoundingClientRect().bottom - nav.getBoundingClientRect().top;"
+    )
+    assert final_gap <= 2, f"mobile content is covered by bottom navigation: {final_gap}px"
+
+
+def test_login_is_centered_and_brin_logo_keeps_its_aspect_ratio(chrome_driver):
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    driver = chrome_driver
+    with _serve_ui(authenticated=False) as base:
+        for width, height in ((360, 800), (1366, 768)):
+            _set_viewport(driver, width, height)
+            driver.get(f"{base}/app/login")
+            WebDriverWait(driver, 12).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".login-card"))
+            _assert_no_horizontal_overflow(driver)
+            card = driver.execute_script("return document.querySelector('.login-card').getBoundingClientRect().toJSON()")
+            assert card["left"] >= 0 and card["right"] <= width + 1
+            logo_ratio_error = driver.execute_script(
+                "const img=document.querySelector('.login-brand img');"
+                "const r=img.getBoundingClientRect();"
+                "return Math.abs((r.width/r.height)-(img.naturalWidth/img.naturalHeight));"
+            )
+            assert logo_ratio_error < 0.03
+            assert not driver.find_elements(By.CSS_SELECTOR, ".brand-mark")
+            body = driver.find_element(By.TAG_NAME, "body").text
+            assert "Sign in to RadMon" in body
+
+
 def test_responsive_shell_geometry_across_approved_viewports(chrome_driver):
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
@@ -301,20 +372,42 @@ def test_responsive_shell_geometry_across_approved_viewports(chrome_driver):
                     "return Math.abs((r.width/r.height)-(img.naturalWidth/img.naturalHeight));"
                 )
                 assert ratio_error < 0.03
-
-                driver.execute_script("window.scrollTo(0, document.body.scrollHeight)")
-                final_gap = driver.execute_script(
-                    "const page=document.querySelector('.mobile-content > .page-stack');"
-                    "const nav=document.querySelector('.mobile-bottom-nav');"
-                    "return page.getBoundingClientRect().bottom - nav.getBoundingClientRect().top;"
-                )
-                assert final_gap <= 2, f"mobile content is covered by bottom navigation: {final_gap}px"
+                _assert_mobile_content_not_covered(driver)
             else:
                 assert driver.find_elements(By.CSS_SELECTOR, ".desktop-shell")
                 assert not driver.find_elements(By.CSS_SELECTOR, ".mobile-shell")
                 content_width = driver.execute_script("return document.querySelector('.content-shell').getBoundingClientRect().width")
                 inner_width = driver.execute_script("return window.innerWidth")
                 assert content_width > inner_width * 0.55
+
+
+def test_all_control_plane_pages_fit_mobile_and_desktop_viewports(chrome_driver):
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    driver = chrome_driver
+    routes = [
+        ("/app", ".attention-panel"),
+        ("/app/stations", ".station-search"),
+        ("/app/history?station=3801", ".history-summary"),
+        ("/app/archives", ".archive-summary"),
+        ("/app/alarms", ".active-alarm-list"),
+        ("/app/users", ".user-summary"),
+        ("/app/system", ".source-health-summary"),
+    ]
+
+    with _serve_ui() as base:
+        for width, height in ((390, 844), (1366, 768)):
+            _set_viewport(driver, width, height)
+            for path, marker in routes:
+                driver.get(f"{base}{path}")
+                WebDriverWait(driver, 12).until(lambda browser, selector=marker: browser.find_elements(By.CSS_SELECTOR, selector))
+                _assert_no_horizontal_overflow(driver)
+                if width < 640:
+                    assert driver.find_elements(By.CSS_SELECTOR, ".mobile-shell")
+                    _assert_mobile_content_not_covered(driver)
+                else:
+                    assert driver.find_elements(By.CSS_SELECTOR, ".desktop-shell")
 
 
 def test_mobile_more_sheet_and_history_deep_link_are_reachable(chrome_driver):
@@ -332,22 +425,59 @@ def test_mobile_more_sheet_and_history_deep_link_are_reachable(chrome_driver):
         WebDriverWait(driver, 8).until(
             lambda browser: "Additional RadMon views" in browser.find_element(By.TAG_NAME, "body").text
         )
+        route_container = driver.find_element(By.CSS_SELECTOR, ".mobile-more-sheet")
+        assert route_container.get_attribute("data-secondary-routes") == "history,archives,users,system"
         button_texts = {
             element.text.strip()
             for element in driver.find_elements(By.TAG_NAME, "button")
             if element.text.strip()
         }
-        expected = {"History", "Archives", "Users", "System"}
+        expected = {"History", "Archives", "Users", "System", "Full monitoring", "Sign out"}
         missing = expected - button_texts
         assert not missing, (
-            f"mobile More is missing routes {sorted(missing)}; "
+            f"mobile More is missing actions {sorted(missing)}; "
             f"buttons={sorted(button_texts)}; body={driver.find_element(By.TAG_NAME, 'body').text!r}"
         )
         _assert_no_horizontal_overflow(driver)
+
+        history_button = next(button for button in driver.find_elements(By.TAG_NAME, "button") if button.text == "History")
+        history_button.click()
+        WebDriverWait(driver, 8).until(lambda browser: "/app/history" in browser.current_url)
 
         driver.get(f"{base}/app/history?station=3801")
         WebDriverWait(driver, 12).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".history-summary"))
         assert "station=3801" in driver.current_url
         assert driver.find_elements(By.CSS_SELECTOR, ".trend-chart svg")
         assert driver.find_elements(By.CSS_SELECTOR, ".record-card")
+        _assert_no_horizontal_overflow(driver)
+
+
+def test_mobile_alarm_and_user_dialogs_stay_inside_viewport(chrome_driver):
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    driver = chrome_driver
+    with _serve_ui() as base:
+        _set_viewport(driver, 390, 844)
+
+        driver.get(f"{base}/app/alarms")
+        WebDriverWait(driver, 12).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".active-alarm-list"))
+        respond = next(button for button in driver.find_elements(By.TAG_NAME, "button") if button.text == "Respond to alarm")
+        assert respond.is_enabled()
+        respond.click()
+        WebDriverWait(driver, 8).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".dialog-form"))
+        dialog_rect = driver.execute_script("return document.querySelector('.dialog-form').getBoundingClientRect().toJSON()")
+        assert dialog_rect["left"] >= -1 and dialog_rect["right"] <= 391
+        assert dialog_rect["height"] <= 844
+        _assert_no_horizontal_overflow(driver)
+        driver.find_element(By.TAG_NAME, "body").send_keys("\ue00c")
+
+        driver.get(f"{base}/app/users")
+        WebDriverWait(driver, 12).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".user-summary"))
+        create = next(button for button in driver.find_elements(By.TAG_NAME, "button") if button.text == "Create user")
+        create.click()
+        WebDriverWait(driver, 8).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".user-create-form"))
+        form_rect = driver.execute_script("return document.querySelector('.user-create-form').getBoundingClientRect().toJSON()")
+        assert form_rect["left"] >= -1 and form_rect["right"] <= 391
+        assert form_rect["height"] <= 844
         _assert_no_horizontal_overflow(driver)
