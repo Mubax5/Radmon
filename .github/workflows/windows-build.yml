@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - feature
+      - "feat/**"
 
 permissions:
   contents: write
@@ -68,6 +69,27 @@ jobs:
           Copy-Item "grafana" "$portable\app\grafana" -Recurse -Force
           Copy-Item ".env.example" "$portable\config\.env.example" -Force
           Copy-Item "README.md" "$portable\README.md" -Force
+          @{
+            commit_sha = $env:GITHUB_SHA
+            repository = $env:GITHUB_REPOSITORY
+            release_tag = "latest"
+            built_at_utc = [DateTime]::UtcNow.ToString("o")
+          } | ConvertTo-Json | Set-Content "$portable\app\release.json" -Encoding utf8
+
+      - name: Smoke test updater helper
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -ArgumentList @(
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy", "Bypass",
+            "-File", "packaging\radmon_update.ps1",
+            "-InstallRoot", "$PWD",
+            "-SelfTest"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "RadMon updater self-test failed with exit code $($process.ExitCode)"
+          }
 
       - name: Smoke test packaged EXE
         shell: pwsh
@@ -113,6 +135,11 @@ jobs:
           if (-not (Test-Path $installedExe)) {
             throw "Installer did not create $installedExe"
           }
+          $marker = Get-Content (Join-Path $installRoot "app\release.json") -Raw | ConvertFrom-Json
+          if ([string]$marker.commit_sha -ne $env:GITHUB_SHA) {
+            throw "Installer release marker does not match GITHUB_SHA"
+          }
+          Get-ScheduledTask -TaskName "RadMon Updater" -ErrorAction Stop | Out-Null
           $app = Start-Process -FilePath $installedExe -ArgumentList "--server", "--smoke-test" -Wait -PassThru
           if ($app.ExitCode -ne 0) {
             throw "Installed RadMon.exe smoke test failed with exit code $($app.ExitCode)"
@@ -156,6 +183,7 @@ jobs:
           if ($null -eq $taskAfterUpgrade) {
             throw "RadMon Server scheduled task was not restored after upgrade"
           }
+          Get-ScheduledTask -TaskName "RadMon Updater" -ErrorAction Stop | Out-Null
 
       - name: Write installer checksum
         shell: pwsh
@@ -190,7 +218,7 @@ jobs:
         run: |
           $tag = "latest"
           $title = "RadMon"
-          $notes = "Current production Windows installer. It runs the RadMon web platform headlessly at Windows startup, serves the authenticated Kumo control plane, and preserves editable Grafana monitoring data across restart and upgrade. Existing config, runtime, archives, and reports are preserved."
+          $notes = "Current production Windows installer. It runs the RadMon web platform headlessly at Windows startup, serves the authenticated Kumo control plane, preserves editable Grafana monitoring data across restart and upgrade, and installs the verified automatic release updater. Existing config, runtime, archives, and reports are preserved."
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
