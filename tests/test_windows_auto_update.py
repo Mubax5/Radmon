@@ -56,3 +56,11 @@ def test_windows_build_embeds_release_sha_and_smokes_updater():
     assert "$env:GITHUB_SHA" in workflow
     assert "Smoke test updater helper" in workflow
     assert 'Get-ScheduledTask -TaskName "RadMon Updater"' in workflow
+
+
+def test_existing_release_assets_are_published_before_latest_tag_advances():
+    workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
+
+    upload = workflow.index('gh release upload $tag')
+    advance_tag = workflow.index('git push origin "refs/tags/$tag" --force')
+    assert upload < advance_tag, "latest must not advertise a new SHA until its installer assets are ready"
