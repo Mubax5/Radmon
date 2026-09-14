@@ -80,7 +80,6 @@ function UserTable({ users }: { users: UserRecord[] }) {
 
 export function UsersPage() {
   const [items, setItems] = useState<UserRecord[] | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
   const [error, setError] = useState("");
 
   const load = () => api<UserRecord[]>("/api/v1/control/users")
@@ -102,12 +101,30 @@ export function UsersPage() {
     };
   }, [items]);
 
+  const createUserAction = (
+    <Dialog.Root>
+      <Dialog.Trigger render={(props) => <Button {...props} variant="primary">Create user</Button>} />
+      <Dialog>
+        <Dialog.Title>Create user</Dialog.Title>
+        <Dialog.Description>
+          Create an authenticated RadMon identity. Viewer is read-only; Operator and Administrator permissions remain enforced by the backend.
+        </Dialog.Description>
+        <div className="dialog-form">
+          <CreateUserForm onCreated={() => void load()} />
+          <div className="form-actions dialog-close-row">
+            <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary">Close</Button>} />
+          </div>
+        </div>
+      </Dialog>
+    </Dialog.Root>
+  );
+
   return (
     <div className="page-stack">
       <PageHeading
         title="Users"
         description="Authenticated RadMon identities, roles, and account state. Secrets remain write-only."
-        action={<Button variant="primary" onClick={() => setCreateOpen(true)}>Create user</Button>}
+        action={createUserAction}
       />
       {error ? <ErrorCard message={error} /> : null}
       {!items ? <LoadingCard /> : (
@@ -127,21 +144,6 @@ export function UsersPage() {
           </PageSection>
         </>
       )}
-
-      <Dialog.Root open={createOpen} onOpenChange={setCreateOpen}>
-        <Dialog>
-          <Dialog.Title>Create user</Dialog.Title>
-          <Dialog.Description>
-            Create an authenticated RadMon identity. Viewer is read-only; Operator and Administrator permissions remain enforced by the backend.
-          </Dialog.Description>
-          <div className="dialog-form">
-            <CreateUserForm onCreated={() => void load()} />
-            <div className="form-actions dialog-close-row">
-              <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary">Close</Button>} />
-            </div>
-          </div>
-        </Dialog>
-      </Dialog.Root>
     </div>
   );
 }
