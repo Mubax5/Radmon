@@ -1,4 +1,10 @@
 import type { ReactNode } from "react";
+import {
+  Bell,
+  Broadcast,
+  ClockCounterClockwise,
+  SquaresFour,
+} from "@phosphor-icons/react";
 import type { SessionUser } from "../api";
 import brinLogo from "../assets/brin-logo.png";
 import {
@@ -8,6 +14,17 @@ import {
   type AppRoute,
 } from "../navigation";
 import { MobileMoreSheet } from "./MobileMoreSheet";
+
+function MobileNavigationIcon({ route }: { route: AppRoute }) {
+  const common = { size: 22, weight: "regular" as const, className: "mobile-nav-icon", "aria-hidden": true };
+  switch (route) {
+    case "overview": return <SquaresFour {...common} />;
+    case "stations": return <Broadcast {...common} />;
+    case "history": return <ClockCounterClockwise {...common} />;
+    case "alarms": return <Bell {...common} />;
+    default: return <SquaresFour {...common} />;
+  }
+}
 
 export function MobileShell({
   user,
@@ -30,12 +47,11 @@ export function MobileShell({
         <div className="mobile-topbar-brand">
           <img src={brinLogo} alt="BRIN" />
         </div>
-        <strong>{routeLabel(route)}</strong>
       </header>
 
       <main className="mobile-content">{children}</main>
 
-      <nav className="mobile-bottom-nav" aria-label="Primary navigation">
+      <nav className="mobile-bottom-nav" aria-label="Navigasi utama">
         <div className="mobile-bottom-nav-inner">
           {primary.map((item) => {
             if (item === "more") {
@@ -56,9 +72,11 @@ export function MobileShell({
                 key={item}
                 className={`mobile-nav-button${active ? " is-active" : ""}`}
                 aria-current={active ? "page" : undefined}
+                aria-label={routeLabel(item)}
                 onClick={() => navigate(item)}
               >
-                {routeLabel(item)}
+                <MobileNavigationIcon route={item} />
+                <span className="mobile-nav-label">{routeLabel(item)}</span>
               </button>
             );
           })}
