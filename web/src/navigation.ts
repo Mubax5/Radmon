@@ -10,13 +10,13 @@ export const ROLE_RANK: Record<Role, number> = {
 };
 
 export const NAV_ITEMS: readonly NavItem[] = [
-  { id: "overview", label: "Overview", minimum: "Viewer" },
-  { id: "stations", label: "Stations", minimum: "Viewer" },
-  { id: "history", label: "History", minimum: "Viewer" },
-  { id: "archives", label: "Archives", minimum: "Viewer" },
-  { id: "alarms", label: "Alarms", minimum: "Operator" },
-  { id: "users", label: "Users", minimum: "Administrator" },
-  { id: "system", label: "System", minimum: "Administrator" },
+  { id: "overview", label: "Ringkasan", minimum: "Viewer" },
+  { id: "stations", label: "Stasiun", minimum: "Viewer" },
+  { id: "history", label: "Riwayat", minimum: "Viewer" },
+  { id: "archives", label: "Arsip", minimum: "Viewer" },
+  { id: "alarms", label: "Alarm", minimum: "Operator" },
+  { id: "users", label: "Pengguna", minimum: "Administrator" },
+  { id: "system", label: "Sistem", minimum: "Administrator" },
 ] as const;
 
 export function roleAllows(role: Role, minimum: Role): boolean {
@@ -34,7 +34,7 @@ export function routeFromLocation(): AppRoute {
 }
 
 export function routeLabel(route: AppRoute): string {
-  return NAV_ITEMS.find((item) => item.id === route)?.label ?? "Overview";
+  return NAV_ITEMS.find((item) => item.id === route)?.label ?? "Ringkasan";
 }
 
 export function navigate(route: AppRoute, query?: Record<string, string | number | undefined>): void {
