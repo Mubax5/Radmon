@@ -30,6 +30,10 @@ _REMOTE_BLOCKED_GRAFANA_PREFIXES = (
     "api/login",
     "api/admin",
 )
+_SPA_HEADERS = {
+    "Cache-Control": "no-store, max-age=0",
+    "Pragma": "no-cache",
+}
 
 
 def monitoring_url(settings: Settings) -> str:
@@ -78,6 +82,10 @@ def _public_location(value: str) -> str:
     return value
 
 
+def _spa_shell(index: Path) -> FileResponse:
+    return FileResponse(index, headers=_SPA_HEADERS)
+
+
 def attach_web_routes(
     app: FastAPI,
     *,
@@ -106,8 +114,10 @@ def attach_web_routes(
             raise HTTPException(status_code=404, detail="resource not found")
 
         if asset_path and requested.is_file():
+            if requested.name.casefold() == "index.html":
+                return _spa_shell(requested)
             return FileResponse(requested)
-        return FileResponse(index)
+        return _spa_shell(index)
 
     @app.api_route(
         "/{grafana_path:path}",
