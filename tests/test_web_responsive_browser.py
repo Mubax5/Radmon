@@ -279,7 +279,7 @@ def test_login_is_centered_and_brin_logo_keeps_its_aspect_ratio(chrome_driver):
             )
             assert ratio_error < 0.03
             assert not chrome_driver.find_elements(By.CSS_SELECTOR, ".brand-mark")
-            assert "Sign in to RadMon" in chrome_driver.find_element(By.TAG_NAME, "body").text
+            assert "Masuk ke RadMon" in chrome_driver.find_element(By.TAG_NAME, "body").text
 
 
 def test_responsive_shell_geometry_across_approved_viewports(chrome_driver):
@@ -348,16 +348,16 @@ def test_mobile_more_sheet_and_history_deep_link_are_reachable(chrome_driver):
         _set_viewport(chrome_driver, 390, 844)
         chrome_driver.get(f"{base}/app")
         _wait_for(chrome_driver, ".page-stack")
-        _button(chrome_driver, "More").click()
+        _button(chrome_driver, "Lainnya").click()
         _wait_for(chrome_driver, ".mobile-more-sheet")
         route_container = chrome_driver.find_element(By.CSS_SELECTOR, ".mobile-more-sheet")
         assert route_container.get_attribute("data-secondary-routes") == "history,archives,users,system"
         labels = {_element_text(element) for element in route_container.find_elements(By.TAG_NAME, "button") if _element_text(element)}
-        assert {"History", "Archives", "Users", "System", "Full monitoring", "Sign out"} <= labels
+        assert {"Riwayat", "Arsip", "Pengguna", "Sistem", "Monitoring penuh", "Keluar"} <= labels
         _assert_no_horizontal_overflow(chrome_driver)
         next(
             button for button in route_container.find_elements(By.TAG_NAME, "button")
-            if _element_text(button) == "History"
+            if _element_text(button) == "Riwayat"
         ).click()
         WebDriverWait(chrome_driver, 8).until(lambda browser: "/app/history" in browser.current_url)
 
@@ -379,7 +379,7 @@ def test_mobile_alarm_and_user_dialogs_stay_inside_viewport(chrome_driver):
         _wait_for(chrome_driver, ".active-alarm-list")
         content = chrome_driver.find_element(By.CSS_SELECTOR, ".mobile-content")
         chrome_driver.execute_script("arguments[0].scrollTop=arguments[0].scrollHeight", content)
-        respond = _button(chrome_driver, "Respond to alarm")
+        respond = _button(chrome_driver, "Respons alarm")
         assert respond.is_enabled()
         respond.click()
         _wait_for(chrome_driver, ".dialog-form")
@@ -391,7 +391,7 @@ def test_mobile_alarm_and_user_dialogs_stay_inside_viewport(chrome_driver):
 
         chrome_driver.get(f"{base}/app/users")
         _wait_for(chrome_driver, ".user-summary")
-        _button(chrome_driver, "Create user").click()
+        _button(chrome_driver, "Buat pengguna").click()
         _wait_for(chrome_driver, ".user-create-form")
         form_rect = chrome_driver.execute_script("return document.querySelector('.user-create-form').getBoundingClientRect().toJSON()")
         assert form_rect["left"] >= -1 and form_rect["right"] <= 391 and form_rect["height"] <= 844
