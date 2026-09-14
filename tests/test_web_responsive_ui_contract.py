@@ -15,11 +15,12 @@ def test_adaptive_shell_files_exist_and_mobile_navigation_is_role_aware():
     assert (WEB / "layout/MobileShell.tsx").exists()
     assert (WEB / "layout/MobileMoreSheet.tsx").exists()
     nav = read("navigation.ts")
-    mobile_shell = read("layout/MobileShell.tsx")
+    more_sheet = read("layout/MobileMoreSheet.tsx")
     assert "Viewer" in nav and "Operator" in nav and "Administrator" in nav
-    assert "Overview" in nav and "Stations" in nav and "History" in nav and "Alarms" in nav
+    for label in ("Ringkasan", "Stasiun", "Riwayat", "Arsip", "Alarm", "Pengguna", "Sistem"):
+        assert label in nav
     assert '"more"' in nav
-    assert "More" in mobile_shell
+    assert "Lainnya" in more_sheet
 
 
 def test_mobile_first_css_has_exact_breakpoints_safe_areas_and_no_unsafe_page_width():
@@ -51,14 +52,42 @@ def test_history_has_dependency_free_svg_trend_chart():
     assert "chart.js" not in package.lower()
 
 
-def test_control_plane_never_reintroduces_letter_r_brand_badges_or_phosphor_nav_icons():
+def test_control_plane_uses_consistent_phosphor_navigation_icons_without_letter_r_badges():
     combined = "\n".join(path.read_text(encoding="utf-8") for path in WEB.rglob("*.tsx"))
     assert re.search(r">\s*R\s*<", combined) is None
     layout_dir = WEB / "layout"
     layout_sources = "\n".join(
         path.read_text(encoding="utf-8") for path in layout_dir.glob("*.tsx")
     ) if layout_dir.exists() else ""
-    assert "@phosphor-icons/react" not in layout_sources
+    assert "@phosphor-icons/react" in layout_sources
+    assert "nav-icon" in layout_sources
+
+
+def test_mobile_topbar_is_brand_only_and_bottom_nav_uses_icon_over_small_label():
+    mobile_shell = read("layout/MobileShell.tsx")
+    css = read("radmon.css")
+    assert "<strong>{routeLabel(route)}</strong>" not in mobile_shell
+    assert "mobile-nav-icon" in mobile_shell
+    assert "mobile-nav-label" in mobile_shell
+    assert ".mobile-nav-button" in css
+    assert "flex-direction: column" in css
+    assert ".mobile-content .page-heading h1 { display: none; }" not in css
+
+
+def test_primary_page_copy_defaults_to_indonesian():
+    expectations = {
+        "pages/OverviewPage.tsx": ("Monitoring radiasi", "Perhatian", "Kesehatan stasiun"),
+        "pages/StationsPage.tsx": ("Stasiun", "Cari", "Detail stasiun"),
+        "pages/HistoryPage.tsx": ("Riwayat", "measurement", "Rekaman"),
+        "pages/ArchivesPage.tsx": ("Arsip", "Detail arsip"),
+        "pages/AlarmsPage.tsx": ("Tindakan operator", "Respons alarm", "Riwayat event"),
+        "pages/UsersPage.tsx": ("Pengguna", "Buat pengguna"),
+        "pages/SystemPage.tsx": ("Sistem", "Kesehatan source", "Administrasi Grafana"),
+    }
+    for path, phrases in expectations.items():
+        source = read(path)
+        for phrase in phrases:
+            assert phrase in source, f"{phrase!r} belum ada di {path}"
 
 
 def test_pages_have_relevant_compact_sections():
