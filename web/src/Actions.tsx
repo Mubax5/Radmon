@@ -35,6 +35,7 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
   const [suppressPic, setSuppressPic] = useState("");
   const [suppressReason, setSuppressReason] = useState("");
   const [suppressPin, setSuppressPin] = useState("");
+  const [pending, setPending] = useState<"respond" | "suppress" | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
 
   function resetResponse() {
@@ -54,18 +55,22 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
   }
 
   function changeRespondOpen(open: boolean) {
+    if (!open && pending === "respond") return;
     setRespondOpen(open);
     if (!open) resetResponse();
   }
 
   function changeSuppressionOpen(open: boolean) {
+    if (!open && pending === "suppress") return;
     setSuppressionOpen(open);
     if (!open) resetSuppression();
   }
 
   async function respond(event: React.FormEvent) {
     event.preventDefault();
+    if (pending) return;
     setFeedback(null);
+    setPending("respond");
     try {
       if (!eventId) throw new Error("Select an active alarm event");
       await api(`/api/v1/control/alarm-events/${encodeURIComponent(eventId)}/response`, {
@@ -80,16 +85,20 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
       setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Response failed" });
     } finally {
       setPin("");
+      setPending(null);
     }
   }
 
   async function suppress(event: React.FormEvent) {
     event.preventDefault();
+    if (pending) return;
     setFeedback(null);
+    setPending("suppress");
     try {
       const station = Number(serid);
       const duration = Number(minutes) * 60;
       if (!Number.isInteger(station) || station <= 0) throw new Error("SERID must be a positive number");
+      if (!Number.isFinite(duration) || duration < 60 || duration > 86400) throw new Error("Duration must be 1 to 1440 minutes");
       await api(`/api/v1/control/suppressions/${station}`, {
         method: "POST",
         body: JSON.stringify({
@@ -108,6 +117,7 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
       setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Suppression failed" });
     } finally {
       setSuppressPin("");
+      setPending(null);
     }
   }
 
@@ -117,7 +127,7 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
         <h2>Alarm response</h2>
         <p>Respond to an active alarm after confirming the event, PIC, action, reason, and operator PIN.</p>
         <Dialog.Root open={respondOpen} onOpenChange={changeRespondOpen}>
-          <Dialog.Trigger render={(props) => <Button {...props} variant="primary">Respond to alarm</Button>} />
+          <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={active.length === 0 || pending !== null}>Respond to alarm</Button>} />
           <Dialog>
             <Dialog.Title>Respond to alarm</Dialog.Title>
             <Dialog.Description>
@@ -130,15 +140,17 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
                 items={eventItems}
                 value={eventId || undefined}
                 onValueChange={(value) => setEventId(String(value ?? ""))}
-                disabled={active.length === 0}
+                disabled={active.length === 0 || pending === "respond"}
               />
-              <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} />
-              <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} />
-              <Input label="Reason" value={reason} onChange={(e) => setReason(e.target.value)} />
-              <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} />
+              <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} disabled={pending === "respond"} />
+              <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} disabled={pending === "respond"} />
+              <Input label="Reason" value={reason} onChange={(e) => setReason(e.target.value)} disabled={pending === "respond"} />
+              <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending === "respond"} />
               <div className="form-actions">
-                <Button type="submit" variant="primary">Submit response</Button>
-                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary">Cancel</Button>} />
+                <Button type="submit" variant="primary" disabled={pending === "respond" || !eventId || !pic || !reason || !pin}>
+                  {pending === "respond" ? "Saving…" : "Submit response"}
+                </Button>
+                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "respond"}>Cancel</Button>} />
               </div>
             </form>
           </Dialog>
@@ -149,21 +161,23 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
         <h2>Timed suppression</h2>
         <p>Temporarily suppress alarm surfacing while dose measurements continue uninterrupted.</p>
         <Dialog.Root open={suppressionOpen} onOpenChange={changeSuppressionOpen}>
-          <Dialog.Trigger render={(props) => <Button {...props} variant="primary">Start suppression</Button>} />
+          <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={pending !== null}>Start suppression</Button>} />
           <Dialog>
             <Dialog.Title>Timed suppression</Dialog.Title>
             <Dialog.Description>
               Suppression lasts from 1 minute up to 24 hours and auto-resumes when the detector returns to NORMAL.
             </Dialog.Description>
             <form className="action-form dialog-form" onSubmit={suppress}>
-              <Input label="Station SERID" inputMode="numeric" value={serid} onChange={(e) => setSerid(e.target.value)} />
-              <Input label="Duration (minutes)" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} />
-              <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} />
-              <Input label="Reason" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} />
-              <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} />
+              <Input label="Station SERID" inputMode="numeric" value={serid} onChange={(e) => setSerid(e.target.value)} disabled={pending === "suppress"} />
+              <Input label="Duration (minutes)" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} disabled={pending === "suppress"} />
+              <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} disabled={pending === "suppress"} />
+              <Input label="Reason" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} disabled={pending === "suppress"} />
+              <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} disabled={pending === "suppress"} />
               <div className="form-actions">
-                <Button type="submit" variant="primary">Start suppression</Button>
-                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary">Cancel</Button>} />
+                <Button type="submit" variant="primary" disabled={pending === "suppress" || !serid || !minutes || !suppressPic || !suppressReason || !suppressPin}>
+                  {pending === "suppress" ? "Starting…" : "Start suppression"}
+                </Button>
+                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "suppress"}>Cancel</Button>} />
               </div>
             </form>
           </Dialog>
@@ -174,16 +188,24 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
   );
 }
 
-export function CreateUserPanel({ onCreated }: { onCreated: () => void }) {
+export function CreateUserForm({
+  onCreated,
+  onDone,
+}: {
+  onCreated: () => void;
+  onDone?: () => void;
+}) {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState<Role>("Viewer");
   const [password, setPassword] = useState("");
   const [userPin, setUserPin] = useState("");
   const [adminPin, setAdminPin] = useState("");
+  const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
 
   function reset() {
+    if (pending) return;
     setUsername("");
     setDisplayName("");
     setRole("Viewer");
@@ -195,7 +217,9 @@ export function CreateUserPanel({ onCreated }: { onCreated: () => void }) {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
+    if (pending) return;
     setFeedback(null);
+    setPending(true);
     try {
       await api("/api/v1/control/users", {
         method: "POST",
@@ -213,37 +237,48 @@ export function CreateUserPanel({ onCreated }: { onCreated: () => void }) {
       setDisplayName("");
       setRole("Viewer");
       onCreated();
+      onDone?.();
     } catch (error) {
       setFeedback({ kind: "error", text: error instanceof Error ? error.message : "User creation failed" });
     } finally {
       setPassword("");
       setUserPin("");
       setAdminPin("");
+      setPending(false);
     }
   }
 
   return (
+    <form className="action-form user-create-form" onSubmit={submit}>
+      <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} disabled={pending} />
+      <Input label="Display name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} disabled={pending} />
+      <Select
+        label="Role"
+        items={{ Viewer: "Viewer", Operator: "Operator", Administrator: "Administrator" }}
+        value={role}
+        onValueChange={(value) => setRole((value ?? "Viewer") as Role)}
+        disabled={pending}
+      />
+      <Input label="Initial password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={pending} />
+      <Input label="User PIN" type="password" value={userPin} onChange={(e) => setUserPin(e.target.value)} disabled={pending} />
+      <Input label="Administrator PIN" type="password" value={adminPin} onChange={(e) => setAdminPin(e.target.value)} disabled={pending} />
+      <div className="form-actions">
+        <Button type="submit" variant="primary" disabled={pending || !username || !displayName || !password || !userPin || !adminPin}>
+          {pending ? "Creating…" : "Create user"}
+        </Button>
+        <Button type="button" variant="secondary" onClick={reset} disabled={pending}>Clear</Button>
+      </div>
+      <Feedback state={feedback} />
+    </form>
+  );
+}
+
+export function CreateUserPanel({ onCreated }: { onCreated: () => void }) {
+  return (
     <LayerCard className="action-card user-create-card">
       <h2>Create user</h2>
       <p>Viewer is an authenticated read-only role; anonymous access is never a RadMon user.</p>
-      <form className="action-form" onSubmit={submit}>
-        <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} />
-        <Input label="Display name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-        <Select
-          label="Role"
-          items={{ Viewer: "Viewer", Operator: "Operator", Administrator: "Administrator" }}
-          value={role}
-          onValueChange={(value) => setRole((value ?? "Viewer") as Role)}
-        />
-        <Input label="Initial password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        <Input label="User PIN" type="password" value={userPin} onChange={(e) => setUserPin(e.target.value)} />
-        <Input label="Administrator PIN" type="password" value={adminPin} onChange={(e) => setAdminPin(e.target.value)} />
-        <div className="form-actions">
-          <Button type="submit" variant="primary">Create user</Button>
-          <Button type="button" variant="secondary" onClick={reset}>Cancel</Button>
-        </div>
-        <Feedback state={feedback} />
-      </form>
+      <CreateUserForm onCreated={onCreated} />
     </LayerCard>
   );
 }
