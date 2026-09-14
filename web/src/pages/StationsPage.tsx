@@ -19,9 +19,9 @@ type Overview = {
 };
 
 const STATUS_ITEMS = {
-  all: "All statuses",
+  all: "Semua status",
   normal: "Normal",
-  warning: "Warning",
+  warning: "Peringatan",
   alarm: "Alarm",
   offline: "Offline",
 };
@@ -41,7 +41,7 @@ export function StationsPage() {
         : value.stations[0]?.serid ?? null);
       setError("");
     })
-    .catch((e) => setError(e instanceof Error ? e.message : "Unable to load stations"));
+    .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat stasiun"));
 
   useEffect(() => { void load(); }, []);
   useWebRefresh(() => { void load(); });
@@ -64,24 +64,24 @@ export function StationsPage() {
   return (
     <div className="page-stack">
       <PageHeading
-        title="Stations"
-        description="Search, filter, inspect thresholds, and continue directly into measurement history."
+        title="Stasiun"
+        description="Cari, filter, periksa threshold, lalu lanjut langsung ke riwayat measurement."
       />
       {error ? <ErrorCard message={error} /> : null}
       {overview ? (
         <>
           <div className="metric-grid station-summary">
-            <MetricCard label="Configured" value={overview.stations.length} badge={<span className="cell-subtle">All detectors</span>} />
-            <MetricCard label="Normal" value={overview.counts.normal || 0} badge={<span className="cell-subtle">Current</span>} />
-            <MetricCard label="Needs attention" value={abnormal} badge={<span className="cell-subtle">Warning, alarm, offline</span>} />
-            <MetricCard label="Offline" value={overview.counts.offline || 0} badge={<span className="cell-subtle">Stale or missing live data</span>} />
+            <MetricCard label="Terkonfigurasi" value={overview.stations.length} badge={<span className="cell-subtle">Semua detektor</span>} />
+            <MetricCard label="Normal" value={overview.counts.normal || 0} badge={<span className="cell-subtle">Saat ini</span>} />
+            <MetricCard label="Perlu perhatian" value={abnormal} badge={<span className="cell-subtle">Peringatan, alarm, offline</span>} />
+            <MetricCard label="Offline" value={overview.counts.offline || 0} badge={<span className="cell-subtle">Data live usang atau tidak ada</span>} />
           </div>
 
           <LayerCard className="filter-card station-search">
             <div className="station-filter-grid">
               <Input
-                label="Search stations"
-                placeholder="Name, location, or SERID"
+                label="Cari stasiun"
+                placeholder="Nama, lokasi, atau SERID"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
@@ -95,8 +95,8 @@ export function StationsPage() {
           </LayerCard>
 
           <PageSection
-            title="Station workspace"
-            description={`${filtered.length} of ${overview.stations.length} stations shown.`}
+            title="Detail stasiun"
+            description={`${filtered.length} dari ${overview.stations.length} stasiun ditampilkan.`}
           >
             <div className="station-workspace">
               <ResponsiveStationView
