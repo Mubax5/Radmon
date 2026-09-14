@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 
 from radmon.central_api import CentralMariaDBRepository
 from radmon.config import Settings
-from radmon.lan import LanAggregator, LanCheckpointStore, LanSource, RemoteMariaDBSource
+from radmon.lan import LanAggregator, LanCheckpointStore, LanSource, MariaCentralStore, RemoteMariaDBSource
 from radmon.security import Role, SecurityStore
 from radmon.secure_api import SESSION_COOKIE
 from radmon.web_api import attach_web_api_routes
@@ -269,3 +269,94 @@ def test_alarm_policy_live_cycle_reads_source_live_snapshot_only_once(tmp_path) 
 
     assert result.error is None
     assert remote.live_calls == 1
+
+
+def test_central_live_upsert_uses_one_transaction_per_source_batch() -> None:
+    class Cursor:
+        def __init__(self) -> None:
+            self.rowcount = 1
+            self._selected = None
+            self.statements: list[str] = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(str(sql).lower().split())
+            self.statements.append(normalized)
+            if normalized.startswith("select name, location, hwaddress, hwtype from device"):
+                self._selected = None
+
+        def fetchone(self):
+            return self._selected
+
+    class Connection:
+        def __init__(self) -> None:
+            self.cursor_obj = Cursor()
+            self.commits = 0
+            self.rollbacks = 0
+            self.closed = 0
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            self.rollbacks += 1
+
+        def close(self):
+            self.closed += 1
+
+    connections: list[Connection] = []
+
+    def connect():
+        connection = Connection()
+        connections.append(connection)
+        return connection
+
+    store = MariaCentralStore(Settings(), connection_factory=connect)
+    rows = [
+        {
+            "serid": serid,
+            "name": f"Station {serid}",
+            "location": "Gd.52",
+            "warnlevel": 23.0,
+            "alarmlevel": 25.0,
+            "maxidlemin": 30,
+            "unit": "µSv/h",
+            "description": "prod",
+            "dtom": datetime(2026, 9, 15, 6, 30, offset),
+            "doserate": 0.20 + offset / 100,
+            "dose": 0.01,
+            "lastrate": 0.19,
+            "minrate": 0.10,
+            "maxrate": 0.30,
+            "avgrate": 0.20,
+            "lastdose": 0.01,
+            "mindose": 0.0,
+            "maxdose": 0.02,
+            "avgdose": 0.01,
+            "firstmea": datetime(2026, 9, 15, 6, 0, 0),
+            "lastmea": datetime(2026, 9, 15, 6, 30, offset),
+            "lastmeasec": 2,
+            "meacount": 42,
+        }
+        for serid, offset in ((5201, 0), (5202, 2))
+    ]
+
+    changed = store.upsert_live_rows("gd52", rows)
+
+    assert changed == 2
+    assert len(connections) == 1
+    assert connections[0].commits == 1
+    assert connections[0].rollbacks == 0
+    assert connections[0].closed == 1
+    statements = connections[0].cursor_obj.statements
+    assert sum("insert into device" in sql for sql in statements) == 2
+    assert sum("insert into recent" in sql for sql in statements) == 2
+    assert sum("insert ignore into measurement" in sql for sql in statements) == 2
