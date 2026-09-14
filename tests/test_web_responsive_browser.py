@@ -196,7 +196,6 @@ def _serve_ui(*, authenticated: bool = True):
         server.server_close()
         thread.join(timeout=5)
 
-
 @pytest.fixture(scope="module")
 def chrome_driver():
     pytest.importorskip("selenium")
@@ -353,10 +352,13 @@ def test_mobile_more_sheet_and_history_deep_link_are_reachable(chrome_driver):
         _wait_for(chrome_driver, ".mobile-more-sheet")
         route_container = chrome_driver.find_element(By.CSS_SELECTOR, ".mobile-more-sheet")
         assert route_container.get_attribute("data-secondary-routes") == "history,archives,users,system"
-        labels = {_element_text(element) for element in chrome_driver.find_elements(By.TAG_NAME, "button") if _element_text(element)}
+        labels = {_element_text(element) for element in route_container.find_elements(By.TAG_NAME, "button") if _element_text(element)}
         assert {"History", "Archives", "Users", "System", "Full monitoring", "Sign out"} <= labels
         _assert_no_horizontal_overflow(chrome_driver)
-        _button(chrome_driver, "History").click()
+        next(
+            button for button in route_container.find_elements(By.TAG_NAME, "button")
+            if _element_text(button) == "History"
+        ).click()
         WebDriverWait(chrome_driver, 8).until(lambda browser: "/app/history" in browser.current_url)
 
         chrome_driver.get(f"{base}/app/history?station=3801")
