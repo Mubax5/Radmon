@@ -23,6 +23,8 @@ def test_existing_grafana_refreshes_datasource_credentials_without_overwriting_s
         if method != "GET":
             writes.append((method, url, payload or {}))
             return {"status": "ok"}
+        if url.endswith("/api/datasources/uid/ipradmon-mysql/health"):
+            return {"status": "OK", "message": "Database Connection OK"}
         if "/api/datasources/uid/" in url:
             return {"uid": "ipradmon-mysql", "name": "ipradmon"}
         if "/api/dashboards/uid/" in url:
@@ -52,6 +54,8 @@ def test_legacy_readonly_dashboard_is_unlocked_without_restoring_factory_layout(
         if method != "GET":
             writes.append(payload or {})
             return {"status": "ok"}
+        if url.endswith("/api/datasources/uid/ipradmon-mysql/health"):
+            return {"status": "OK", "message": "Database Connection OK"}
         if "/api/datasources/uid/" in url:
             return {"uid": "ipradmon-mysql"}
         if "/api/dashboards/uid/" in url:
@@ -76,11 +80,17 @@ def test_legacy_readonly_dashboard_is_unlocked_without_restoring_factory_layout(
 def test_missing_grafana_resources_are_seeded_editable_without_overwrite(tmp_path: Path) -> None:
     bootstrap = PersistentGrafanaBootstrap(Settings(), project_root=tmp_path)
     posts: list[tuple[str, dict]] = []
+    datasource_created = False
 
     def request(url: str, *, method: str = "GET", payload=None, use_auth=True):
+        nonlocal datasource_created
         if method == "GET":
+            if url.endswith("/api/datasources/uid/ipradmon-mysql/health") and datasource_created:
+                return {"status": "OK", "message": "Database Connection OK"}
             raise RuntimeError("missing")
         posts.append((url, payload or {}))
+        if method == "POST" and url.endswith("/api/datasources"):
+            datasource_created = True
         return {"status": "ok"}
 
     bootstrap._request_json = request  # type: ignore[method-assign]
