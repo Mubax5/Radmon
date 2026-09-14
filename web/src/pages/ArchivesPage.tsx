@@ -33,7 +33,7 @@ export function ArchivesPage() {
 
   const load = () => api<ArchiveRecord[]>("/api/v1/control/archives")
     .then((rows) => { setItems(rows); setError(""); })
-    .catch((e) => setError(e instanceof Error ? e.message : "Unable to load archives"));
+    .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat arsip"));
 
   useEffect(() => { void load(); }, []);
   useWebRefresh(() => { void load(); }, ["archive_update"]);
@@ -52,29 +52,29 @@ export function ArchivesPage() {
   }, [items, year]);
 
   const yearItems = useMemo(
-    () => Object.fromEntries([["all", "All years"], ...derived.years.map((value) => [value, value])]),
+    () => Object.fromEntries([["all", "Semua tahun"], ...derived.years.map((value) => [value, value])]),
     [derived.years],
   );
 
   return (
     <div className="page-stack">
       <PageHeading
-        title="Archives"
-        description="Quarterly archive inventory, verification state, and retention context from the central catalog."
+        title="Arsip"
+        description="Inventaris arsip per kuartal, status verifikasi, dan konteks retensi dari katalog central."
       />
       {error ? <ErrorCard message={error} /> : null}
       {!items ? <LoadingCard /> : (
         <>
           <div className="metric-grid archive-summary">
-            <MetricCard label="Archive bundles" value={items.length} badge={<span className="cell-subtle">Catalog total</span>} />
-            <MetricCard label="Complete" value={derived.complete} badge={<span className="cell-subtle">Finished bundles</span>} />
-            <MetricCard label="Latest period" value={derived.latestQuarter} badge={<span className="cell-subtle">Quarter ID</span>} />
-            <MetricCard label="Years" value={derived.years.length} badge={<span className="cell-subtle">Available periods</span>} />
+            <MetricCard label="Bundle arsip" value={items.length} badge={<span className="cell-subtle">Total katalog</span>} />
+            <MetricCard label="Selesai" value={derived.complete} badge={<span className="cell-subtle">Bundle selesai</span>} />
+            <MetricCard label="Periode terbaru" value={derived.latestQuarter} badge={<span className="cell-subtle">Quarter ID</span>} />
+            <MetricCard label="Tahun" value={derived.years.length} badge={<span className="cell-subtle">Periode tersedia</span>} />
           </div>
 
           <LayerCard className="filter-card archive-filter">
             <Select
-              label="Archive year"
+              label="Tahun arsip"
               items={yearItems}
               value={year}
               onValueChange={(value) => setYear(String(value ?? "all"))}
@@ -82,8 +82,8 @@ export function ArchivesPage() {
           </LayerCard>
 
           <PageSection
-            title="Archive inventory"
-            description={`${derived.filtered.length} archive bundle${derived.filtered.length === 1 ? "" : "s"} in the selected period.`}
+            title="Detail arsip"
+            description={`${derived.filtered.length} bundle arsip pada periode yang dipilih.`}
           >
             <ResponsiveDataView
               desktop={derived.filtered.length ? (
@@ -91,11 +91,11 @@ export function ArchivesPage() {
                   <Table>
                     <Table.Header>
                       <Table.Row>
-                        <Table.Head>Quarter</Table.Head>
-                        <Table.Head>State</Table.Head>
-                        <Table.Head>Start</Table.Head>
-                        <Table.Head>End</Table.Head>
-                        <Table.Head>Updated</Table.Head>
+                        <Table.Head>Kuartal</Table.Head>
+                        <Table.Head>Status</Table.Head>
+                        <Table.Head>Mulai</Table.Head>
+                        <Table.Head>Selesai</Table.Head>
+                        <Table.Head>Diperbarui</Table.Head>
                       </Table.Row>
                     </Table.Header>
                     <Table.Body>
@@ -111,26 +111,26 @@ export function ArchivesPage() {
                     </Table.Body>
                   </Table>
                 </LayerCard>
-              ) : <LayerCard className="empty-card">No archive bundles match this year.</LayerCard>}
+              ) : <LayerCard className="empty-card">Tidak ada bundle arsip untuk tahun ini.</LayerCard>}
               mobile={derived.filtered.length ? (
                 <div className="mobile-card-list">
                   {derived.filtered.map((item, index) => (
                     <LayerCard className="archive-card" key={`${item.quarter_id ?? "archive"}-${index}`}>
                       <div className="archive-card-header">
                         <div>
-                          <h3>{String(item.quarter_id ?? "Archive")}</h3>
-                          <div className="cell-subtle">{String(item.state ?? "Unknown state")}</div>
+                          <h3>{String(item.quarter_id ?? "Arsip")}</h3>
+                          <div className="cell-subtle">{String(item.state ?? "Status tidak diketahui")}</div>
                         </div>
                       </div>
                       <div className="card-meta">
-                        {item.start_at ? <span>Start: {formatTimestamp(item.start_at)}</span> : null}
-                        {item.end_at ? <span>End: {formatTimestamp(item.end_at)}</span> : null}
-                        {(item.updated_at || item.created_at) ? <span>Updated: {formatTimestamp(item.updated_at ?? item.created_at)}</span> : null}
+                        {item.start_at ? <span>Mulai: {formatTimestamp(item.start_at)}</span> : null}
+                        {item.end_at ? <span>Selesai: {formatTimestamp(item.end_at)}</span> : null}
+                        {(item.updated_at || item.created_at) ? <span>Diperbarui: {formatTimestamp(item.updated_at ?? item.created_at)}</span> : null}
                       </div>
                     </LayerCard>
                   ))}
                 </div>
-              ) : <LayerCard className="empty-card">No archive bundles match this year.</LayerCard>}
+              ) : <LayerCard className="empty-card">Tidak ada bundle arsip untuk tahun ini.</LayerCard>}
             />
           </PageSection>
         </>
