@@ -222,14 +222,23 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -f $tag $env:GITHUB_SHA
-          git push origin "refs/tags/$tag" --force
 
+          # For an existing production release, publish and validate the new assets
+          # while `latest` still points at the old commit. Moving the tag is the
+          # final publication gate, so installed updaters cannot observe a new SHA
+          # paired with stale assets during the clobber window.
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag "installer\RadMon-Setup.exe" "installer\RadMon-Setup.exe.sha256" --clobber --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw "Failed to upload RadMon release assets" }
             gh release edit $tag --title $title --latest --notes $notes --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw "Failed to update RadMon release metadata" }
           }
           else {
-            gh release create $tag "installer\RadMon-Setup.exe" "installer\RadMon-Setup.exe.sha256" --title $title --latest --notes $notes --repo $env:GITHUB_REPOSITORY
+            # Bootstrap path only: if no release exists yet, create it for this SHA.
+            gh release create $tag "installer\RadMon-Setup.exe" "installer\RadMon-Setup.exe.sha256" --target $env:GITHUB_SHA --title $title --latest --notes $notes --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create RadMon release" }
           }
+
+          git tag -f $tag $env:GITHUB_SHA
+          git push origin "refs/tags/$tag" --force
