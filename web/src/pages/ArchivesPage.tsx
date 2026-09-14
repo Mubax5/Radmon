@@ -43,11 +43,11 @@ export function ArchivesPage() {
     const years = [...new Set(records.map((item) => quarterYear(item.quarter_id)).filter((value): value is string => Boolean(value)))].sort().reverse();
     const filtered = year === "all" ? records : records.filter((item) => quarterYear(item.quarter_id) === year);
     const complete = records.filter((item) => String(item.state ?? "").toUpperCase() === "COMPLETE").length;
-    const latestQuarter = records
+    const quarters = records
       .map((item) => String(item.quarter_id ?? ""))
       .filter(Boolean)
-      .sort()
-      .at(-1) ?? "—";
+      .sort();
+    const latestQuarter = quarters.length ? quarters[quarters.length - 1] : "—";
     return { years, filtered, complete, latestQuarter };
   }, [items, year]);
 
