@@ -54,7 +54,7 @@ export function MobileMoreSheet({
           </button>
         )}
       />
-      <Dialog>
+      <Dialog className="radmon-dialog" style={{ zIndex: 90 }}>
         <Dialog.Title>More</Dialog.Title>
         <Dialog.Description>
           Additional RadMon views and account actions for {user.display_name}.
