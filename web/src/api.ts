@@ -33,6 +33,9 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!response.ok) {
+    if (response.status === 401 && path !== "/auth/login" && path !== "/auth/me") {
+      window.dispatchEvent(new Event("radmon:session-expired"));
+    }
     let detail = `${response.status} ${response.statusText}`;
     try {
       const payload = await response.json();
