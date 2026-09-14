@@ -32,7 +32,7 @@ function eventVariant(event: PolicyEvent): "success" | "warning" | "error" | "se
 }
 
 function EventCards({ events }: { events: PolicyEvent[] }) {
-  if (!events.length) return <LayerCard className="empty-card">No alarm events.</LayerCard>;
+  if (!events.length) return <LayerCard className="empty-card">Tidak ada event alarm.</LayerCard>;
   return (
     <div className="mobile-card-list">
       {events.map((event) => (
@@ -45,9 +45,9 @@ function EventCards({ events }: { events: PolicyEvent[] }) {
             <Badge variant={eventVariant(event)}>{event.status || event.kind}</Badge>
           </div>
           <div className="card-meta">
-            <span>Measured: {event.measured_value ?? "—"}</span>
+            <span>Measurement: {event.measured_value ?? "—"}</span>
             <span>Threshold: {event.threshold ?? "—"}</span>
-            <span>Surfaced: {formatTimestamp(event.surfaced_at)}</span>
+            <span>Muncul: {formatTimestamp(event.surfaced_at)}</span>
           </div>
         </LayerCard>
       ))}
@@ -56,18 +56,18 @@ function EventCards({ events }: { events: PolicyEvent[] }) {
 }
 
 function EventTable({ events }: { events: PolicyEvent[] }) {
-  if (!events.length) return <LayerCard className="empty-card">No alarm events.</LayerCard>;
+  if (!events.length) return <LayerCard className="empty-card">Tidak ada event alarm.</LayerCard>;
   return (
     <LayerCard className="table-card">
       <Table>
         <Table.Header>
           <Table.Row>
-            <Table.Head>Station</Table.Head>
-            <Table.Head>Kind</Table.Head>
+            <Table.Head>Stasiun</Table.Head>
+            <Table.Head>Jenis</Table.Head>
             <Table.Head>Status</Table.Head>
-            <Table.Head>Measured</Table.Head>
+            <Table.Head>Measurement</Table.Head>
             <Table.Head>Threshold</Table.Head>
-            <Table.Head>Surfaced</Table.Head>
+            <Table.Head>Muncul</Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -95,7 +95,7 @@ export function AlarmsPage() {
       setItems(rows);
       setError("");
     })
-    .catch((e) => setError(e instanceof Error ? e.message : "Unable to load alarms"));
+    .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat alarm"));
 
   useEffect(() => { void load(); }, []);
   useWebRefresh(() => { void load(); }, ["live_update"]);
@@ -111,16 +111,16 @@ export function AlarmsPage() {
   return (
     <div className="page-stack">
       <PageHeading
-        title="Alarms"
-        description="Active alarm response comes first; suppression and event history remain protected by role and operator PIN policy."
-        action={<Button variant="secondary" onClick={() => void load()}>Refresh</Button>}
+        title="Alarm"
+        description="Alarm aktif diprioritaskan; suppression dan riwayat event tetap dilindungi oleh role dan policy PIN operator."
+        action={<Button variant="secondary" onClick={() => void load()}>Muat ulang</Button>}
       />
       {error ? <ErrorCard message={error} /> : null}
       {!items ? <LoadingCard /> : (
         <>
           <PageSection
-            title="Active alarms"
-            description="Events requiring immediate operator attention."
+            title="Alarm aktif"
+            description="Event yang memerlukan perhatian operator segera."
             className="active-alarm-section"
           >
             <div className="active-alarm-list">
@@ -129,17 +129,17 @@ export function AlarmsPage() {
           </PageSection>
 
           <div className="metric-grid alarm-summary">
-            <MetricCard label="Active" value={summary.active.length} badge={<Badge variant={summary.active.length ? "error" : "success"}>{summary.active.length ? "Action required" : "Clear"}</Badge>} />
+            <MetricCard label="Aktif" value={summary.active.length} badge={<Badge variant={summary.active.length ? "error" : "success"}>{summary.active.length ? "Perlu tindakan" : "Aman"}</Badge>} />
             <MetricCard label="Retrigger locked" value={summary.retriggerLocked} badge={<span className="cell-subtle">Burst policy</span>} />
-            <MetricCard label="Suppressed events" value={summary.suppressed} badge={<span className="cell-subtle">Policy history</span>} />
-            <MetricCard label="Recent events" value={summary.total} badge={<span className="cell-subtle">Loaded records</span>} />
+            <MetricCard label="Event tersupresi" value={summary.suppressed} badge={<span className="cell-subtle">Riwayat policy</span>} />
+            <MetricCard label="Event terbaru" value={summary.total} badge={<span className="cell-subtle">Rekaman dimuat</span>} />
           </div>
 
-          <PageSection title="Operator actions" description="Response and timed suppression require authorized PIN confirmation.">
+          <PageSection title="Tindakan operator" description="Respons alarm dan timed suppression memerlukan konfirmasi PIN yang terotorisasi.">
             <AlarmOperations events={items} onChanged={() => void load()} />
           </PageSection>
 
-          <PageSection title="Event history" description="Central persisted alarm-policy events, newest order as returned by the backend.">
+          <PageSection title="Riwayat event" description="Event alarm-policy yang tersimpan di central, dengan urutan terbaru sesuai backend.">
             <ResponsiveDataView
               desktop={<EventTable events={items} />}
               mobile={<EventCards events={items} />}
