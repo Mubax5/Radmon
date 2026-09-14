@@ -73,20 +73,20 @@ export function MetricCard({
 export function formatTimestamp(value?: string | null): string {
   if (!value) return "—";
   const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString("id-ID");
 }
 
 export function freshnessLabel(value?: string | null): string {
-  if (!value) return "No live measurement";
+  if (!value) return "Belum ada measurement live";
   const parsed = new Date(value);
   const delta = Date.now() - parsed.getTime();
-  if (!Number.isFinite(delta)) return "Unknown age";
+  if (!Number.isFinite(delta)) return "Umur data tidak diketahui";
   const minutes = Math.max(0, Math.floor(delta / 60000));
-  if (minutes < 1) return "Just now";
-  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 1) return "Baru saja";
+  if (minutes < 60) return `${minutes} mnt lalu`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours} h ago`;
-  return `${Math.floor(hours / 24)} d ago`;
+  if (hours < 48) return `${hours} jam lalu`;
+  return `${Math.floor(hours / 24)} hari lalu`;
 }
 
 export function JsonTable({ rows, empty }: { rows: Array<Record<string, unknown>>; empty: string }) {
@@ -115,7 +115,7 @@ export function JsonTable({ rows, empty }: { rows: Array<Record<string, unknown>
 }
 
 export function LoadingCard() {
-  return <LayerCard className="empty-card">Loading…</LayerCard>;
+  return <LayerCard className="empty-card">Memuat…</LayerCard>;
 }
 
 export function ErrorCard({ message }: { message: string }) {
