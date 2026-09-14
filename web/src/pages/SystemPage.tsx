@@ -42,7 +42,7 @@ function sourceVariant(state: string): "success" | "warning" | "error" | "second
 }
 
 function SourceCards({ sources }: { sources: SourceHealth[] }) {
-  if (!sources.length) return <LayerCard className="empty-card">No LAN source health records.</LayerCard>;
+  if (!sources.length) return <LayerCard className="empty-card">Belum ada rekaman kesehatan source LAN.</LayerCard>;
   return (
     <div className="mobile-card-list source-health-list">
       {sources.map((source) => (
@@ -55,11 +55,11 @@ function SourceCards({ sources }: { sources: SourceHealth[] }) {
             <Badge variant={sourceVariant(source.state)}>{source.state}</Badge>
           </div>
           <div className="card-meta">
-            <span>Last success: {formatTimestamp(source.last_success)} · {freshnessLabel(source.last_success)}</span>
-            <span>Last live poll: {formatTimestamp(source.last_live_poll)}</span>
-            {source.last_failure ? <span>Last failure: {formatTimestamp(source.last_failure)}</span> : null}
-            {source.last_history_import ? <span>History import: {formatTimestamp(source.last_history_import)}</span> : null}
-            {source.consecutive_failures ? <span>Consecutive failures: {source.consecutive_failures}</span> : null}
+            <span>Terakhir berhasil: {formatTimestamp(source.last_success)} · {freshnessLabel(source.last_success)}</span>
+            <span>Live poll terakhir: {formatTimestamp(source.last_live_poll)}</span>
+            {source.last_failure ? <span>Kegagalan terakhir: {formatTimestamp(source.last_failure)}</span> : null}
+            {source.last_history_import ? <span>Import history: {formatTimestamp(source.last_history_import)}</span> : null}
+            {source.consecutive_failures ? <span>Kegagalan beruntun: {source.consecutive_failures}</span> : null}
             {source.last_error ? <span>Error: {source.last_error}</span> : null}
           </div>
         </LayerCard>
@@ -69,18 +69,18 @@ function SourceCards({ sources }: { sources: SourceHealth[] }) {
 }
 
 function SourceTable({ sources }: { sources: SourceHealth[] }) {
-  if (!sources.length) return <LayerCard className="empty-card">No LAN source health records.</LayerCard>;
+  if (!sources.length) return <LayerCard className="empty-card">Belum ada rekaman kesehatan source LAN.</LayerCard>;
   return (
     <LayerCard className="table-card source-health-table">
       <Table>
         <Table.Header>
           <Table.Row>
             <Table.Head>Source</Table.Head>
-            <Table.Head>State</Table.Head>
-            <Table.Head>Last success</Table.Head>
+            <Table.Head>Status</Table.Head>
+            <Table.Head>Terakhir berhasil</Table.Head>
             <Table.Head>Live poll</Table.Head>
-            <Table.Head>Failures</Table.Head>
-            <Table.Head>Last error</Table.Head>
+            <Table.Head>Kegagalan</Table.Head>
+            <Table.Head>Error terakhir</Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -109,7 +109,7 @@ export function SystemPage() {
       setData(value);
       setError("");
     })
-    .catch((e) => setError(e instanceof Error ? e.message : "Unable to load system state"));
+    .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat status sistem"));
 
   useEffect(() => { void load(); }, []);
   useWebRefresh(() => { void load(); });
@@ -126,14 +126,14 @@ export function SystemPage() {
   return (
     <div className="page-stack">
       <PageHeading
-        title="System"
-        description="Central runtime diagnostics, LAN source health, and local Grafana administration."
+        title="Sistem"
+        description="Diagnostik runtime central, kesehatan source LAN, dan administrasi Grafana lokal."
         action={data?.grafana_admin_url ? (
           <Button
             variant="secondary"
             onClick={() => window.open(data.grafana_admin_url, "_blank", "noopener,noreferrer")}
           >
-            Open Grafana admin
+            Buka admin Grafana
           </Button>
         ) : undefined}
       />
@@ -141,15 +141,15 @@ export function SystemPage() {
       {!data ? <LoadingCard /> : (
         <>
           <div className="metric-grid system-metrics source-health-summary">
-            <MetricCard label="Central service" value={data.service} badge={<Badge variant="success">Running</Badge>} className="system-value-card" />
-            <MetricCard label="Healthy sources" value={summary.healthy} badge={<Badge variant="success">Connected</Badge>} />
-            <MetricCard label="Degraded" value={summary.degraded} badge={<Badge variant={summary.degraded ? "warning" : "secondary"}>Sources</Badge>} />
-            <MetricCard label="Offline" value={summary.offline} badge={<Badge variant={summary.offline ? "error" : "secondary"}>Sources</Badge>} />
+            <MetricCard label="Service central" value={data.service} badge={<Badge variant="success">Berjalan</Badge>} className="system-value-card" />
+            <MetricCard label="Source sehat" value={summary.healthy} badge={<Badge variant="success">Terhubung</Badge>} />
+            <MetricCard label="Degraded" value={summary.degraded} badge={<Badge variant={summary.degraded ? "warning" : "secondary"}>Source</Badge>} />
+            <MetricCard label="Offline" value={summary.offline} badge={<Badge variant={summary.offline ? "error" : "secondary"}>Source</Badge>} />
           </div>
 
           <PageSection
-            title="LAN source health"
-            description="Connectivity, poll freshness, failure count, and most recent error from the central security sidecar."
+            title="Kesehatan source LAN"
+            description="Konektivitas, kesegaran poll, jumlah kegagalan, dan error terbaru dari central security sidecar."
             className="source-health-section"
           >
             <ResponsiveDataView
@@ -158,12 +158,12 @@ export function SystemPage() {
             />
           </PageSection>
 
-          <PageSection title="Administration" description={`Authenticated as ${data.role}. Grafana editor remains local to the Dell server.`}>
+          <PageSection title="Administrasi" description={`Terautentikasi sebagai ${data.role}. Editor Grafana tetap lokal di server Dell.`}>
             <LayerCard className="action-card system-admin-card">
-              <h2>Grafana administration</h2>
-              <p>Dashboard editing stays on the Dell loopback listener; BRIN clients continue to use the RadMon gateway for read-only monitoring.</p>
+              <h2>Administrasi Grafana</h2>
+              <p>Editing dashboard tetap pada listener loopback Dell; client BRIN tetap memakai gateway RadMon untuk monitoring read-only.</p>
               <div className="form-actions">
-                <Button variant="secondary" onClick={() => window.open(data.grafana_admin_url, "_blank", "noopener,noreferrer")}>Open local Grafana admin</Button>
+                <Button variant="secondary" onClick={() => window.open(data.grafana_admin_url, "_blank", "noopener,noreferrer")}>Buka admin Grafana lokal</Button>
               </div>
             </LayerCard>
           </PageSection>
