@@ -96,7 +96,7 @@ def test_spa_shell_is_never_cached_across_installer_upgrades(tmp_path):
     assert "no-store" in response.headers.get("cache-control", "").lower()
 
 
-def test_control_plane_has_no_letter_r_badges_and_no_decorative_navigation_icons():
+def test_control_plane_has_no_letter_r_badges_and_uses_curated_navigation_icons():
     auth = (ROOT / "web/src/auth.tsx").read_text(encoding="utf-8")
     layout_files = [
         ROOT / "web/src/layout.tsx",
@@ -108,7 +108,7 @@ def test_control_plane_has_no_letter_r_badges_and_no_decorative_navigation_icons
     combined = auth + "\n" + layout
 
     assert re.search(r">\s*R\s*<", combined) is None
-    assert "@phosphor-icons/react" not in layout
-    assert " icon=" not in layout
+    assert "@phosphor-icons/react" in layout
+    assert "nav-icon" in layout
     assert "brin-logo.png" in auth
     assert "brin-logo.png" in layout
