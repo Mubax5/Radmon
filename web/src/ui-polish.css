@@ -279,6 +279,7 @@
     margin: 0 !important;
     padding: 0 !important;
     transform: none !important;
+    translate: none !important;
     border-radius: 20px !important;
     overflow: hidden !important;
   }
