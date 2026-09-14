@@ -37,27 +37,24 @@ img { max-width: 100%; }
   top: 0;
   z-index: 30;
   min-height: 58px;
-  display: grid;
-  grid-template-columns: minmax(84px, 112px) minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: 12px;
   padding: calc(8px + env(safe-area-inset-top)) 14px 8px;
   border-bottom: 1px solid #e5e7eb;
   background: rgba(255, 255, 255, .96);
   backdrop-filter: blur(12px);
 }
 .mobile-topbar-brand { display: flex; align-items: center; min-width: 0; }
-.mobile-topbar-brand img { display: block; width: 96px; height: auto; object-fit: contain; }
-.mobile-topbar strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
+.mobile-topbar-brand img { display: block; width: 104px; height: auto; object-fit: contain; }
 .mobile-content {
   flex: 1;
   min-width: 0;
   width: 100%;
-  padding: 14px 12px calc(84px + env(safe-area-inset-bottom));
+  padding: 16px 12px calc(84px + env(safe-area-inset-bottom));
   overflow-x: hidden;
 }
-.mobile-content .page-heading h1 { display: none; }
-.mobile-content .page-heading { margin-bottom: 6px; }
+.mobile-content .page-heading { margin-bottom: 14px; }
+.mobile-content .page-heading h1 { font-size: 20px; }
 .mobile-bottom-nav {
   position: fixed;
   left: 0;
@@ -74,16 +71,22 @@ img { max-width: 100%; }
 .mobile-nav-button {
   min-width: 0;
   min-height: 56px;
-  padding: 8px 4px;
+  padding: 7px 4px 6px;
   border: 0;
   background: transparent;
   color: #6b7280;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  line-height: 1;
   transition: color 160ms ease, background-color 160ms ease;
 }
-.mobile-nav-button.is-active { color: #111827; background: #f3f4f6; }
+.mobile-nav-icon { display: block; flex: 0 0 auto; }
+.mobile-nav-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; font-weight: 600; line-height: 1.15; }
+.mobile-nav-button.is-active { color: #111827; background: transparent; }
+.mobile-nav-button.is-active .mobile-nav-icon { stroke-width: 2.25; }
 .mobile-nav-button:focus-visible { outline: 2px solid #111827; outline-offset: -2px; }
 .mobile-more-sheet { display: grid; gap: 16px; margin-top: 16px; max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); overflow: auto; overscroll-behavior-y: contain; }
 .mobile-more-account { display: grid; gap: 2px; min-width: 0; }
@@ -96,6 +99,7 @@ img { max-width: 100%; }
 .sidebar-brand { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 5px 2px; min-width: 0; }
 .sidebar-logo { display: block; width: 112px; max-width: calc(100% - 58px); height: auto; flex: 0 1 auto; object-fit: contain; }
 .sidebar-brand strong { font-size: 14px; font-weight: 600; white-space: nowrap; }
+.nav-icon { flex: 0 0 auto; }
 .account-card { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px; min-width: 0; }
 .account-card > div { min-width: 0; display: grid; }
 .account-card strong { overflow: hidden; text-overflow: ellipsis; font-size: 13px; white-space: nowrap; }
