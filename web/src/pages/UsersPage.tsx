@@ -22,7 +22,7 @@ type UserRecord = {
 };
 
 function UserCards({ users }: { users: UserRecord[] }) {
-  if (!users.length) return <LayerCard className="empty-card">No users.</LayerCard>;
+  if (!users.length) return <LayerCard className="empty-card">Tidak ada pengguna.</LayerCard>;
   return (
     <div className="mobile-card-list">
       {users.map((user) => (
@@ -32,11 +32,11 @@ function UserCards({ users }: { users: UserRecord[] }) {
               <h3>{user.display_name}</h3>
               <div className="cell-subtle">@{user.username}</div>
             </div>
-            <Badge variant={user.enabled ? "success" : "secondary"}>{user.enabled ? "Enabled" : "Disabled"}</Badge>
+            <Badge variant={user.enabled ? "success" : "secondary"}>{user.enabled ? "Aktif" : "Nonaktif"}</Badge>
           </div>
           <div className="card-meta">
-            <span>Role: {user.role}</span>
-            <span>Updated: {formatTimestamp(user.updated_at ?? user.created_at)}</span>
+            <span>Peran: {user.role}</span>
+            <span>Diperbarui: {formatTimestamp(user.updated_at ?? user.created_at)}</span>
           </div>
         </LayerCard>
       ))}
@@ -45,17 +45,17 @@ function UserCards({ users }: { users: UserRecord[] }) {
 }
 
 function UserTable({ users }: { users: UserRecord[] }) {
-  if (!users.length) return <LayerCard className="empty-card">No users.</LayerCard>;
+  if (!users.length) return <LayerCard className="empty-card">Tidak ada pengguna.</LayerCard>;
   return (
     <LayerCard className="table-card">
       <Table>
         <Table.Header>
           <Table.Row>
-            <Table.Head>User</Table.Head>
-            <Table.Head>Display name</Table.Head>
-            <Table.Head>Role</Table.Head>
+            <Table.Head>Username</Table.Head>
+            <Table.Head>Nama tampilan</Table.Head>
+            <Table.Head>Peran</Table.Head>
             <Table.Head>Status</Table.Head>
-            <Table.Head>Updated</Table.Head>
+            <Table.Head>Diperbarui</Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -66,7 +66,7 @@ function UserTable({ users }: { users: UserRecord[] }) {
               <Table.Cell>{user.role}</Table.Cell>
               <Table.Cell>
                 <Badge variant={user.enabled ? "success" : "secondary"}>
-                  {user.enabled ? "Enabled" : "Disabled"}
+                  {user.enabled ? "Aktif" : "Nonaktif"}
                 </Badge>
               </Table.Cell>
               <Table.Cell>{formatTimestamp(user.updated_at ?? user.created_at)}</Table.Cell>
@@ -87,7 +87,7 @@ export function UsersPage() {
       setItems(rows);
       setError("");
     })
-    .catch((e) => setError(e instanceof Error ? e.message : "Unable to load users"));
+    .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat pengguna"));
 
   useEffect(() => { void load(); }, []);
 
@@ -103,16 +103,16 @@ export function UsersPage() {
 
   const createUserAction = (
     <Dialog.Root>
-      <Dialog.Trigger render={(props) => <Button {...props} variant="primary">Create user</Button>} />
+      <Dialog.Trigger render={(props) => <Button {...props} variant="primary">Buat pengguna</Button>} />
       <Dialog>
-        <Dialog.Title>Create user</Dialog.Title>
+        <Dialog.Title>Buat pengguna</Dialog.Title>
         <Dialog.Description>
-          Create an authenticated RadMon identity. Viewer is read-only; Operator and Administrator permissions remain enforced by the backend.
+          Buat identitas RadMon terautentikasi. Viewer hanya dapat membaca; izin Operator dan Administrator tetap ditegakkan oleh backend.
         </Dialog.Description>
         <div className="dialog-form">
           <CreateUserForm onCreated={() => void load()} />
           <div className="form-actions dialog-close-row">
-            <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary">Close</Button>} />
+            <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary">Tutup</Button>} />
           </div>
         </div>
       </Dialog>
@@ -122,21 +122,21 @@ export function UsersPage() {
   return (
     <div className="page-stack">
       <PageHeading
-        title="Users"
-        description="Authenticated RadMon identities, roles, and account state. Secrets remain write-only."
+        title="Pengguna"
+        description="Identitas RadMon terautentikasi, role, dan status akun. Password serta PIN tetap write-only."
         action={createUserAction}
       />
       {error ? <ErrorCard message={error} /> : null}
       {!items ? <LoadingCard /> : (
         <>
           <div className="metric-grid user-summary">
-            <MetricCard label="Users" value={summary.total} badge={<span className="cell-subtle">Authenticated identities</span>} />
-            <MetricCard label="Enabled" value={summary.enabled} badge={<span className="cell-subtle">Can sign in</span>} />
-            <MetricCard label="Operators" value={summary.operators} badge={<span className="cell-subtle">Operational control</span>} />
-            <MetricCard label="Administrators" value={summary.administrators} badge={<span className="cell-subtle">Administrative access</span>} />
+            <MetricCard label="Pengguna" value={summary.total} badge={<span className="cell-subtle">Identitas terautentikasi</span>} />
+            <MetricCard label="Aktif" value={summary.enabled} badge={<span className="cell-subtle">Dapat masuk</span>} />
+            <MetricCard label="Operator" value={summary.operators} badge={<span className="cell-subtle">Kontrol operasional</span>} />
+            <MetricCard label="Administrator" value={summary.administrators} badge={<span className="cell-subtle">Akses administrasi</span>} />
           </div>
 
-          <PageSection title="Identity directory" description="Role and enabled state are shown without password or PIN material.">
+          <PageSection title="Direktori pengguna" description="Role dan status akun ditampilkan tanpa material password atau PIN.">
             <ResponsiveDataView
               desktop={<UserTable users={items} />}
               mobile={<UserCards users={items} />}
