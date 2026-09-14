@@ -98,7 +98,13 @@ def test_spa_shell_is_never_cached_across_installer_upgrades(tmp_path):
 
 def test_control_plane_has_no_letter_r_badges_and_no_decorative_navigation_icons():
     auth = (ROOT / "web/src/auth.tsx").read_text(encoding="utf-8")
-    layout = (ROOT / "web/src/layout.tsx").read_text(encoding="utf-8")
+    layout_files = [
+        ROOT / "web/src/layout.tsx",
+        ROOT / "web/src/layout/DesktopShell.tsx",
+        ROOT / "web/src/layout/MobileShell.tsx",
+        ROOT / "web/src/layout/MobileMoreSheet.tsx",
+    ]
+    layout = "\n".join(path.read_text(encoding="utf-8") for path in layout_files)
     combined = auth + "\n" + layout
 
     assert re.search(r">\s*R\s*<", combined) is None
