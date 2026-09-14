@@ -1,15 +1,4 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import {
-  ArchiveIcon,
-  BellIcon,
-  ChartLineUpIcon,
-  GaugeIcon,
-  GearIcon,
-  HouseIcon,
-  MapPinIcon,
-  SignOutIcon,
-  UsersIcon,
-} from "@phosphor-icons/react";
 import { Button, Sidebar } from "@cloudflare/kumo";
 import type { Role, SessionUser } from "./api";
 import brinLogo from "./assets/brin-logo.png";
@@ -19,13 +8,13 @@ export type AppRoute = "overview" | "stations" | "history" | "archives" | "alarm
 const ROLE_RANK: Record<Role, number> = { Viewer: 1, Operator: 2, Administrator: 3 };
 
 const NAV = [
-  { id: "overview", label: "Overview", minimum: "Viewer", icon: HouseIcon },
-  { id: "stations", label: "Stations", minimum: "Viewer", icon: MapPinIcon },
-  { id: "history", label: "History", minimum: "Viewer", icon: ChartLineUpIcon },
-  { id: "archives", label: "Archives", minimum: "Viewer", icon: ArchiveIcon },
-  { id: "alarms", label: "Alarms", minimum: "Operator", icon: BellIcon },
-  { id: "users", label: "Users", minimum: "Administrator", icon: UsersIcon },
-  { id: "system", label: "System", minimum: "Administrator", icon: GearIcon },
+  { id: "overview", label: "Overview", minimum: "Viewer" },
+  { id: "stations", label: "Stations", minimum: "Viewer" },
+  { id: "history", label: "History", minimum: "Viewer" },
+  { id: "archives", label: "Archives", minimum: "Viewer" },
+  { id: "alarms", label: "Alarms", minimum: "Operator" },
+  { id: "users", label: "Users", minimum: "Administrator" },
+  { id: "system", label: "System", minimum: "Administrator" },
 ] as const;
 
 function routeFromLocation(): AppRoute {
@@ -88,7 +77,6 @@ export function AppLayout({
                 {allowed.map((item) => (
                   <Sidebar.MenuButton
                     key={item.id}
-                    icon={item.icon}
                     active={route === item.id}
                     onClick={() => navigate(item.id)}
                   >
@@ -101,7 +89,6 @@ export function AppLayout({
               <Sidebar.GroupLabel>Monitoring</Sidebar.GroupLabel>
               <Sidebar.Menu>
                 <Sidebar.MenuButton
-                  icon={GaugeIcon}
                   onClick={() => window.open("/", "_blank", "noopener,noreferrer")}
                 >
                   Full monitoring
@@ -114,11 +101,10 @@ export function AppLayout({
               <div><strong>{user.display_name}</strong><span>{user.role}</span></div>
               <Button
                 variant="secondary"
-                shape="square"
                 aria-label="Sign out"
                 onClick={() => void onSignOut()}
               >
-                <SignOutIcon />
+                Sign out
               </Button>
             </div>
             <Sidebar.Trigger />
