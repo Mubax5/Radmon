@@ -72,8 +72,24 @@ def attach_web_api_routes(
     def overview(identity: UserIdentity = Depends(viewer)):
         items: list[dict[str, Any]] = []
         counts = {"normal": 0, "warning": 0, "alarm": 0, "offline": 0}
-        for station in repository.stations():
-            row = repository.latest(int(station["serid"]))
+        snapshot_reader = getattr(repository, "overview_rows", None)
+        if callable(snapshot_reader):
+            snapshots = snapshot_reader()
+            station_rows = []
+            for snapshot in snapshots:
+                station = {
+                    key: snapshot.get(key)
+                    for key in ("serid", "name", "location", "warnlevel", "alarmlevel", "maxidlemin", "unit")
+                }
+                row = None if snapshot.get("dtom") is None else snapshot
+                station_rows.append((station, row))
+        else:
+            station_rows = [
+                (station, repository.latest(int(station["serid"])))
+                for station in repository.stations()
+            ]
+
+        for station, row in station_rows:
             status = "offline"
             dose_rate = None
             measured_at = None
