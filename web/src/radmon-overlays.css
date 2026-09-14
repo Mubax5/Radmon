@@ -1,13 +1,18 @@
 /* RadMon-owned viewport and modal safety overrides layered after Kumo standalone styles. */
 
 /* Kumo 2.13 renders dialog portal descendants without an explicit stacking level.
-   Keep backdrop above application chrome and the dialog above its backdrop. */
+   Keep backdrop above application chrome and the popup above its backdrop. */
 body .fixed.inset-0.bg-kumo-recessed.opacity-80[role="presentation"] {
-  z-index: 80;
+  z-index: 80 !important;
 }
 
-body [role="dialog"] {
-  z-index: 90;
+/* Kumo 2.13.2 Dialog popup uses this fixed centered geometry. The role selector
+   covers Base UI dialog semantics; the geometry selector is the pinned-version
+   fallback so the popup can never sit underneath its own backdrop. */
+body [role="dialog"],
+body .radmon-dialog,
+body .fixed.top-1\/2.left-1\/2.max-w-lg {
+  z-index: 90 !important;
   max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   overflow-y: auto;
   overscroll-behavior-y: contain;
