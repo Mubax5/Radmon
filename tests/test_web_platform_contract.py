@@ -184,13 +184,19 @@ def test_sensitive_alarm_actions_use_kumo_dialogs_and_native_kumo_selects() -> N
 
 def test_branding_uses_centered_brin_logo_and_no_letter_r_badges() -> None:
     auth = (ROOT / "web/src/auth.tsx").read_text(encoding="utf-8")
-    layout = (ROOT / "web/src/layout.tsx").read_text(encoding="utf-8")
+    layout_files = [
+        ROOT / "web/src/layout.tsx",
+        ROOT / "web/src/layout/DesktopShell.tsx",
+        ROOT / "web/src/layout/MobileShell.tsx",
+        ROOT / "web/src/layout/MobileMoreSheet.tsx",
+    ]
+    layout = "\n".join(path.read_text(encoding="utf-8") for path in layout_files)
     css = (ROOT / "web/src/radmon.css").read_text(encoding="utf-8")
     combined = auth + "\n" + layout
 
     assert (ROOT / "web/src/assets/brin-logo.png").is_file()
     assert auth.count("brin-logo.png") == 1
-    assert layout.count("brin-logo.png") == 1
+    assert layout.count("brin-logo.png") == 2
     assert "brand-mark" not in combined
     assert "brand-mark" not in css
     assert re.search(r">\s*R\s*<", combined) is None
