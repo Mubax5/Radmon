@@ -30,7 +30,8 @@ export function TrendChart({ points, unit }: { points: TrendPoint[]; unit: strin
   const values = finite.map((point) => point.value);
   const min = Math.min(...values);
   const max = Math.max(...values);
-  const latest = finite.at(-1)?.value ?? 0;
+  const lastPoint = finite[finite.length - 1];
+  const latest = lastPoint?.value ?? 0;
   const polyline = normalizedPoints(finite);
 
   return (
@@ -54,7 +55,7 @@ export function TrendChart({ points, unit }: { points: TrendPoint[]; unit: strin
           />
         )}
         <text x="24" y="212" fontSize="11" fill="currentColor" opacity="0.6">{finite[0]?.at ?? ""}</text>
-        <text x="616" y="212" textAnchor="end" fontSize="11" fill="currentColor" opacity="0.6">{finite.at(-1)?.at ?? ""}</text>
+        <text x="616" y="212" textAnchor="end" fontSize="11" fill="currentColor" opacity="0.6">{lastPoint?.at ?? ""}</text>
       </svg>
     </div>
   );
