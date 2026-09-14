@@ -1,0 +1,34 @@
+/* RadMon-owned viewport and modal safety overrides layered after Kumo standalone styles. */
+
+/* Kumo 2.13 dialog portal renders backdrop and popup as body children without an
+   explicit z-index. Keep the modal above RadMon's sticky/fixed application chrome. */
+body > .fixed.inset-0.bg-kumo-recessed.opacity-80 {
+  z-index: 80;
+}
+
+body > [role="dialog"] {
+  z-index: 90;
+  max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+/* Browser focus/scroll-to-control must not position an actionable control behind
+   the mobile bottom navigation. */
+.mobile-content button,
+.mobile-content input,
+.mobile-content select,
+.mobile-content textarea,
+.mobile-content [role="button"] {
+  scroll-margin-bottom: calc(96px + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 640px) {
+  .mobile-content button,
+  .mobile-content input,
+  .mobile-content select,
+  .mobile-content textarea,
+  .mobile-content [role="button"] {
+    scroll-margin-bottom: 0;
+  }
+}
