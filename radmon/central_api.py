@@ -128,9 +128,12 @@ ON DUPLICATE KEY UPDATE
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT serid, name, location, warnlevel, alarmlevel, unit FROM device ORDER BY location, name")
+                cursor.execute(
+                    "SELECT serid, name, location, warnlevel, alarmlevel, maxidlemin, unit "
+                    "FROM device ORDER BY location, name"
+                )
                 rows = cursor.fetchall()
-            keys = ("serid", "name", "location", "warnlevel", "alarmlevel", "unit")
+            keys = ("serid", "name", "location", "warnlevel", "alarmlevel", "maxidlemin", "unit")
             return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
         finally:
             connection.close()
