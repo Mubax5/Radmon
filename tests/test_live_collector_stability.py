@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 
 from radmon.central_api import CentralMariaDBRepository
 from radmon.config import Settings
-from radmon.lan import LanAggregator, LanCheckpointStore, LanSource, MariaCentralStore, RemoteMariaDBSource
+from radmon.lan import LanAggregator, LanCheckpointStore, LanSource, RemoteMariaDBSource
+from radmon.lan_store import BatchedMariaCentralStore
 from radmon.security import Role, SecurityStore
 from radmon.secure_api import SESSION_COOKIE
 from radmon.web_api import attach_web_api_routes
@@ -319,7 +320,7 @@ def test_central_live_upsert_uses_one_transaction_per_source_batch() -> None:
         connections.append(connection)
         return connection
 
-    store = MariaCentralStore(Settings(), connection_factory=connect)
+    store = BatchedMariaCentralStore(Settings(), connection_factory=connect)
     rows = [
         {
             "serid": serid,
