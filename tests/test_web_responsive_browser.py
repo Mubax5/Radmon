@@ -289,6 +289,10 @@ def _wait_for_app(driver):
     WebDriverWait(driver, 12).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".page-stack"))
 
 
+def _element_text(element) -> str:
+    return (element.get_attribute("textContent") or "").strip()
+
+
 def _assert_no_horizontal_overflow(driver):
     overflow = driver.execute_script(
         "return document.documentElement.scrollWidth - document.documentElement.clientWidth;"
@@ -420,7 +424,11 @@ def test_mobile_more_sheet_and_history_deep_link_are_reachable(chrome_driver):
         driver.get(f"{base}/app")
         _wait_for_app(driver)
 
-        more = next(button for button in driver.find_elements(By.CSS_SELECTOR, ".mobile-nav-button") if button.text == "More")
+        more = next(
+            button
+            for button in driver.find_elements(By.CSS_SELECTOR, ".mobile-nav-button")
+            if _element_text(button) == "More"
+        )
         more.click()
         WebDriverWait(driver, 8).until(
             lambda browser: "Additional RadMon views" in browser.find_element(By.TAG_NAME, "body").text
@@ -428,19 +436,20 @@ def test_mobile_more_sheet_and_history_deep_link_are_reachable(chrome_driver):
         route_container = driver.find_element(By.CSS_SELECTOR, ".mobile-more-sheet")
         assert route_container.get_attribute("data-secondary-routes") == "history,archives,users,system"
         button_texts = {
-            element.text.strip()
+            _element_text(element)
             for element in driver.find_elements(By.TAG_NAME, "button")
-            if element.text.strip()
+            if _element_text(element)
         }
         expected = {"History", "Archives", "Users", "System", "Full monitoring", "Sign out"}
         missing = expected - button_texts
-        assert not missing, (
-            f"mobile More is missing actions {sorted(missing)}; "
-            f"buttons={sorted(button_texts)}; body={driver.find_element(By.TAG_NAME, 'body').text!r}"
-        )
+        assert not missing, f"mobile More is missing actions {sorted(missing)}; buttons={sorted(button_texts)}"
         _assert_no_horizontal_overflow(driver)
 
-        history_button = next(button for button in driver.find_elements(By.TAG_NAME, "button") if button.text == "History")
+        history_button = next(
+            button
+            for button in driver.find_elements(By.TAG_NAME, "button")
+            if _element_text(button) == "History"
+        )
         history_button.click()
         WebDriverWait(driver, 8).until(lambda browser: "/app/history" in browser.current_url)
 
@@ -462,7 +471,11 @@ def test_mobile_alarm_and_user_dialogs_stay_inside_viewport(chrome_driver):
 
         driver.get(f"{base}/app/alarms")
         WebDriverWait(driver, 12).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".active-alarm-list"))
-        respond = next(button for button in driver.find_elements(By.TAG_NAME, "button") if button.text == "Respond to alarm")
+        respond = next(
+            button
+            for button in driver.find_elements(By.TAG_NAME, "button")
+            if _element_text(button) == "Respond to alarm"
+        )
         assert respond.is_enabled()
         respond.click()
         WebDriverWait(driver, 8).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".dialog-form"))
@@ -474,7 +487,11 @@ def test_mobile_alarm_and_user_dialogs_stay_inside_viewport(chrome_driver):
 
         driver.get(f"{base}/app/users")
         WebDriverWait(driver, 12).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".user-summary"))
-        create = next(button for button in driver.find_elements(By.TAG_NAME, "button") if button.text == "Create user")
+        create = next(
+            button
+            for button in driver.find_elements(By.TAG_NAME, "button")
+            if _element_text(button) == "Create user"
+        )
         create.click()
         WebDriverWait(driver, 8).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, ".user-create-form"))
         form_rect = driver.execute_script("return document.querySelector('.user-create-form').getBoundingClientRect().toJSON()")
