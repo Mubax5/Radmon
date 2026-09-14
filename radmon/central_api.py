@@ -42,6 +42,7 @@ class CentralRepositoryProtocol(Protocol):
     def ping(self) -> bool: ...
     def ingest_batch(self, measurements: list[dict[str, Any]], station: dict[str, Any], source_name: str) -> int: ...
     def stations(self) -> list[dict[str, Any]]: ...
+    def overview_rows(self) -> list[dict[str, Any]]: ...
     def latest(self, serid: int) -> dict[str, Any] | None: ...
     def history(self, serid: int, limit: int = 240) -> list[dict[str, Any]]: ...
 
@@ -134,6 +135,35 @@ ON DUPLICATE KEY UPDATE
                 )
                 rows = cursor.fetchall()
             keys = ("serid", "name", "location", "warnlevel", "alarmlevel", "maxidlemin", "unit")
+            return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
+        finally:
+            connection.close()
+
+    def overview_rows(self) -> list[dict[str, Any]]:
+        """Read station metadata and each station's real latest measurement in one connection."""
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+SELECT d.serid, d.name, d.location, d.warnlevel, d.alarmlevel, d.maxidlemin, d.unit,
+       m.dtom, m.doserate, m.dose, m.previnterval, m.stat
+FROM device d
+LEFT JOIN measurement m
+  ON m.serid = d.serid
+ AND m.dtom = (
+       SELECT MAX(m2.dtom)
+       FROM measurement m2
+       WHERE m2.serid = d.serid
+ )
+ORDER BY d.location, d.name
+"""
+                )
+                rows = cursor.fetchall()
+            keys = (
+                "serid", "name", "location", "warnlevel", "alarmlevel", "maxidlemin", "unit",
+                "dtom", "doserate", "dose", "previnterval", "stat",
+            )
             return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
         finally:
             connection.close()
