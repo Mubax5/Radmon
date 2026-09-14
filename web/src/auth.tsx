@@ -76,7 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useSession(): SessionContextValue {
   const value = useContext(SessionContext);
-  if (!value) throw new Error("useSession must be used inside AuthProvider");
+  if (!value) throw new Error("useSession harus digunakan di dalam AuthProvider");
   return value;
 }
 
@@ -95,7 +95,7 @@ export function LoginPage() {
     try {
       await signIn(username, password);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to sign in");
+      setError(err instanceof Error ? err.message : "Tidak dapat masuk");
     } finally {
       setPassword("");
       setBusy(false);
@@ -108,14 +108,14 @@ export function LoginPage() {
         <div className="login-brand">
           <img src={brinLogo} alt="BRIN" />
         </div>
-        <h1>Sign in to RadMon</h1>
-        <p>Radiation monitoring control plane for authorized users.</p>
+        <h1>Masuk ke RadMon</h1>
+        <p>Panel kontrol monitoring radiasi untuk pengguna terotorisasi.</p>
         <form onSubmit={submit} className="login-form">
-          <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" />
-          <Input label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+          <Input label="Nama pengguna" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" />
+          <Input label="Kata sandi" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
           {error ? <div className="form-error">{error}</div> : null}
           <Button type="submit" variant="primary" disabled={busy || !username || !password}>
-            {busy ? "Signing in…" : "Sign in"}
+            {busy ? "Sedang masuk…" : "Masuk"}
           </Button>
         </form>
       </LayerCard>
