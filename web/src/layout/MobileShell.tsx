@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { SessionUser } from "../api";
 import brinLogo from "../assets/brin-logo.png";
 import {
@@ -20,7 +20,6 @@ export function MobileShell({
   onSignOut: () => Promise<void>;
   children: ReactNode;
 }) {
-  const [moreOpen, setMoreOpen] = useState(false);
   const primary = mobilePrimaryRoutes(user.role);
   const pinnedRoutes = primary.filter((item): item is AppRoute => item !== "more");
   const moreActive = !pinnedRoutes.includes(route);
@@ -41,15 +40,13 @@ export function MobileShell({
           {primary.map((item) => {
             if (item === "more") {
               return (
-                <button
-                  type="button"
+                <MobileMoreSheet
                   key="more"
-                  className={`mobile-nav-button${moreActive ? " is-active" : ""}`}
-                  aria-current={moreActive ? "page" : undefined}
-                  onClick={() => setMoreOpen(true)}
-                >
-                  More
-                </button>
+                  user={user}
+                  route={route}
+                  active={moreActive}
+                  onSignOut={onSignOut}
+                />
               );
             }
             const active = route === item;
@@ -67,14 +64,6 @@ export function MobileShell({
           })}
         </div>
       </nav>
-
-      <MobileMoreSheet
-        user={user}
-        route={route}
-        open={moreOpen}
-        onOpenChange={setMoreOpen}
-        onSignOut={onSignOut}
-      />
     </div>
   );
 }
