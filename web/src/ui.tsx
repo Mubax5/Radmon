@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import { Badge, LayerCard, Table } from "@cloudflare/kumo";
-import type { Station } from "./api";
+import { LayerCard, Table } from "@cloudflare/kumo";
+
+export { ResponsiveStationView, StationCards, StationDetail, StationTable } from "./components/StationViews";
 
 export function PageHeading({
   title,
@@ -22,47 +23,70 @@ export function PageHeading({
   );
 }
 
-function statusVariant(status?: string): "success" | "warning" | "error" | "secondary" {
-  if (status === "normal") return "success";
-  if (status === "warning") return "warning";
-  if (status === "alarm") return "error";
-  return "secondary";
+export function PageSection({
+  title,
+  description,
+  action,
+  children,
+  className = "",
+}: {
+  title: string;
+  description?: string;
+  action?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`page-section ${className}`.trim()}>
+      <div className="page-section-header">
+        <div className="page-section-title">
+          <h2>{title}</h2>
+          {description ? <p>{description}</p> : null}
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
 }
 
-export function StationTable({ stations }: { stations: Station[] }) {
+export function MetricCard({
+  label,
+  value,
+  badge,
+  className = "",
+}: {
+  label: string;
+  value: ReactNode;
+  badge?: ReactNode;
+  className?: string;
+}) {
   return (
-    <LayerCard className="table-card">
-      <Table>
-        <Table.Header>
-          <Table.Row>
-            <Table.Head>Station</Table.Head>
-            <Table.Head>Location</Table.Head>
-            <Table.Head>Status</Table.Head>
-            <Table.Head>Dose rate</Table.Head>
-            <Table.Head>Updated</Table.Head>
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {stations.map((station) => (
-            <Table.Row key={station.serid}>
-              <Table.Cell>
-                <strong>{station.name}</strong>
-                <div className="cell-subtle">SERID {station.serid}</div>
-              </Table.Cell>
-              <Table.Cell>{station.location}</Table.Cell>
-              <Table.Cell>
-                <Badge variant={statusVariant(station.status)}>{station.status || "configured"}</Badge>
-              </Table.Cell>
-              <Table.Cell>
-                {station.doserate == null ? "—" : `${station.doserate.toFixed(3)} ${station.unit}`}
-              </Table.Cell>
-              <Table.Cell>{station.dtom ? new Date(station.dtom).toLocaleString() : "—"}</Table.Cell>
-            </Table.Row>
-          ))}
-        </Table.Body>
-      </Table>
+    <LayerCard className={`metric-card ${className}`.trim()}>
+      <div className="metric-label">{label}</div>
+      <div className="metric-value">{value}</div>
+      {badge}
     </LayerCard>
   );
+}
+
+export function formatTimestamp(value?: string | null): string {
+  if (!value) return "—";
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString();
+}
+
+export function freshnessLabel(value?: string | null): string {
+  if (!value) return "No live measurement";
+  const parsed = new Date(value);
+  const delta = Date.now() - parsed.getTime();
+  if (!Number.isFinite(delta)) return "Unknown age";
+  const minutes = Math.max(0, Math.floor(delta / 60000));
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours} h ago`;
+  return `${Math.floor(hours / 24)} d ago`;
 }
 
 export function JsonTable({ rows, empty }: { rows: Array<Record<string, unknown>>; empty: string }) {
