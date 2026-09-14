@@ -26,12 +26,12 @@ def test_updater_defaults_on_but_supports_explicit_disable():
         assert disabled in updater.lower()
 
 
-def test_updater_refuses_downgrade_and_verifies_before_installing():
+def test_updater_refuses_any_release_that_is_not_ahead_and_verifies_before_installing():
     script = (ROOT / "packaging/radmon_update.ps1").read_text(encoding="utf-8")
 
     assert "Compare-ReleaseAncestry" in script
-    assert "behind" in script.lower()
-    assert "diverged" in script.lower()
+    assert '$relationship -ne "ahead"' in script
+    assert "Ignoring latest=" in script
     assert "Get-FileHash" in script
     assert "RadMon-Setup.exe.sha256" in script
     assert "Start-Process" in script
@@ -42,7 +42,8 @@ def test_updater_uses_latest_release_and_installed_release_marker():
     script = (ROOT / "packaging/radmon_update.ps1").read_text(encoding="utf-8")
 
     assert "refs/tags/latest" in script
-    assert "releases/download/latest/RadMon-Setup.exe" in script
+    assert "releases/download/latest" in script
+    assert '$ReleaseBase/RadMon-Setup.exe' in script
     assert "app\\release.json" in script or "app/release.json" in script
     assert "Global\\RadMonAutoUpdater" in script
     assert "radmon-updater.log" in script
