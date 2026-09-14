@@ -329,10 +329,20 @@ def test_mobile_more_sheet_and_history_deep_link_are_reachable(chrome_driver):
 
         more = next(button for button in driver.find_elements(By.CSS_SELECTOR, ".mobile-nav-button") if button.text == "More")
         more.click()
-        for label in ("History", "Archives", "Users", "System"):
-            WebDriverWait(driver, 8).until(
-                lambda browser, text=label: any(element.text == text for element in browser.find_elements(By.TAG_NAME, "button"))
-            )
+        WebDriverWait(driver, 8).until(
+            lambda browser: "Additional RadMon views" in browser.find_element(By.TAG_NAME, "body").text
+        )
+        button_texts = {
+            element.text.strip()
+            for element in driver.find_elements(By.TAG_NAME, "button")
+            if element.text.strip()
+        }
+        expected = {"History", "Archives", "Users", "System"}
+        missing = expected - button_texts
+        assert not missing, (
+            f"mobile More is missing routes {sorted(missing)}; "
+            f"buttons={sorted(button_texts)}; body={driver.find_element(By.TAG_NAME, 'body').text!r}"
+        )
         _assert_no_horizontal_overflow(driver)
 
         driver.get(f"{base}/app/history?station=3801")
