@@ -104,15 +104,18 @@ export function UsersPage() {
   const createUserAction = (
     <Dialog.Root>
       <Dialog.Trigger render={(props) => <Button {...props} variant="primary">Buat pengguna</Button>} />
-      <Dialog>
-        <Dialog.Title>Buat pengguna</Dialog.Title>
-        <Dialog.Description>
-          Buat identitas RadMon terautentikasi. Viewer hanya dapat membaca; izin Operator dan Administrator tetap ditegakkan oleh backend.
-        </Dialog.Description>
-        <div className="dialog-form">
-          <CreateUserForm onCreated={() => void load()} />
-          <div className="form-actions dialog-close-row">
-            <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary">Tutup</Button>} />
+      <Dialog className="radmon-dialog mobile-sheet-dialog">
+        <div className="mobile-sheet-content">
+          <div className="mobile-sheet-handle" aria-hidden />
+          <Dialog.Title>Buat pengguna</Dialog.Title>
+          <Dialog.Description>
+            Buat identitas RadMon terautentikasi. Viewer hanya dapat membaca; izin Operator dan Administrator tetap ditegakkan oleh backend.
+          </Dialog.Description>
+          <div className="dialog-form">
+            <CreateUserForm onCreated={() => void load()} />
+            <div className="form-actions dialog-close-row">
+              <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary">Tutup</Button>} />
+            </div>
           </div>
         </div>
       </Dialog>

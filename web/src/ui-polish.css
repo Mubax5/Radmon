@@ -1,0 +1,363 @@
+/* Final RadMon UI polish. Loaded after Kumo + RadMon base/overlay styles. */
+
+.sidebar-brand {
+  justify-content: flex-start;
+  padding: 8px 10px;
+}
+
+.sidebar-logo {
+  width: 124px;
+  max-width: 100%;
+}
+
+.mobile-topbar {
+  min-height: 54px;
+  padding: calc(7px + env(safe-area-inset-top)) 14px 7px;
+}
+
+.mobile-topbar-brand img {
+  width: 108px;
+}
+
+.mobile-nav-button {
+  position: relative;
+}
+
+.mobile-nav-button.is-active::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 50%;
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translateX(-50%);
+}
+
+.refresh-indicator {
+  min-width: 84px;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.refresh-indicator.is-visible {
+  opacity: 1;
+}
+
+.history-filter [role="combobox"],
+.action-form input,
+.action-form [role="combobox"] {
+  min-height: 44px;
+}
+
+.mobile-sheet-handle {
+  display: none;
+}
+
+.mobile-sheet-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mobile-sheet-heading > div {
+  min-width: 0;
+}
+
+.mobile-sheet-close {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #4b5563;
+}
+
+.mobile-sheet-close:hover {
+  background: #f3f4f6;
+}
+
+.mobile-more-sheet {
+  gap: 12px;
+}
+
+.mobile-more-account {
+  padding: 2px 4px 4px;
+}
+
+.mobile-more-routes,
+.mobile-more-actions {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.mobile-more-route {
+  width: 100%;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 13px;
+  border: 0;
+  border-bottom: 1px solid #eef0f2;
+  background: transparent;
+  color: #111827;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.mobile-more-route:last-child {
+  border-bottom: 0;
+}
+
+.mobile-more-route:hover,
+.mobile-more-route:focus-visible {
+  background: #f7f7f8;
+}
+
+.mobile-more-route.is-active {
+  background: #f3f4f6;
+  font-weight: 600;
+}
+
+.mobile-more-route-icon {
+  flex: 0 0 auto;
+  color: #6b7280;
+}
+
+.mobile-more-route.is-active .mobile-more-route-icon {
+  color: #111827;
+}
+
+.mobile-more-signout {
+  color: #991b1b;
+}
+
+.trend-chart-card {
+  padding: 12px 10px 10px;
+}
+
+.trend-chart {
+  width: 100%;
+  min-width: 0;
+}
+
+.trend-chart-plot {
+  position: relative;
+  width: 100%;
+}
+
+.trend-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  min-height: 230px;
+  overflow: visible;
+  color: #111827;
+  cursor: crosshair;
+  touch-action: pan-y;
+  outline: none;
+}
+
+.trend-chart svg:focus-visible {
+  outline: 2px solid #4b5563;
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+
+.trend-chart-grid {
+  stroke: currentColor;
+  stroke-width: 1;
+  opacity: 0.09;
+  pointer-events: none;
+}
+
+.trend-chart-y-label,
+.trend-chart-x-label {
+  fill: currentColor;
+  opacity: 0.58;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-chart-y-label {
+  font-size: 11.5px;
+}
+
+.trend-chart-x-label {
+  font-size: 10.5px;
+}
+
+.trend-chart-line {
+  color: #111827;
+  pointer-events: none;
+}
+
+.trend-chart-line-point,
+.trend-chart-active-point {
+  fill: #111827;
+  stroke: #fff;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.trend-chart-crosshair {
+  stroke: #6b7280;
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.trend-chart-hit-area {
+  pointer-events: all;
+}
+
+.trend-chart-tooltip {
+  position: absolute;
+  z-index: 4;
+  min-width: 132px;
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(17, 24, 39, 0.94);
+  color: #fff;
+  box-shadow: 0 8px 24px rgba(17, 24, 39, 0.18);
+  transform: translate(-50%, calc(-100% - 10px));
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.trend-chart-tooltip strong {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.trend-chart-tooltip span {
+  font-size: 10.5px;
+  opacity: 0.78;
+}
+
+.trend-chart-hint {
+  margin: 2px 6px 0 54px;
+  color: #6b7280;
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+@media (max-width: 639px) {
+  body [role="dialog"].mobile-sheet-dialog,
+  body .mobile-sheet-dialog {
+    position: fixed !important;
+    top: auto !important;
+    left: 8px !important;
+    right: 8px !important;
+    bottom: calc(8px + env(safe-area-inset-bottom)) !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    transform: none !important;
+    border-radius: 20px !important;
+    overflow: hidden !important;
+  }
+
+  .mobile-sheet-content {
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    padding: 8px 14px calc(16px + env(safe-area-inset-bottom));
+  }
+
+  .mobile-sheet-handle {
+    width: 36px;
+    height: 4px;
+    display: block;
+    margin: 0 auto 10px;
+    border-radius: 999px;
+    background: #d1d5db;
+  }
+
+  .mobile-sheet-dialog .dialog-form,
+  .mobile-sheet-panel .mobile-more-sheet {
+    max-height: none;
+    overflow: visible;
+    margin-top: 14px;
+    padding-right: 0;
+  }
+
+  .mobile-sheet-dialog .form-actions {
+    position: sticky;
+    bottom: -1px;
+    margin: 2px -2px -2px;
+    padding: 8px 2px 2px;
+    background: linear-gradient(to bottom, rgba(255,255,255,0), #fff 24%);
+  }
+
+  .mobile-sheet-dialog .form-actions > button {
+    min-height: 44px;
+  }
+
+  .trend-chart-card {
+    padding: 10px 6px 8px;
+  }
+
+  .trend-chart svg {
+    min-height: 246px;
+  }
+
+  .trend-chart-hint {
+    margin-left: 52px;
+    margin-right: 8px;
+  }
+
+  .trend-chart-tooltip {
+    min-width: 124px;
+  }
+
+  .refresh-indicator {
+    min-width: 72px;
+  }
+}
+
+@media (min-width: 640px) {
+  .mobile-sheet-content {
+    display: contents;
+  }
+
+  .trend-chart-card {
+    padding: 16px 14px 12px;
+  }
+
+  .trend-chart svg {
+    min-height: 280px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .refresh-indicator,
+  .mobile-nav-button {
+    transition: none;
+  }
+}

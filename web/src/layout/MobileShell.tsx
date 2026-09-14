@@ -1,10 +1,4 @@
 import type { ReactNode } from "react";
-import {
-  Bell,
-  Broadcast,
-  ClockCounterClockwise,
-  SquaresFour,
-} from "@phosphor-icons/react";
 import type { SessionUser } from "../api";
 import brinLogo from "../assets/brin-logo.png";
 import {
@@ -14,17 +8,7 @@ import {
   type AppRoute,
 } from "../navigation";
 import { MobileMoreSheet } from "./MobileMoreSheet";
-
-function MobileNavigationIcon({ route }: { route: AppRoute }) {
-  const common = { size: 22, weight: "regular" as const, className: "mobile-nav-icon", "aria-hidden": true };
-  switch (route) {
-    case "overview": return <SquaresFour {...common} />;
-    case "stations": return <Broadcast {...common} />;
-    case "history": return <ClockCounterClockwise {...common} />;
-    case "alarms": return <Bell {...common} />;
-    default: return <SquaresFour {...common} />;
-  }
-}
+import { NavigationIcon } from "./NavigationIcon";
 
 export function MobileShell({
   user,
@@ -75,7 +59,7 @@ export function MobileShell({
                 aria-label={routeLabel(item)}
                 onClick={() => navigate(item)}
               >
-                <MobileNavigationIcon route={item} />
+                <NavigationIcon route={item} size={22} className="mobile-nav-icon nav-icon" />
                 <span className="mobile-nav-label">{routeLabel(item)}</span>
               </button>
             );

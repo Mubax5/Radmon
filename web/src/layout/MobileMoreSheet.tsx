@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Button, Dialog } from "@cloudflare/kumo";
-import { DotsThree, MonitorPlay, SignOut } from "@phosphor-icons/react";
+import { Dialog } from "@cloudflare/kumo";
+import { DotsThree, MonitorPlay, SignOut, X } from "@phosphor-icons/react";
 import type { SessionUser } from "../api";
 import {
   allowedRoutes,
@@ -8,6 +8,7 @@ import {
   navigate,
   type AppRoute,
 } from "../navigation";
+import { NavigationIcon } from "./NavigationIcon";
 
 export function MobileMoreSheet({
   user,
@@ -57,41 +58,59 @@ export function MobileMoreSheet({
           </button>
         )}
       />
-      <Dialog className="radmon-dialog" style={{ zIndex: 90 }}>
-        <Dialog.Title>Lainnya</Dialog.Title>
-        <Dialog.Description>
-          Halaman tambahan dan tindakan akun RadMon untuk {user.display_name}.
-        </Dialog.Description>
-        <div
-          className="mobile-more-sheet"
-          data-secondary-routes={secondary.map((item) => item.id).join(",")}
-        >
-          <div className="mobile-more-account">
-            <strong>{user.display_name}</strong>
-            <span>{user.role}</span>
-          </div>
-          {secondary.length ? (
-            <div className="mobile-more-routes">
-              {secondary.map((item) => (
-                <Button
-                  key={item.id}
-                  variant={route === item.id ? "primary" : "secondary"}
-                  onClick={() => go(item.id)}
-                >
-                  {item.label}
-                </Button>
-              ))}
+      <Dialog className="radmon-dialog mobile-sheet-dialog mobile-sheet-panel">
+        <div className="mobile-sheet-content">
+          <div className="mobile-sheet-handle" aria-hidden />
+          <div className="mobile-sheet-heading">
+            <div>
+              <Dialog.Title>Lainnya</Dialog.Title>
+              <Dialog.Description>Halaman tambahan dan pengaturan akun.</Dialog.Description>
             </div>
-          ) : null}
-          <div className="mobile-more-actions">
-            <Button variant="secondary" onClick={openMonitoring}>
-              <MonitorPlay size={18} weight="regular" aria-hidden />
-              Monitoring penuh
-            </Button>
-            <Button variant="secondary" onClick={() => void signOut()}>
-              <SignOut size={18} weight="regular" aria-hidden />
-              Keluar
-            </Button>
+            <Dialog.Close
+              render={(props) => (
+                <button {...props} type="button" className="mobile-sheet-close" aria-label="Tutup menu lainnya">
+                  <X size={20} weight="regular" aria-hidden />
+                </button>
+              )}
+            />
+          </div>
+
+          <div
+            className="mobile-more-sheet"
+            data-secondary-routes={secondary.map((item) => item.id).join(",")}
+          >
+            <div className="mobile-more-account">
+              <strong>{user.display_name}</strong>
+              <span>{user.role}</span>
+            </div>
+
+            {secondary.length ? (
+              <div className="mobile-more-routes" aria-label="Halaman tambahan">
+                {secondary.map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={`mobile-more-route${route === item.id ? " is-active" : ""}`}
+                    aria-current={route === item.id ? "page" : undefined}
+                    onClick={() => go(item.id)}
+                  >
+                    <NavigationIcon route={item.id} size={20} className="mobile-more-route-icon nav-icon" />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="mobile-more-actions" aria-label="Tindakan akun">
+              <button type="button" className="mobile-more-route" onClick={openMonitoring}>
+                <MonitorPlay size={20} weight="regular" className="mobile-more-route-icon" aria-hidden />
+                <span>Monitoring penuh</span>
+              </button>
+              <button type="button" className="mobile-more-route mobile-more-signout" onClick={() => void signOut()}>
+                <SignOut size={20} weight="regular" className="mobile-more-route-icon" aria-hidden />
+                <span>Keluar</span>
+              </button>
+            </div>
           </div>
         </div>
       </Dialog>

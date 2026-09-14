@@ -101,7 +101,7 @@ def test_pages_have_relevant_compact_sections():
 
 
 def test_dialogs_and_mobile_navigation_reserve_viewport_space():
-    css = read("radmon.css")
+    css = read("radmon.css") + "\n" + read("ui-polish.css")
     assert "calc(84px + env(safe-area-inset-bottom))" in css
     assert "max-height: calc(100dvh" in css or "height: min(" in css
 

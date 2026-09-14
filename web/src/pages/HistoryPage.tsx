@@ -30,6 +30,7 @@ export function HistoryPage() {
   const [selected, setSelected] = useState<number | null>(null);
   const [rows, setRows] = useState<HistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
   const stationItems = useMemo(
@@ -48,38 +49,48 @@ export function HistoryPage() {
           ? requested
           : items[0]?.serid ?? null;
         setSelected(initial);
+        if (initial == null) setLoading(false);
       })
-      .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat stasiun"));
+      .catch((e) => {
+        setError(e instanceof Error ? e.message : "Tidak dapat memuat stasiun");
+        setLoading(false);
+      });
   }, []);
 
   function changeStation(value: string | number | null | undefined) {
     const next = value == null ? null : Number(value);
+    setRows([]);
     setSelected(next);
     if (next) {
       window.history.replaceState({}, "", `/app/history?station=${encodeURIComponent(String(next))}`);
     } else {
+      setLoading(false);
       window.history.replaceState({}, "", "/app/history");
     }
   }
 
-  const loadHistory = () => {
-    if (!selected) {
-      setRows([]);
-      setLoading(false);
-      return Promise.resolve();
-    }
-    setLoading(true);
+  const loadHistory = (initial: boolean) => {
+    if (!selected) return Promise.resolve();
+    if (initial) setLoading(true);
+    else setRefreshing(true);
     return api<HistoryRow[]>(`/api/v1/web/stations/${selected}/history?limit=240`)
       .then((items) => {
         setRows(items);
         setError("");
       })
       .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat riwayat"))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (initial) setLoading(false);
+        else setRefreshing(false);
+      });
   };
 
-  useEffect(() => { void loadHistory(); }, [selected]);
-  useWebRefresh(() => { void loadHistory(); });
+  useEffect(() => {
+    if (selected == null) return;
+    setRows([]);
+    void loadHistory(true);
+  }, [selected]);
+  useWebRefresh(() => { void loadHistory(false); });
 
   const history = useMemo(() => {
     const points: TrendPoint[] = rows
@@ -103,7 +114,11 @@ export function HistoryPage() {
 
   return (
     <div className="page-stack">
-      <PageHeading title="Riwayat" description="Measurement terbaru, tren, dan statistik rentang untuk stasiun yang dipilih." />
+      <PageHeading
+        title="Riwayat"
+        description="Measurement terbaru, tren, dan statistik rentang untuk stasiun yang dipilih."
+        action={<span className={`refresh-indicator${refreshing ? " is-visible" : ""}`}>Memperbarui…</span>}
+      />
       <LayerCard className="filter-card history-filter">
         <Select
           label="Stasiun"
@@ -115,7 +130,7 @@ export function HistoryPage() {
         />
       </LayerCard>
       {error ? <ErrorCard message={error} /> : null}
-      {loading ? <LoadingCard /> : (
+      {loading && rows.length === 0 ? <LoadingCard /> : (
         <>
           <div className="metric-grid history-summary">
             <MetricCard label="Terbaru" value={fmt(history.latest)} />
@@ -128,7 +143,7 @@ export function HistoryPage() {
             title="Tren dose rate"
             description={`${history.points.length} measurement dimuat dari database central.`}
           >
-            <LayerCard className="action-card">
+            <LayerCard className="action-card trend-chart-card">
               <TrendChart points={history.points} unit={unit} />
             </LayerCard>
           </PageSection>

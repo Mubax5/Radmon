@@ -128,31 +128,34 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
         <p>Respons alarm aktif setelah memastikan event, PIC, action, alasan, dan PIN operator.</p>
         <Dialog.Root open={respondOpen} onOpenChange={changeRespondOpen}>
           <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={active.length === 0 || pending !== null}>Respons alarm</Button>} />
-          <Dialog>
-            <Dialog.Title>Respons alarm</Dialog.Title>
-            <Dialog.Description>
-              PIN operator diverifikasi oleh backend RadMon sebelum respons diterima.
-            </Dialog.Description>
-            <form className="action-form dialog-form" onSubmit={respond}>
-              <Select
-                label="Event aktif"
-                placeholder="Pilih event…"
-                items={eventItems}
-                value={eventId || undefined}
-                onValueChange={(value) => setEventId(String(value ?? ""))}
-                disabled={active.length === 0 || pending === "respond"}
-              />
-              <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} disabled={pending === "respond"} />
-              <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} disabled={pending === "respond"} />
-              <Input label="Alasan" value={reason} onChange={(e) => setReason(e.target.value)} disabled={pending === "respond"} />
-              <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending === "respond"} />
-              <div className="form-actions">
-                <Button type="submit" variant="primary" disabled={pending === "respond" || !eventId || !pic || !reason || !pin}>
-                  {pending === "respond" ? "Menyimpan…" : "Kirim respons"}
-                </Button>
-                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "respond"}>Batal</Button>} />
-              </div>
-            </form>
+          <Dialog className="radmon-dialog mobile-sheet-dialog">
+            <div className="mobile-sheet-content">
+              <div className="mobile-sheet-handle" aria-hidden />
+              <Dialog.Title>Respons alarm</Dialog.Title>
+              <Dialog.Description>
+                PIN operator diverifikasi oleh backend RadMon sebelum respons diterima.
+              </Dialog.Description>
+              <form className="action-form dialog-form" onSubmit={respond}>
+                <Select
+                  label="Event aktif"
+                  placeholder="Pilih event…"
+                  items={eventItems}
+                  value={eventId || undefined}
+                  onValueChange={(value) => setEventId(String(value ?? ""))}
+                  disabled={active.length === 0 || pending === "respond"}
+                />
+                <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} disabled={pending === "respond"} />
+                <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} disabled={pending === "respond"} />
+                <Input label="Alasan" value={reason} onChange={(e) => setReason(e.target.value)} disabled={pending === "respond"} />
+                <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending === "respond"} />
+                <div className="form-actions">
+                  <Button type="submit" variant="primary" disabled={pending === "respond" || !eventId || !pic || !reason || !pin}>
+                    {pending === "respond" ? "Menyimpan…" : "Kirim respons"}
+                  </Button>
+                  <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "respond"}>Batal</Button>} />
+                </div>
+              </form>
+            </div>
           </Dialog>
         </Dialog.Root>
       </LayerCard>
@@ -162,24 +165,27 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
         <p>Supresi sementara tampilan alarm sementara measurement dose tetap berjalan tanpa gangguan.</p>
         <Dialog.Root open={suppressionOpen} onOpenChange={changeSuppressionOpen}>
           <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={pending !== null}>Mulai suppression</Button>} />
-          <Dialog>
-            <Dialog.Title>Timed suppression</Dialog.Title>
-            <Dialog.Description>
-              Suppression berlaku 1 menit sampai 24 jam dan otomatis resume saat detektor kembali NORMAL.
-            </Dialog.Description>
-            <form className="action-form dialog-form" onSubmit={suppress}>
-              <Input label="SERID stasiun" inputMode="numeric" value={serid} onChange={(e) => setSerid(e.target.value)} disabled={pending === "suppress"} />
-              <Input label="Durasi (menit)" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} disabled={pending === "suppress"} />
-              <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} disabled={pending === "suppress"} />
-              <Input label="Alasan" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} disabled={pending === "suppress"} />
-              <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} disabled={pending === "suppress"} />
-              <div className="form-actions">
-                <Button type="submit" variant="primary" disabled={pending === "suppress" || !serid || !minutes || !suppressPic || !suppressReason || !suppressPin}>
-                  {pending === "suppress" ? "Memulai…" : "Mulai suppression"}
-                </Button>
-                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "suppress"}>Batal</Button>} />
-              </div>
-            </form>
+          <Dialog className="radmon-dialog mobile-sheet-dialog">
+            <div className="mobile-sheet-content">
+              <div className="mobile-sheet-handle" aria-hidden />
+              <Dialog.Title>Timed suppression</Dialog.Title>
+              <Dialog.Description>
+                Suppression berlaku 1 menit sampai 24 jam dan otomatis resume saat detektor kembali NORMAL.
+              </Dialog.Description>
+              <form className="action-form dialog-form" onSubmit={suppress}>
+                <Input label="SERID stasiun" inputMode="numeric" value={serid} onChange={(e) => setSerid(e.target.value)} disabled={pending === "suppress"} />
+                <Input label="Durasi (menit)" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} disabled={pending === "suppress"} />
+                <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} disabled={pending === "suppress"} />
+                <Input label="Alasan" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} disabled={pending === "suppress"} />
+                <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} disabled={pending === "suppress"} />
+                <div className="form-actions">
+                  <Button type="submit" variant="primary" disabled={pending === "suppress" || !serid || !minutes || !suppressPic || !suppressReason || !suppressPin}>
+                    {pending === "suppress" ? "Memulai…" : "Mulai suppression"}
+                  </Button>
+                  <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "suppress"}>Batal</Button>} />
+                </div>
+              </form>
+            </div>
           </Dialog>
         </Dialog.Root>
       </LayerCard>
