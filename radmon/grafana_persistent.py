@@ -33,6 +33,47 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         except Exception:
             return False
 
+    def _datasource_health(self, base_url: str) -> tuple[bool, str]:
+        endpoint = (
+            f"{base_url.rstrip('/')}/api/datasources/uid/{DATASOURCE_UID}/health"
+        )
+        try:
+            response = self._request_json(endpoint)
+        except Exception as exc:
+            return False, str(exc)
+        status = str(response.get("status") or "").strip().casefold()
+        detail = str(
+            response.get("message")
+            or response.get("error")
+            or response.get("status")
+            or "unknown datasource health response"
+        ).strip()
+        return status in {"ok", "success"}, detail
+
+    def _ensure_datasource_connection(self, base_url: str) -> None:
+        """Verify Grafana can actually query MariaDB and recreate stale datasource state once."""
+        base = base_url.rstrip("/")
+        datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
+        healthy, detail = self._datasource_health(base)
+        if healthy:
+            return
+
+        # A persisted Grafana SQLite datasource can keep stale/invalid secure state
+        # across upgrades. Recreate the datasource with the same stable UID and the
+        # current RadMon DB settings, leaving dashboards and playlists untouched.
+        self._request_json(datasource_endpoint, method="DELETE")
+        self._request_json(
+            f"{base}/api/datasources",
+            method="POST",
+            payload=self._datasource_payload(),
+        )
+        repaired, repaired_detail = self._datasource_health(base)
+        if not repaired:
+            raise RuntimeError(
+                "Grafana datasource MariaDB tetap tidak sehat setelah repair: "
+                f"{repaired_detail or detail}"
+            )
+
     def _provision_via_api(self, base_url: str) -> bool:
         base = base_url.rstrip("/")
         datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
@@ -54,6 +95,8 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                 method="PUT",
                 payload=datasource_payload,
             )
+
+        self._ensure_datasource_connection(base)
 
         for factory_dashboard in self._dashboard_payloads():
             uid = str(factory_dashboard.get("uid") or "")
