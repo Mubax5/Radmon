@@ -115,3 +115,40 @@ def test_grafana_never_silently_moves_away_from_port_3300(tmp_path: Path) -> Non
             bootstrap._find_free_port(occupied)
     finally:
         blocker.close()
+
+
+def test_unhealthy_existing_datasource_is_recreated_before_monitoring_is_declared_ready(tmp_path: Path) -> None:
+    bootstrap = PersistentGrafanaBootstrap(
+        Settings(db_host="127.0.0.1", db_password="current-secret"),
+        project_root=tmp_path,
+    )
+    writes: list[tuple[str, str, dict]] = []
+    health_checks = 0
+
+    def request(url: str, *, method: str = "GET", payload=None, use_auth=True):
+        nonlocal health_checks
+        if method != "GET":
+            writes.append((method, url, payload or {}))
+            return {"status": "ok"}
+        if url.endswith("/api/datasources/uid/ipradmon-mysql/health"):
+            health_checks += 1
+            if health_checks == 1:
+                return {"status": "ERROR", "message": "Database Connection Failed"}
+            return {"status": "OK", "message": "Database Connection OK"}
+        if url.endswith("/api/datasources/uid/ipradmon-mysql"):
+            return {"uid": "ipradmon-mysql", "name": "ipradmon"}
+        if "/api/dashboards/uid/" in url:
+            uid = url.rsplit("/", 1)[-1]
+            return {"dashboard": {"uid": uid, "editable": True}}
+        if "/apis/playlist.grafana.app/" in url:
+            return {"metadata": {"name": PLAYLIST_UID}}
+        raise AssertionError(url)
+
+    bootstrap._request_json = request  # type: ignore[method-assign]
+    assert bootstrap._provision_via_api("http://localhost:3300") is True
+
+    assert health_checks == 2
+    assert any(method == "DELETE" and url.endswith("/api/datasources/uid/ipradmon-mysql") for method, url, _ in writes)
+    recreated = [payload for method, url, payload in writes if method == "POST" and url.endswith("/api/datasources")]
+    assert len(recreated) == 1
+    assert recreated[0]["secureJsonData"]["password"] == "current-secret"
