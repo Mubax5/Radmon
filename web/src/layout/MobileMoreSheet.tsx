@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Button, Dialog } from "@cloudflare/kumo";
 import type { SessionUser } from "../api";
 import {
@@ -18,13 +19,29 @@ export function MobileMoreSheet({
   active: boolean;
   onSignOut: () => Promise<void>;
 }) {
+  const [open, setOpen] = useState(false);
   const primary = new Set(
     mobilePrimaryRoutes(user.role).filter((item): item is AppRoute => item !== "more"),
   );
   const secondary = allowedRoutes(user.role).filter((item) => !primary.has(item.id));
 
+  function go(routeId: AppRoute) {
+    setOpen(false);
+    navigate(routeId);
+  }
+
+  function openMonitoring() {
+    setOpen(false);
+    window.open("/", "_blank", "noopener,noreferrer");
+  }
+
+  async function signOut() {
+    setOpen(false);
+    await onSignOut();
+  }
+
   return (
-    <Dialog.Root>
+    <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger
         render={(props) => (
           <button
@@ -42,7 +59,10 @@ export function MobileMoreSheet({
         <Dialog.Description>
           Additional RadMon views and account actions for {user.display_name}.
         </Dialog.Description>
-        <div className="mobile-more-sheet">
+        <div
+          className="mobile-more-sheet"
+          data-secondary-routes={secondary.map((item) => item.id).join(",")}
+        >
           <div className="mobile-more-account">
             <strong>{user.display_name}</strong>
             <span>{user.role}</span>
@@ -50,27 +70,19 @@ export function MobileMoreSheet({
           {secondary.length ? (
             <div className="mobile-more-routes">
               {secondary.map((item) => (
-                <Dialog.Close
+                <Button
                   key={item.id}
-                  onClick={() => navigate(item.id)}
-                  render={(props) => (
-                    <Button {...props} variant={route === item.id ? "primary" : "secondary"}>
-                      {item.label}
-                    </Button>
-                  )}
-                />
+                  variant={route === item.id ? "primary" : "secondary"}
+                  onClick={() => go(item.id)}
+                >
+                  {item.label}
+                </Button>
               ))}
             </div>
           ) : null}
           <div className="mobile-more-actions">
-            <Dialog.Close
-              onClick={() => window.open("/", "_blank", "noopener,noreferrer")}
-              render={(props) => <Button {...props} variant="secondary">Full monitoring</Button>}
-            />
-            <Dialog.Close
-              onClick={() => void onSignOut()}
-              render={(props) => <Button {...props} variant="secondary">Sign out</Button>}
-            />
+            <Button variant="secondary" onClick={openMonitoring}>Full monitoring</Button>
+            <Button variant="secondary" onClick={() => void signOut()}>Sign out</Button>
           </div>
         </div>
       </Dialog>
