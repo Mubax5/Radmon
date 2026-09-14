@@ -7,7 +7,8 @@ import threading
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .lan import LanAggregator, LanCheckpointStore, MariaCentralStore, RemoteMariaDBSource
+from .lan import LanAggregator, LanCheckpointStore, RemoteMariaDBSource
+from .lan_store import BatchedMariaCentralStore
 from .quarters import Quarter, quarter_for, quarters_overlapping
 
 LOGGER = logging.getLogger(__name__)
@@ -62,7 +63,7 @@ class LanRuntime:
             ),
         )
         self.archive_timezone = str(getattr(settings, "archive_timezone", "Asia/Jakarta"))
-        self.central = MariaCentralStore(settings)
+        self.central = BatchedMariaCentralStore(settings)
         self.checkpoints = LanCheckpointStore(services.security)
 
     def _thread(self, name: str, target) -> None:
