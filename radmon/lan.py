@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import importlib
 import os
@@ -114,6 +114,7 @@ class LivePullResult:
     inserted_measurements: int = 0
     mirrored_alarms: int = 0
     error: str | None = None
+    mapped_live_rows: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
 
 @dataclass(slots=True)
@@ -341,7 +342,28 @@ WHERE serid = ? AND dtoa = ? AND i_op IS NULL""",
         connection = self._connection()
         try:
             with connection.cursor() as cursor:
-                cursor.execute('\nSELECT serid, name, location, warnlevel, alarmlevel, unit, audiopath,\n       description, maxidlemin, dtom, doserate, dose, lastrate,\n       minrate, maxrate, avgrate, lastdose, mindose, maxdose,\n       avgdose, lastmea, lastmeasec, meacount, firstmea\nFROM vrecent\nORDER BY serid\n')
+                cursor.execute(
+                    """
+SELECT d.serid, d.name, d.location, d.warnlevel, d.alarmlevel, d.unit, d.audiopath,
+       d.description, d.maxidlemin,
+       COALESCE(m.dtom, r.dtom) AS dtom,
+       COALESCE(m.doserate, r.doserate) AS doserate,
+       COALESCE(m.dose, r.dose) AS dose,
+       r.lastrate, r.minrate, r.maxrate, r.avgrate,
+       r.lastdose, r.mindose, r.maxdose, r.avgdose,
+       r.lastmea, r.lastmeasec, r.meacount, r.firstmea
+FROM device d
+LEFT JOIN recent r ON r.serid = d.serid
+LEFT JOIN measurement m
+  ON m.serid = d.serid
+ AND m.dtom = (
+       SELECT MAX(m2.dtom)
+       FROM measurement m2
+       WHERE m2.serid = d.serid
+ )
+ORDER BY d.serid
+"""
+                )
                 rows = cursor.fetchall()
             return self._dict_rows(rows, LIVE_KEYS)
         finally:
@@ -745,6 +767,7 @@ class LanAggregator:
                 item['_remote_serid'] = remote_serid
                 item['serid'] = central_serid
                 mapped_live.append(item)
+            result.mapped_live_rows = mapped_live
             if hasattr(self.central, 'upsert_live_rows'):
                 self.central.upsert_live_rows(source.source_id, mapped_live)
             result.live_stations = len(mapped_live)
@@ -777,7 +800,7 @@ class LanAggregator:
         if result.error or alarm_policy is None:
             return result
         try:
-            mapped_live = _mapped_live_rows(self, source)
+            mapped_live = result.mapped_live_rows
             mapped_alarms = _pending_alarm_rows(
                 getattr(self, "alarm_mirror", None), source.source_id, limit=500
             )
