@@ -1,34 +1,55 @@
 /* RadMon-owned viewport and modal safety overrides layered after Kumo standalone styles. */
 
-/* Kumo 2.13 dialog portal renders backdrop and popup as body children without an
-   explicit z-index. Keep the modal above RadMon's sticky/fixed application chrome. */
-body > .fixed.inset-0.bg-kumo-recessed.opacity-80 {
+/* Kumo 2.13 renders dialog portal descendants without an explicit stacking level.
+   Keep backdrop above application chrome and the dialog above its backdrop. */
+body .fixed.inset-0.bg-kumo-recessed.opacity-80[role="presentation"] {
   z-index: 80;
 }
 
-body > [role="dialog"] {
+body [role="dialog"] {
   z-index: 90;
   max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   overflow-y: auto;
   overscroll-behavior-y: contain;
 }
 
-/* Browser focus/scroll-to-control must not position an actionable control behind
-   the mobile bottom navigation. */
-.mobile-content button,
-.mobile-content input,
-.mobile-content select,
-.mobile-content textarea,
-.mobile-content [role="button"] {
-  scroll-margin-bottom: calc(96px + env(safe-area-inset-bottom));
-}
+/* Mobile is an app shell: content owns the scrolling region and bottom navigation
+   owns layout space. Nothing actionable can sit underneath the navigation. */
+@media (max-width: 639px) {
+  .mobile-shell {
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+  }
 
-@media (min-width: 640px) {
+  .mobile-topbar {
+    flex: 0 0 auto;
+  }
+
+  .mobile-content {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    padding-bottom: 16px;
+    scroll-padding-bottom: 16px;
+  }
+
+  .mobile-bottom-nav {
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    flex: 0 0 auto;
+    width: 100%;
+  }
+
   .mobile-content button,
   .mobile-content input,
   .mobile-content select,
   .mobile-content textarea,
   .mobile-content [role="button"] {
-    scroll-margin-bottom: 0;
+    scroll-margin-bottom: 16px;
   }
 }
