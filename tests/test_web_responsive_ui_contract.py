@@ -15,9 +15,11 @@ def test_adaptive_shell_files_exist_and_mobile_navigation_is_role_aware():
     assert (WEB / "layout/MobileShell.tsx").exists()
     assert (WEB / "layout/MobileMoreSheet.tsx").exists()
     nav = read("navigation.ts")
+    mobile_shell = read("layout/MobileShell.tsx")
     assert "Viewer" in nav and "Operator" in nav and "Administrator" in nav
-    assert "Overview" in nav and "Stations" in nav and "History" in nav
-    assert "Alarms" in nav and "More" in nav
+    assert "Overview" in nav and "Stations" in nav and "History" in nav and "Alarms" in nav
+    assert '"more"' in nav
+    assert "More" in mobile_shell
 
 
 def test_mobile_first_css_has_exact_breakpoints_safe_areas_and_no_unsafe_page_width():
