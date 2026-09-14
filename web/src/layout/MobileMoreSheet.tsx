@@ -10,14 +10,12 @@ import {
 export function MobileMoreSheet({
   user,
   route,
-  open,
-  onOpenChange,
+  active,
   onSignOut,
 }: {
   user: SessionUser;
   route: AppRoute;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  active: boolean;
   onSignOut: () => Promise<void>;
 }) {
   const primary = new Set(
@@ -25,13 +23,20 @@ export function MobileMoreSheet({
   );
   const secondary = allowedRoutes(user.role).filter((item) => !primary.has(item.id));
 
-  async function signOut() {
-    onOpenChange(false);
-    await onSignOut();
-  }
-
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+    <Dialog.Root>
+      <Dialog.Trigger
+        render={(props) => (
+          <button
+            {...props}
+            type="button"
+            className={`mobile-nav-button${active ? " is-active" : ""}`}
+            aria-current={active ? "page" : undefined}
+          >
+            More
+          </button>
+        )}
+      />
       <Dialog>
         <Dialog.Title>More</Dialog.Title>
         <Dialog.Description>
@@ -45,29 +50,40 @@ export function MobileMoreSheet({
           {secondary.length ? (
             <div className="mobile-more-routes">
               {secondary.map((item) => (
-                <Button
+                <Dialog.Close
                   key={item.id}
-                  variant={route === item.id ? "primary" : "secondary"}
-                  onClick={() => {
-                    navigate(item.id);
-                    onOpenChange(false);
-                  }}
-                >
-                  {item.label}
-                </Button>
+                  render={(props) => (
+                    <Button
+                      {...props}
+                      variant={route === item.id ? "primary" : "secondary"}
+                      onClick={() => navigate(item.id)}
+                    >
+                      {item.label}
+                    </Button>
+                  )}
+                />
               ))}
             </div>
           ) : null}
           <div className="mobile-more-actions">
-            <Button
-              variant="secondary"
-              onClick={() => window.open("/", "_blank", "noopener,noreferrer")}
-            >
-              Full monitoring
-            </Button>
-            <Button variant="secondary" onClick={() => void signOut()}>
-              Sign out
-            </Button>
+            <Dialog.Close
+              render={(props) => (
+                <Button
+                  {...props}
+                  variant="secondary"
+                  onClick={() => window.open("/", "_blank", "noopener,noreferrer")}
+                >
+                  Full monitoring
+                </Button>
+              )}
+            />
+            <Dialog.Close
+              render={(props) => (
+                <Button {...props} variant="secondary" onClick={() => void onSignOut()}>
+                  Sign out
+                </Button>
+              )}
+            />
           </div>
         </div>
       </Dialog>
