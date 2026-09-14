@@ -52,12 +52,9 @@ export function MobileMoreSheet({
               {secondary.map((item) => (
                 <Dialog.Close
                   key={item.id}
+                  onClick={() => navigate(item.id)}
                   render={(props) => (
-                    <Button
-                      {...props}
-                      variant={route === item.id ? "primary" : "secondary"}
-                      onClick={() => navigate(item.id)}
-                    >
+                    <Button {...props} variant={route === item.id ? "primary" : "secondary"}>
                       {item.label}
                     </Button>
                   )}
@@ -67,22 +64,12 @@ export function MobileMoreSheet({
           ) : null}
           <div className="mobile-more-actions">
             <Dialog.Close
-              render={(props) => (
-                <Button
-                  {...props}
-                  variant="secondary"
-                  onClick={() => window.open("/", "_blank", "noopener,noreferrer")}
-                >
-                  Full monitoring
-                </Button>
-              )}
+              onClick={() => window.open("/", "_blank", "noopener,noreferrer")}
+              render={(props) => <Button {...props} variant="secondary">Full monitoring</Button>}
             />
             <Dialog.Close
-              render={(props) => (
-                <Button {...props} variant="secondary" onClick={() => void onSignOut()}>
-                  Sign out
-                </Button>
-              )}
+              onClick={() => void onSignOut()}
+              render={(props) => <Button {...props} variant="secondary">Sign out</Button>}
             />
           </div>
         </div>
