@@ -26,7 +26,7 @@ export function OverviewPage() {
   const [error, setError] = useState("");
   const load = () => api<Overview>("/api/v1/web/overview")
     .then((value) => { setData(value); setError(""); })
-    .catch((e) => setError(e instanceof Error ? e.message : "Unable to load monitoring overview"));
+    .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat ringkasan monitoring"));
 
   useEffect(() => { void load(); }, []);
   useWebRefresh(() => { void load(); });
@@ -47,7 +47,7 @@ export function OverviewPage() {
 
   const cards = data ? [
     ["Normal", data.counts.normal || 0, "success"],
-    ["Warning", data.counts.warning || 0, "warning"],
+    ["Peringatan", data.counts.warning || 0, "warning"],
     ["Alarm", data.counts.alarm || 0, "error"],
     ["Offline", data.counts.offline || 0, "secondary"],
   ] as const : [];
@@ -55,8 +55,8 @@ export function OverviewPage() {
   return (
     <div className="page-stack">
       <PageHeading
-        title="Radiation monitoring"
-        description="Live operating state, attention queue, freshness, and dose context across all configured stations."
+        title="Monitoring radiasi"
+        description="Status operasi live, antrean perhatian, kesegaran data, dan konteks dose untuk seluruh stasiun terkonfigurasi."
       />
       {error ? <ErrorCard message={error} /> : null}
       {data ? (
@@ -68,8 +68,8 @@ export function OverviewPage() {
           </div>
 
           <PageSection
-            title="Attention"
-            description="Alarm, warning, and offline stations are kept ahead of healthy detail."
+            title="Perhatian"
+            description="Stasiun alarm, peringatan, dan offline ditampilkan lebih dulu agar mudah ditindaklanjuti."
             className="attention-panel"
           >
             {derived.attention.length ? (
@@ -78,26 +78,26 @@ export function OverviewPage() {
                 onHistory={(station) => navigate("history", { station: station.serid })}
               />
             ) : (
-              <LayerCard className="empty-card">No stations currently need operator attention.</LayerCard>
+              <LayerCard className="empty-card">Tidak ada stasiun yang saat ini memerlukan perhatian operator.</LayerCard>
             )}
           </PageSection>
 
-          <PageSection title="Data freshness" description="Latest measurement received by the central RadMon read model.">
+          <PageSection title="Kesegaran data" description="Measurement terbaru yang diterima oleh read model central RadMon.">
             <div className="metric-grid freshness-grid">
               <MetricCard
-                label="Latest live measurement"
-                value={derived.latest ? freshnessLabel(derived.latest) : "No data"}
+                label="Measurement live terbaru"
+                value={derived.latest ? freshnessLabel(derived.latest) : "Belum ada data"}
                 badge={<span className="cell-subtle">{formatTimestamp(derived.latest)}</span>}
               />
               <MetricCard
-                label="Configured stations"
+                label="Stasiun terkonfigurasi"
                 value={data.stations.length}
-                badge={<span className="cell-subtle">Central overview</span>}
+                badge={<span className="cell-subtle">Ringkasan central</span>}
               />
             </div>
           </PageSection>
 
-          <PageSection title="Station health" description="Current dose, status, and last-update context for every station.">
+          <PageSection title="Kesehatan stasiun" description="Dose, status, dan waktu update terbaru untuk setiap stasiun.">
             <ResponsiveStationView
               stations={data.stations}
               onHistory={(station) => navigate("history", { station: station.serid })}
