@@ -26,7 +26,7 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
   const [respondOpen, setRespondOpen] = useState(false);
   const [suppressionOpen, setSuppressionOpen] = useState(false);
   const [eventId, setEventId] = useState("");
-  const [action, setAction] = useState("Confirm");
+  const [action, setAction] = useState("Konfirmasi");
   const [pic, setPic] = useState("");
   const [reason, setReason] = useState("");
   const [pin, setPin] = useState("");
@@ -40,7 +40,7 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
 
   function resetResponse() {
     setEventId("");
-    setAction("Confirm");
+    setAction("Konfirmasi");
     setPic("");
     setReason("");
     setPin("");
@@ -72,17 +72,17 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
     setFeedback(null);
     setPending("respond");
     try {
-      if (!eventId) throw new Error("Select an active alarm event");
+      if (!eventId) throw new Error("Pilih event alarm aktif");
       await api(`/api/v1/control/alarm-events/${encodeURIComponent(eventId)}/response`, {
         method: "POST",
         body: JSON.stringify({ pin, action, pic, reason }),
       });
-      setFeedback({ kind: "ok", text: "Alarm response saved." });
+      setFeedback({ kind: "ok", text: "Respons alarm tersimpan." });
       resetResponse();
       setRespondOpen(false);
       onChanged();
     } catch (error) {
-      setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Response failed" });
+      setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Respons gagal" });
     } finally {
       setPin("");
       setPending(null);
@@ -97,8 +97,8 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
     try {
       const station = Number(serid);
       const duration = Number(minutes) * 60;
-      if (!Number.isInteger(station) || station <= 0) throw new Error("SERID must be a positive number");
-      if (!Number.isFinite(duration) || duration < 60 || duration > 86400) throw new Error("Duration must be 1 to 1440 minutes");
+      if (!Number.isInteger(station) || station <= 0) throw new Error("SERID harus berupa angka positif");
+      if (!Number.isFinite(duration) || duration < 60 || duration > 86400) throw new Error("Durasi harus 1 sampai 1440 menit");
       await api(`/api/v1/control/suppressions/${station}`, {
         method: "POST",
         body: JSON.stringify({
@@ -109,12 +109,12 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
           auto_resume_on_normal: true,
         }),
       });
-      setFeedback({ kind: "ok", text: `Station ${station} suppressed for ${minutes} minutes.` });
+      setFeedback({ kind: "ok", text: `Stasiun ${station} disupresi selama ${minutes} menit.` });
       resetSuppression();
       setSuppressionOpen(false);
       onChanged();
     } catch (error) {
-      setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Suppression failed" });
+      setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Suppression gagal" });
     } finally {
       setSuppressPin("");
       setPending(null);
@@ -124,19 +124,19 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
   return (
     <div className="action-grid">
       <LayerCard className="action-card">
-        <h2>Alarm response</h2>
-        <p>Respond to an active alarm after confirming the event, PIC, action, reason, and operator PIN.</p>
+        <h2>Respons alarm</h2>
+        <p>Respons alarm aktif setelah memastikan event, PIC, action, alasan, dan PIN operator.</p>
         <Dialog.Root open={respondOpen} onOpenChange={changeRespondOpen}>
-          <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={active.length === 0 || pending !== null}>Respond to alarm</Button>} />
+          <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={active.length === 0 || pending !== null}>Respons alarm</Button>} />
           <Dialog>
-            <Dialog.Title>Respond to alarm</Dialog.Title>
+            <Dialog.Title>Respons alarm</Dialog.Title>
             <Dialog.Description>
-              Operator PIN is verified by the RadMon backend before the response is accepted.
+              PIN operator diverifikasi oleh backend RadMon sebelum respons diterima.
             </Dialog.Description>
             <form className="action-form dialog-form" onSubmit={respond}>
               <Select
-                label="Active event"
-                placeholder="Select event…"
+                label="Event aktif"
+                placeholder="Pilih event…"
                 items={eventItems}
                 value={eventId || undefined}
                 onValueChange={(value) => setEventId(String(value ?? ""))}
@@ -144,13 +144,13 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
               />
               <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} disabled={pending === "respond"} />
               <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} disabled={pending === "respond"} />
-              <Input label="Reason" value={reason} onChange={(e) => setReason(e.target.value)} disabled={pending === "respond"} />
+              <Input label="Alasan" value={reason} onChange={(e) => setReason(e.target.value)} disabled={pending === "respond"} />
               <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending === "respond"} />
               <div className="form-actions">
                 <Button type="submit" variant="primary" disabled={pending === "respond" || !eventId || !pic || !reason || !pin}>
-                  {pending === "respond" ? "Saving…" : "Submit response"}
+                  {pending === "respond" ? "Menyimpan…" : "Kirim respons"}
                 </Button>
-                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "respond"}>Cancel</Button>} />
+                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "respond"}>Batal</Button>} />
               </div>
             </form>
           </Dialog>
@@ -159,25 +159,25 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
 
       <LayerCard className="action-card">
         <h2>Timed suppression</h2>
-        <p>Temporarily suppress alarm surfacing while dose measurements continue uninterrupted.</p>
+        <p>Supresi sementara tampilan alarm sementara measurement dose tetap berjalan tanpa gangguan.</p>
         <Dialog.Root open={suppressionOpen} onOpenChange={changeSuppressionOpen}>
-          <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={pending !== null}>Start suppression</Button>} />
+          <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={pending !== null}>Mulai suppression</Button>} />
           <Dialog>
             <Dialog.Title>Timed suppression</Dialog.Title>
             <Dialog.Description>
-              Suppression lasts from 1 minute up to 24 hours and auto-resumes when the detector returns to NORMAL.
+              Suppression berlaku 1 menit sampai 24 jam dan otomatis resume saat detektor kembali NORMAL.
             </Dialog.Description>
             <form className="action-form dialog-form" onSubmit={suppress}>
-              <Input label="Station SERID" inputMode="numeric" value={serid} onChange={(e) => setSerid(e.target.value)} disabled={pending === "suppress"} />
-              <Input label="Duration (minutes)" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} disabled={pending === "suppress"} />
+              <Input label="SERID stasiun" inputMode="numeric" value={serid} onChange={(e) => setSerid(e.target.value)} disabled={pending === "suppress"} />
+              <Input label="Durasi (menit)" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} disabled={pending === "suppress"} />
               <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} disabled={pending === "suppress"} />
-              <Input label="Reason" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} disabled={pending === "suppress"} />
+              <Input label="Alasan" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} disabled={pending === "suppress"} />
               <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} disabled={pending === "suppress"} />
               <div className="form-actions">
                 <Button type="submit" variant="primary" disabled={pending === "suppress" || !serid || !minutes || !suppressPic || !suppressReason || !suppressPin}>
-                  {pending === "suppress" ? "Starting…" : "Start suppression"}
+                  {pending === "suppress" ? "Memulai…" : "Mulai suppression"}
                 </Button>
-                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "suppress"}>Cancel</Button>} />
+                <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "suppress"}>Batal</Button>} />
               </div>
             </form>
           </Dialog>
@@ -232,14 +232,14 @@ export function CreateUserForm({
           user_pin: userPin,
         }),
       });
-      setFeedback({ kind: "ok", text: `User ${username} created.` });
+      setFeedback({ kind: "ok", text: `Pengguna ${username} dibuat.` });
       setUsername("");
       setDisplayName("");
       setRole("Viewer");
       onCreated();
       onDone?.();
     } catch (error) {
-      setFeedback({ kind: "error", text: error instanceof Error ? error.message : "User creation failed" });
+      setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Pembuatan pengguna gagal" });
     } finally {
       setPassword("");
       setUserPin("");
@@ -251,7 +251,7 @@ export function CreateUserForm({
   return (
     <form className="action-form user-create-form" onSubmit={submit}>
       <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} disabled={pending} />
-      <Input label="Display name" value={displayName} onChange={(e) => setDisplayName(e.target.value)} disabled={pending} />
+      <Input label="Nama tampilan" value={displayName} onChange={(e) => setDisplayName(e.target.value)} disabled={pending} />
       <Select
         label="Role"
         items={{ Viewer: "Viewer", Operator: "Operator", Administrator: "Administrator" }}
@@ -259,14 +259,14 @@ export function CreateUserForm({
         onValueChange={(value) => setRole((value ?? "Viewer") as Role)}
         disabled={pending}
       />
-      <Input label="Initial password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={pending} />
-      <Input label="User PIN" type="password" value={userPin} onChange={(e) => setUserPin(e.target.value)} disabled={pending} />
-      <Input label="Administrator PIN" type="password" value={adminPin} onChange={(e) => setAdminPin(e.target.value)} disabled={pending} />
+      <Input label="Password awal" type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={pending} />
+      <Input label="PIN pengguna" type="password" value={userPin} onChange={(e) => setUserPin(e.target.value)} disabled={pending} />
+      <Input label="PIN Administrator" type="password" value={adminPin} onChange={(e) => setAdminPin(e.target.value)} disabled={pending} />
       <div className="form-actions">
         <Button type="submit" variant="primary" disabled={pending || !username || !displayName || !password || !userPin || !adminPin}>
-          {pending ? "Creating…" : "Create user"}
+          {pending ? "Membuat…" : "Buat pengguna"}
         </Button>
-        <Button type="button" variant="secondary" onClick={reset} disabled={pending}>Clear</Button>
+        <Button type="button" variant="secondary" onClick={reset} disabled={pending}>Bersihkan</Button>
       </div>
       <Feedback state={feedback} />
     </form>
@@ -276,8 +276,8 @@ export function CreateUserForm({
 export function CreateUserPanel({ onCreated }: { onCreated: () => void }) {
   return (
     <LayerCard className="action-card user-create-card">
-      <h2>Create user</h2>
-      <p>Viewer is an authenticated read-only role; anonymous access is never a RadMon user.</p>
+      <h2>Buat pengguna</h2>
+      <p>Viewer adalah role read-only terautentikasi; akses anonim bukan pengguna RadMon.</p>
       <CreateUserForm onCreated={onCreated} />
     </LayerCard>
   );
