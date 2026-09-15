@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any, Callable, Iterator
 
 from .quarters import Quarter
+from .recent_read_model import RollingRecentManager
 
 
 TABLE_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -198,68 +199,10 @@ class CentralArchiveStore:
             connection.close()
 
     def rebuild_recent(self, active_quarter: Quarter) -> None:
-        connection = self._connection()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute("DELETE FROM recent")
-                cursor.execute(
-                    "SELECT DISTINCT serid FROM measurement WHERE dtom >= ? AND dtom < ? ORDER BY serid",
-                    (self._db_time(active_quarter.start), self._db_time(active_quarter.end)),
-                )
-                serid_rows = cursor.fetchall()
-                for raw in serid_rows:
-                    serid = int(raw.get("serid") if isinstance(raw, dict) else raw[0])
-                    cursor.execute(
-                        """
-SELECT MIN(dtom), MAX(dtom), MIN(doserate), MAX(doserate), AVG(doserate),
-       MIN(dose), MAX(dose), AVG(dose), COUNT(*)
-FROM measurement
-WHERE serid = ? AND dtom >= ? AND dtom < ?
-""",
-                        (serid, self._db_time(active_quarter.start), self._db_time(active_quarter.end)),
-                    )
-                    aggregate = cursor.fetchone()
-                    if not aggregate:
-                        continue
-                    values = list(aggregate.values()) if isinstance(aggregate, dict) else list(aggregate)
-                    firstmea, lastmea, minrate, maxrate, avgrate, mindose, maxdose, avgdose, meacount = values[:9]
-                    cursor.execute(
-                        """
-SELECT dtom, doserate, dose, previnterval
-FROM measurement WHERE serid = ? AND dtom >= ? AND dtom < ?
-ORDER BY dtom DESC LIMIT 2
-""",
-                        (serid, self._db_time(active_quarter.start), self._db_time(active_quarter.end)),
-                    )
-                    latest_rows = cursor.fetchall()
-                    latest = latest_rows[0]
-                    previous = latest_rows[1] if len(latest_rows) > 1 else latest
-
-                    def get(row, key, index):
-                        return row.get(key) if isinstance(row, dict) else row[index]
-
-                    latest_time = get(latest, "dtom", 0)
-                    latest_rate = get(latest, "doserate", 1)
-                    latest_dose = get(latest, "dose", 2)
-                    latest_interval = get(latest, "previnterval", 3)
-                    previous_rate = get(previous, "doserate", 1)
-                    previous_dose = get(previous, "dose", 2)
-                    cursor.execute(
-                        """
-INSERT INTO recent
-  (serid, dtom, doserate, dose, lastrate, minrate, maxrate, avgrate,
-   lastdose, mindose, maxdose, avgdose, firstmea, lastmea, lastmeasec, meacount)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-""",
-                        (
-                            serid, latest_time, latest_rate, latest_dose, previous_rate,
-                            minrate, maxrate, avgrate, previous_dose, mindose, maxdose,
-                            avgdose, firstmea, lastmea, int(latest_interval or 0), int(meacount or 0),
-                        ),
-                    )
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-        finally:
-            connection.close()
+        """Rebuild only the three-hour monitoring read model after archive work."""
+        del active_quarter
+        manager = RollingRecentManager(
+            self.settings,
+            connection_factory=self._connection_factory or self._connection,
+        )
+        manager.rebuild()
