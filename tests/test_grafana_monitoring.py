@@ -179,11 +179,19 @@ def test_grafana_tv_uses_three_logical_pages_with_five_operations_variants():
     grouped = [operation_page_stations(page_number) for page_number in range(1, 6)]
     assert [len(group) for group in grouped] == [3, 3, 3, 3, 3]
     assert len({station.serid for group in grouped for station in group}) == 15
+
+    sql = "\n".join(
+        str(target.get("rawSql") or "")
+        for dashboard in dashboards
+        for panel in dashboard.get("panels", [])
+        for target in panel.get("targets", [])
+    )
+    assert "vrecent" in sql
+    assert "FROM alarm" in sql or "FROM `alarm`" in sql
+    assert "FROM measurement" not in sql
+    assert "radmon_runtime_status" not in sql
+
     payload = json.dumps(dashboards, ensure_ascii=False)
-    for relation in ("vrecent", "alarm"):
-        assert relation in payload
-    assert "measurement" not in payload
-    assert "radmon_runtime_status" not in payload
     assert "REAL TIME DOSE RATE MONITORING SYSTEM" in payload
     assert "µSv/h" in payload
     assert "Dose Rate · Gedung" in payload
