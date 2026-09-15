@@ -7,7 +7,8 @@ import threading
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .lan import LanAggregator, LanCheckpointStore, RemoteMariaDBSource
+from .hot_path import RealtimeRemoteMariaDBSource
+from .lan import LanAggregator, LanCheckpointStore
 from .lan_store import BatchedMariaCentralStore
 from .quarters import Quarter, quarter_for, quarters_overlapping
 
@@ -75,7 +76,7 @@ class LanRuntime:
         aggregator = LanAggregator(
             self.central,
             self.checkpoints,
-            remote_factory=lambda item: RemoteMariaDBSource(item),
+            remote_factory=lambda item: RealtimeRemoteMariaDBSource(item),
             alarm_mirror=self.services.alarm_mirror,
             batch_size=self.batch_size if batch_size is None else max(1, int(batch_size)),
         )
