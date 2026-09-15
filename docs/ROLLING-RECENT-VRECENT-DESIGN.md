@@ -36,7 +36,7 @@ The desired architecture separates these workloads:
 
 - historical/audit/reporting reads use `measurement`, `alarm`, archives, and reports;
 - monitoring/Grafana dose-series reads use only the bounded rolling read model;
-- current operational metadata is exposed through `vrecent`.
+- current operational metadata and status are exposed through `vrecent`.
 
 ## Chosen architecture
 
@@ -48,14 +48,14 @@ Required columns:
 
 ```text
 serid
- dtom
- doserate
- dose
- previnterval
- stat
+dtom
+doserate
+dose
+previnterval
+stat
 ```
 
-The implementation should preserve compatible MariaDB column types from `measurement` rather than introducing lossy conversions.
+The implementation preserves compatible MariaDB column types from `measurement` rather than introducing lossy conversions.
 
 Required indexes:
 
@@ -70,9 +70,9 @@ The primary key makes live writes idempotent for an already-seen detector/timest
 
 ### `vrecent`: monitoring view
 
-`vrecent` remains a view and exposes the rolling samples from `recent` together with device metadata required by monitoring.
+`vrecent` remains a view and exposes the rolling samples from `recent` together with device metadata and existing RadMon runtime status.
 
-Minimum exposed fields:
+Required exposed fields:
 
 ```text
 serid
@@ -89,11 +89,21 @@ doserate
 dose
 previnterval
 stat
+underlying_status
+status
+suppressed
+trigger_count
+retrigger_locked
+suppression_expires_at
+suppression_pic
+suppression_reason
 ```
 
-The view may also expose already-existing current runtime-status fields if Grafana needs them, provided doing so does not modify the runtime-status table itself.
+`underlying_status` and `status` are derived from the existing `radmon_runtime_status` state, thresholds, suppression state, real `dtom`, and the configured `maxidlemin`. The view may join the existing runtime-status relation, but this work does not alter that table's schema or retention.
 
-`vrecent` must support two classes of monitoring query:
+Because `vrecent` contains multiple rolling samples per SERID, current/latest consumers must explicitly select the newest row per SERID. Time-series consumers select the requested rows directly.
+
+`vrecent` therefore supports two classes of monitoring query:
 
 1. current/latest state: select the newest row per SERID from the rolling set;
 2. bounded time series: select rows for a SERID/building within Grafana's requested interval, which must never exceed the configured rolling retention.
@@ -111,20 +121,20 @@ For every real detector sample collected into central MariaDB:
 
 No sample is invented to keep a detector online. Offline/online determination continues to use the real timestamp and configured idle threshold.
 
+The authoritative `measurement` write takes precedence. A failure to mirror into `recent` must be logged and repaired by bounded reconciliation; it must not roll back or delete an already-preserved historical measurement.
+
 ## Retention
 
 Default rolling retention: three hours.
 
-Cleanup statement is conceptually:
+Central detector timestamps are handled in the same WIB convention already used by RadMon. Cleanup is equivalent to:
 
 ```sql
 DELETE FROM recent
-WHERE dtom < <now minus 3 hours>
+WHERE dtom < DATE_SUB(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00'), INTERVAL 3 HOUR)
 ```
 
-Cleanup should not run for every individual sample. It should run on a low-frequency cadence, for example once per minute, or be guarded so it cannot execute more frequently than the configured cleanup interval.
-
-The cutoff is based on the same timezone conventions used by the central database ingestion path. The implementation must avoid mixing browser time with DB time.
+Cleanup does not run for every individual sample. It runs on a low-frequency cadence, default once per minute, or behind a guard that prevents it from executing more frequently than the configured cleanup interval.
 
 A small cleanup lag is acceptable; deleting historical authoritative rows is not.
 
@@ -138,16 +148,16 @@ If the new rolling shape is already present, do nothing destructive. Ensure `vre
 
 If migration is required:
 
-1. create a new temporary rolling table such as `recent_radmon_next` with the new columns and indexes;
-2. backfill it from central `measurement` using only rows newer than the three-hour cutoff;
+1. create a new temporary rolling table `recent_radmon_next` with the new columns and indexes;
+2. backfill it from central `measurement` using only rows newer than the three-hour WIB cutoff;
 3. validate the backfill: required columns/indexes exist and no row is outside the allowed retention window beyond cleanup tolerance;
 4. drop/recreate only `vrecent` as needed to remove the dependency on the legacy `recent` shape;
-5. atomically rename the existing `recent` out of the way and the new table to `recent` using MariaDB `RENAME TABLE` semantics;
+5. atomically rename the existing `recent` to `recent_radmon_legacy` and `recent_radmon_next` to `recent` using MariaDB `RENAME TABLE` semantics;
 6. create the new `vrecent` view;
-7. validate sample counts/latest timestamps against the source `measurement` rows for the rolling window;
-8. only after validation succeeds may the legacy `recent` copy be dropped.
+7. validate latest timestamps and rolling-window sample counts against the source `measurement` rows;
+8. only after validation succeeds may `recent_radmon_legacy` be dropped.
 
-If any migration step fails before the successful swap, long-term tables remain untouched. If failure occurs after the table swap, startup must fail visibly rather than silently running an invalid monitoring schema; the old `recent` copy may be used for recovery because it contains only disposable monitoring state.
+If any migration step fails before the successful swap, long-term tables remain untouched. If failure occurs after the table swap, startup fails visibly rather than silently running an invalid monitoring schema; `recent_radmon_legacy` remains available for recovery until validation has succeeded.
 
 No migration metadata table is required; schema-shape detection makes the migration idempotent without modifying unrelated database structures.
 
@@ -165,12 +175,12 @@ Grafana layout and visual structure remain unchanged.
 
 After migration:
 
-- current dose panels use the newest per-SERID row exposed by `vrecent`;
-- latest measurement-time panels use the newest per-SERID row exposed by `vrecent`;
+- current dose panels use the newest per-SERID row from `vrecent`;
+- latest measurement-time panels use the newest per-SERID row from `vrecent`;
 - realtime sparklines use `vrecent`, not `measurement`;
 - three-hour building trends use `vrecent`, not `measurement`;
 - three-hour minimum/maximum/average summaries, if present, aggregate over `vrecent`;
-- detector online/offline/alarm/warning current-state panels use `vrecent` plus the existing runtime-status relation where needed.
+- detector online/offline/alarm/warning current-state panels read the latest per-SERID `status` fields from `vrecent`.
 
 The existing "Alarm Terbaru · 24 Jam" event table is intentionally allowed to continue querying `alarm`. Alarm events are a separate low-volume event log with a 24-hour dashboard requirement; forcing 24-hour alarm history into a three-hour rolling dose table would either lose required alarm events or violate the bounded three-hour design. This does not change or purge `alarm`.
 
@@ -178,7 +188,7 @@ No continuous dose/time-series Grafana query may contain `FROM measurement` afte
 
 ## Web/control-plane contract
 
-The Ringkasan/live monitoring path should use the bounded read model for current detector state and must not scan historical `measurement` during normal refresh.
+The Ringkasan/live monitoring path uses the newest per-SERID rows from the bounded read model and does not scan historical `measurement` during normal refresh.
 
 History/report/archive features may continue to query historical tables because those features explicitly request historical data and are not part of the 2-second monitoring hot path.
 
@@ -206,15 +216,15 @@ Monitoring read-model failures must be explicit and fail safe:
 - schema validation errors must identify `recent`/`vrecent` specifically;
 - Grafana must never substitute dummy values when data is absent.
 
-If a sample is stored in `measurement` but its rolling mirror fails, the system should log the condition and allow a bounded backfill/reconciliation from the last three hours of `measurement` rather than scanning all historical data.
+If a sample is stored in `measurement` but its rolling mirror fails, the system logs the condition and performs bounded reconciliation from only the last three hours of `measurement`, never an unbounded historical scan.
 
 ## Performance expectations
 
 At a two-second sample interval, 15 detectors over three hours produce about 81,000 rolling rows. This is small enough for indexed per-SERID and per-building range queries while keeping five years of historical data out of the realtime query path.
 
-Normal monitoring operations should be bounded by:
+Normal monitoring operations are bounded by:
 
-- one current/latest query over `recent`/`vrecent`;
+- one current/latest query over `vrecent`;
 - indexed range queries over at most the three-hour rolling dataset;
 - periodic indexed cleanup by `dtom`.
 
@@ -224,13 +234,13 @@ The normal monitoring path must not execute a full/correlated latest-value scan 
 
 Implementation uses TDD and must add regression coverage for the following invariants:
 
-1. migration changes only `recent`/`vrecent`; historical relations are not targeted by destructive DDL/DML;
+1. migration changes only `recent`/`vrecent` plus temporary/legacy names used solely to swap `recent`; historical relations are not targeted by destructive DDL/DML;
 2. pre-existing `measurement`, `alarm`, `rawdata`, and other historical rows remain unchanged after migration;
 3. migration backfills only the latest three-hour measurement window;
 4. rolling writes are idempotent on `(serid, dtom)`;
 5. cleanup deletes only expired `recent` rows;
 6. cleanup never emits `DELETE`, `TRUNCATE`, or `DROP` against `measurement`, `alarm`, or `rawdata`;
-7. new `vrecent` exposes every field required by Grafana/current monitoring;
+7. new `vrecent` exposes every field required by current monitoring and current-status Grafana panels;
 8. all Grafana continuous dose/time-series SQL reads from `vrecent` and not `measurement`;
 9. the 24-hour alarm-events panel remains backed by `alarm` and keeps its existing semantics;
 10. remote source `vrecent` compatibility remains unchanged;
@@ -240,7 +250,7 @@ Implementation uses TDD and must add regression coverage for the following invar
 
 ## Deployment
 
-Implementation will be made on `feat/rolling-recent-vrecent` using tests-first changes.
+Implementation is made on `feat/rolling-recent-vrecent` using tests-first changes.
 
 After verification, the already-established RadMon deployment rule applies:
 
