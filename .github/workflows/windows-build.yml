@@ -33,7 +33,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-build.txt
-          choco install innosetup --no-progress -y
+          choco install innosetup mariadb grafana --no-progress -y
 
       - name: Build Kumo web frontend
         shell: pwsh
@@ -120,36 +120,35 @@ jobs:
             throw "Inno Setup did not create installer\RadMon-Setup.exe"
           }
 
-      - name: Start installer control-plane smoke dependencies
+      - name: Start native installer control-plane smoke dependencies
         shell: pwsh
         run: |
-          $ciDbPassword = "radmon-ci-password"
-          $hostsPath = Join-Path $env:SystemRoot "System32\drivers\etc\hosts"
-          $hostsEntry = "127.0.0.1 host.docker.internal"
-          if (-not (Select-String -Path $hostsPath -Pattern "^\s*127\.0\.0\.1\s+host\.docker\.internal\s*$" -Quiet)) {
-            Add-Content -Path $hostsPath -Value $hostsEntry -Encoding ascii
+          $mariadbInstall = Get-ItemProperty -Path @(
+            "HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+          ) -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -like "MariaDB *" } |
+            Select-Object -First 1
+          $mariadbPath = if ($null -eq $mariadbInstall) { "" } else { Join-Path $mariadbInstall.InstallLocation "bin\mariadb.exe" }
+          if (-not (Test-Path $mariadbPath)) {
+            throw "Chocolatey did not install mariadb.exe"
           }
-
-          docker pull grafana/grafana:13.1.3
-          docker run --detach --name radmon-ci-mariadb `
-            --env "MARIADB_ROOT_PASSWORD=$ciDbPassword" `
-            --env MARIADB_DATABASE=ipradmon `
-            --publish 3306:3306 `
-            mariadb:11
-          if ($LASTEXITCODE -ne 0) {
-            throw "Failed to start the installer smoke MariaDB container"
+          $grafana = Get-ChildItem (Join-Path $env:ChocolateyInstall "lib\grafana\tools") -Recurse -Filter "grafana-server.exe" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $grafana) {
+            throw "Chocolatey did not install grafana-server.exe"
           }
 
           $databaseDeadline = [DateTime]::UtcNow.AddMinutes(2)
           do {
-            docker exec radmon-ci-mariadb mariadb-admin --protocol=tcp -h 127.0.0.1 -uroot "--password=$ciDbPassword" ping *> $null
+            & $mariadbPath --protocol=tcp -h 127.0.0.1 -uroot -e "SELECT 1" *> $null
             if ($LASTEXITCODE -eq 0) {
               break
             }
             Start-Sleep -Seconds 1
           } while ([DateTime]::UtcNow -lt $databaseDeadline)
           if ($LASTEXITCODE -ne 0) {
-            throw "Installer smoke MariaDB did not become ready"
+            throw "Native installer smoke MariaDB did not become ready"
           }
 
           $schema = @'
@@ -170,10 +169,11 @@ jobs:
           CREATE TABLE news (ts DATETIME, code INT, content TEXT);
           CREATE TABLE rawdata (serid INT, dtom DATETIME, val TEXT);
           '@
-          $schema | docker exec -i radmon-ci-mariadb mariadb --protocol=tcp -h 127.0.0.1 -uroot "--password=$ciDbPassword" ipradmon
+          $schema | & $mariadbPath --protocol=tcp -h 127.0.0.1 -uroot ipradmon
           if ($LASTEXITCODE -ne 0) {
-            throw "Failed to initialize the installer smoke MariaDB schema"
+            throw "Failed to initialize the native installer smoke MariaDB schema"
           }
+          $grafana.FullName | Set-Content (Join-Path $env:RUNNER_TEMP "radmon-ci-grafana-path.txt") -Encoding ascii
 
       - name: Smoke test installed RadMon
         shell: pwsh
@@ -182,16 +182,17 @@ jobs:
           if (Test-Path $installRoot) {
             Remove-Item $installRoot -Recurse -Force
           }
+          $grafanaExe = (Get-Content (Join-Path $env:RUNNER_TEMP "radmon-ci-grafana-path.txt") -Raw).Trim()
           $configDir = Join-Path $installRoot "config"
           New-Item -ItemType Directory -Force -Path $configDir | Out-Null
           @(
-            "RADMON_DB_HOST=host.docker.internal"
+            "RADMON_DB_HOST=127.0.0.1"
             "RADMON_DB_PORT=3306"
             "RADMON_DB_USER=root"
-            "RADMON_DB_PASSWORD=radmon-ci-password"
+            "RADMON_DB_PASSWORD="
             "RADMON_DB_NAME=ipradmon"
             "RADMON_GRAFANA_PORT=3300"
-            "RADMON_GRAFANA_DOCKER_FALLBACK=1"
+            "RADMON_GRAFANA_BIN=$grafanaExe"
             "RADMON_LAN_SOURCES="
             "RADMON_ARCHIVE_ENABLED=0"
           ) | Set-Content (Join-Path $configDir ".env") -Encoding ascii

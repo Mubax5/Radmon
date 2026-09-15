@@ -118,10 +118,11 @@ def test_windows_installer_upgrade_smoke_waits_for_control_plane_readiness():
 def test_windows_installer_control_plane_smoke_has_isolated_dependencies():
     workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
 
-    assert "Start installer control-plane smoke dependencies" in workflow
-    assert "radmon-ci-mariadb" in workflow
-    assert "RADMON_DB_HOST=host.docker.internal" in workflow
-    assert "RADMON_GRAFANA_DOCKER_FALLBACK=1" in workflow
+    assert "Start native installer control-plane smoke dependencies" in workflow
+    assert "choco install innosetup mariadb grafana" in workflow
+    assert "Chocolatey did not install mariadb.exe" in workflow
+    assert "RADMON_DB_HOST=127.0.0.1" in workflow
+    assert "RADMON_GRAFANA_BIN=$grafanaExe" in workflow
 
 
 def test_windows_installer_upgrade_readiness_requires_successful_http_200_probe():
