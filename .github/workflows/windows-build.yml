@@ -156,6 +156,11 @@ jobs:
             throw "Native installer smoke MariaDB did not become ready"
           }
 
+          & $mariadbPath --protocol=tcp -h 127.0.0.1 -uroot -e "CREATE DATABASE IF NOT EXISTS ipradmon"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create the native installer smoke MariaDB database"
+          }
+
           $schema = @'
           CREATE TABLE device (
             serid INT PRIMARY KEY, name VARCHAR(255), location VARCHAR(255),
