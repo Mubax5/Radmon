@@ -118,23 +118,23 @@ def test_central_schema_contract_redefines_only_recent_and_vrecent():
     assert REQUIRED_SCHEMA["rawdata"] == {"serid", "dtom", "val"}
 
 
-def test_central_live_write_sql_no_longer_uses_legacy_recent_aggregates():
+def test_central_live_write_uses_shared_rolling_manager_not_legacy_aggregates():
     source = (ROOT / "radmon" / "lan_store.py").read_text(encoding="utf-8")
-    recent_block = source[source.index("INSERT"):]
+    manager = (ROOT / "radmon" / "recent_read_model.py").read_text(encoding="utf-8")
     assert "INSERT IGNORE INTO measurement" in source
-    assert "INSERT IGNORE INTO recent" in source
-    assert "previnterval" in recent_block
-    assert "stat" in recent_block
-    assert "INSERT INTO recent\n  (serid, dtom, doserate, dose, lastrate" not in source
+    assert "mirror_samples" in source
+    assert "INSERT IGNORE INTO recent" in manager
+    assert "previnterval" in manager
+    assert "stat" in manager
+    assert "INSERT INTO recent\n  (serid, dtom, doserate, dose, lastrate" not in source + manager
 
 
-def test_archive_rebuild_is_bounded_to_three_hours_not_active_quarter_aggregates():
+def test_archive_rebuild_delegates_to_bounded_rolling_manager():
     source = (ROOT / "radmon" / "archive_store.py").read_text(encoding="utf-8")
     start = source.index("    def rebuild_recent")
     block = source[start:]
-    assert "DELETE FROM recent" in block
-    assert "INSERT IGNORE INTO recent" in block
-    assert "INTERVAL 3 HOUR" in block
+    assert "RollingRecentManager" in block
+    assert "manager.rebuild()" in block
     assert "MIN(doserate)" not in block
     assert "AVG(doserate)" not in block
     assert "COUNT(*)" not in block
