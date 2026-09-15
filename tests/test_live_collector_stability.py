@@ -86,7 +86,7 @@ def test_remote_live_rows_reads_authoritative_latest_measurement_not_only_vrecen
     assert ".dtom)" in connection.c.sql
 
 
-def test_central_overview_snapshot_reads_all_latest_measurements_with_one_connection() -> None:
+def test_central_overview_snapshot_reads_bounded_vrecent_with_one_connection() -> None:
     fresh_at = datetime(2026, 9, 15, 6, 30, 0)
 
     class Cursor:
@@ -136,9 +136,9 @@ def test_central_overview_snapshot_reads_all_latest_measurements_with_one_connec
     assert rows[0]["serid"] == 5201
     assert rows[0]["dtom"] == fresh_at
     assert rows[0]["doserate"] == 0.27
-    assert "from measurement" in connection.c.sql
-    assert "select max(" in connection.c.sql
-    assert ".dtom)" in connection.c.sql
+    assert "from vrecent" in connection.c.sql
+    assert "from measurement" not in connection.c.sql
+    assert "max(dtom)" in connection.c.sql
 
 
 def test_web_overview_uses_batched_snapshot_instead_of_n_plus_one_latest_queries(tmp_path) -> None:
@@ -272,7 +272,7 @@ def test_alarm_policy_live_cycle_reads_source_live_snapshot_only_once(tmp_path) 
     assert remote.live_calls == 1
 
 
-def test_central_live_upsert_uses_one_transaction_per_source_batch() -> None:
+def test_central_live_upsert_uses_one_connection_with_history_then_rolling_commits() -> None:
     class Cursor:
         def __init__(self) -> None:
             self.rowcount = 1
@@ -354,10 +354,11 @@ def test_central_live_upsert_uses_one_transaction_per_source_batch() -> None:
 
     assert changed == 2
     assert len(connections) == 1
-    assert connections[0].commits == 1
+    assert connections[0].commits == 2
     assert connections[0].rollbacks == 0
     assert connections[0].closed == 1
     statements = connections[0].cursor_obj.statements
     assert sum("insert into device" in sql for sql in statements) == 2
-    assert sum("insert into recent" in sql for sql in statements) == 2
+    assert sum("insert ignore into recent" in sql for sql in statements) == 2
     assert sum("insert ignore into measurement" in sql for sql in statements) == 2
+    assert sum("delete from recent" in sql for sql in statements) <= 1
