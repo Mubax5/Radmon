@@ -16,6 +16,7 @@ from .central_api import create_central_app
 from .config import Settings
 from .hot_path import RealtimeCentralMariaDBRepository
 from .lan_runtime import LanRuntime
+from .recent_read_model import RollingRecentManager
 from .repository import MariaDBRepository
 from .secure_api import attach_secure_routes
 from .secure_services import build_secure_services
@@ -85,10 +86,16 @@ class CentralRuntime:
 
 def build_central_runtime(settings: Settings) -> CentralRuntime:
     """Build the complete central stack without starting background workers."""
-    MariaDBRepository(settings).require_schema()
+    schema_repository = MariaDBRepository(settings)
+    # Historical relations are validated before any rolling migration. The migration
+    # may only recreate recent/vrecent and reads at most the latest three hours from
+    # measurement.
+    schema_repository.require_base_schema()
 
     services = build_secure_services(settings)
     services.runtime_status_projector.ensure_schema()
+    RollingRecentManager(settings).ensure_schema()
+    schema_repository.require_schema()
     services.alarm_policy.restore_and_reconcile_current_state()
 
     archive_catalog = ArchiveCatalog(
