@@ -5,8 +5,7 @@ import time
 from test_web_responsive_browser import _serve_ui, _wait_for, chrome_driver
 
 
-def test_overview_live_refresh_never_overlaps_slow_request(chrome_driver):
-    script = r"""
+SCRIPT = r"""
 (() => {
   window.__radmonTestEventSources = [];
   class RadMonTestEventSource {
@@ -44,10 +43,24 @@ def test_overview_live_refresh_never_overlaps_slow_request(chrome_driver):
   };
 })();
 """
-    registration = chrome_driver.execute_cdp_cmd(
+
+
+def _install_test_instrumentation(chrome_driver):
+    return chrome_driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
-        {"source": script},
+        {"source": SCRIPT},
     )
+
+
+def _remove_test_instrumentation(chrome_driver, registration):
+    chrome_driver.execute_cdp_cmd(
+        "Page.removeScriptToEvaluateOnNewDocument",
+        {"identifier": registration["identifier"]},
+    )
+
+
+def test_overview_live_refresh_never_overlaps_slow_request(chrome_driver):
+    registration = _install_test_instrumentation(chrome_driver)
     try:
         with _serve_ui() as base:
             chrome_driver.get(f"{base}/app")
@@ -66,7 +79,27 @@ def test_overview_live_refresh_never_overlaps_slow_request(chrome_driver):
             assert stats["count"] >= 1
             assert stats["maxInflight"] == 1, f"overview refresh overlap: {stats}"
     finally:
-        chrome_driver.execute_cdp_cmd(
-            "Page.removeScriptToEvaluateOnNewDocument",
-            {"identifier": registration["identifier"]},
-        )
+        _remove_test_instrumentation(chrome_driver, registration)
+
+
+def test_overview_initial_load_and_live_refresh_share_one_single_flight(chrome_driver):
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    registration = _install_test_instrumentation(chrome_driver)
+    try:
+        with _serve_ui() as base:
+            chrome_driver.get(f"{base}/app")
+            WebDriverWait(chrome_driver, 3).until(
+                lambda browser: browser.execute_script(
+                    "return window.__radmonTestEventSources && window.__radmonTestEventSources.length > 0"
+                )
+            )
+            # Initial /overview is intentionally still delayed for 900 ms here.
+            chrome_driver.execute_script("window.__radmonEmitLiveUpdate()")
+            time.sleep(1.8)
+
+            stats = chrome_driver.execute_script("return {...window.__radmonOverviewStats}")
+            assert stats["count"] >= 1
+            assert stats["maxInflight"] == 1, f"initial/live overview overlap: {stats}"
+    finally:
+        _remove_test_instrumentation(chrome_driver, registration)
