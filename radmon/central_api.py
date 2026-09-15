@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -8,8 +9,10 @@ from pydantic import BaseModel, Field
 
 from .config import Settings
 from .db import connect_mariadb
-from .models import Measurement
-from .repository import upsert_recent
+from .recent_read_model import RollingRecentManager
+
+
+LOG = logging.getLogger(__name__)
 
 
 class StationMetadata(BaseModel):
@@ -50,6 +53,7 @@ class CentralRepositoryProtocol(Protocol):
 class CentralMariaDBRepository:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._recent_manager = RollingRecentManager(settings, connection_factory=self._connect)
 
     def _connect(self):
         return connect_mariadb(self.settings)
@@ -69,7 +73,7 @@ class CentralMariaDBRepository:
 
     def ingest_batch(self, measurements: list[dict[str, Any]], station: dict[str, Any], source_name: str) -> int:
         connection = self._connect()
-        inserted = 0
+        inserted_items: list[dict[str, Any]] = []
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -90,35 +94,34 @@ ON DUPLICATE KEY UPDATE
                 )
                 for item in measurements:
                     cursor.execute(
-                        "SELECT dtom, doserate, dose FROM measurement WHERE serid = ? AND dtom < ? ORDER BY dtom DESC LIMIT 1",
-                        (item["serid"], item["dtom"]),
-                    )
-                    previous = cursor.fetchone()
-                    cursor.execute(
                         "INSERT IGNORE INTO measurement (serid, dtom, doserate, dose, previnterval, stat) VALUES (?, ?, ?, ?, ?, ?)",
-                        (item["serid"], item["dtom"], item["doserate"], item.get("dose", 0.0), item["previnterval"], item["stat"]),
+                        (
+                            item["serid"], item["dtom"], item["doserate"],
+                            item.get("dose", 0.0), item["previnterval"], item["stat"],
+                        ),
                     )
                     if getattr(cursor, "rowcount", 0) == 1:
-                        inserted += 1
-                        cursor.execute("SELECT dtom FROM recent WHERE serid = ?", (item["serid"],))
-                        recent_row = cursor.fetchone()
-                        recent_time = recent_row.get("dtom") if isinstance(recent_row, dict) else (recent_row[0] if recent_row else None)
-                        if recent_time is None or item["dtom"] >= recent_time:
-                            previous_time = previous.get("dtom") if isinstance(previous, dict) else (previous[0] if previous else None)
-                            previous_rate = previous.get("doserate") if isinstance(previous, dict) else (previous[1] if previous else None)
-                            previous_dose = previous.get("dose") if isinstance(previous, dict) else (previous[2] if previous else None)
-                            measurement = Measurement(
-                                serid=int(item["serid"]), measured_at=item["dtom"], dose_rate=float(item["doserate"]),
-                                previnterval=int(item["previnterval"]), stat=int(item["stat"]),
-                            )
-                            upsert_recent(
-                                cursor, measurement, dose=float(item.get("dose") or 0.0), previous_time=previous_time,
-                                previous_rate=float(previous_rate) if previous_rate is not None else None,
-                                previous_dose=float(previous_dose) if previous_dose is not None else None,
-                                interval=int(item["previnterval"]),
-                            )
+                        inserted_items.append(item)
+            # Commit authoritative history first. recent/vrecent is disposable and must
+            # never be able to roll back a valid historical measurement.
             connection.commit()
-            return inserted
+
+            if inserted_items:
+                try:
+                    with connection.cursor() as cursor:
+                        self._recent_manager.mirror_samples(cursor, inserted_items)
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    LOG.exception(
+                        "historical ingest tersimpan tetapi mirror rolling recent gagal source=%s",
+                        source_name,
+                    )
+            try:
+                self._recent_manager.cleanup()
+            except Exception:
+                pass
+            return len(inserted_items)
         except Exception:
             connection.rollback()
             raise
@@ -140,22 +143,25 @@ ON DUPLICATE KEY UPDATE
             connection.close()
 
     def overview_rows(self) -> list[dict[str, Any]]:
-        """Read station metadata and each station's real latest measurement in one connection."""
+        """Read one newest bounded monitoring sample per station."""
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
 SELECT d.serid, d.name, d.location, d.warnlevel, d.alarmlevel, d.maxidlemin, d.unit,
-       m.dtom, m.doserate, m.dose, m.previnterval, m.stat
+       v.dtom, v.doserate, v.dose, v.previnterval, v.stat
 FROM device d
-LEFT JOIN measurement m
-  ON m.serid = d.serid
- AND m.dtom = (
-       SELECT MAX(m2.dtom)
-       FROM measurement m2
-       WHERE m2.serid = d.serid
- )
+LEFT JOIN (
+  SELECT current.*
+  FROM vrecent current
+  JOIN (
+    SELECT serid, MAX(dtom) AS dtom
+    FROM vrecent
+    WHERE dtom IS NOT NULL
+    GROUP BY serid
+  ) newest ON newest.serid = current.serid AND newest.dtom = current.dtom
+) v ON v.serid = d.serid
 ORDER BY d.location, d.name
 """
                 )
@@ -173,7 +179,9 @@ ORDER BY d.location, d.name
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT serid, dtom, doserate, dose, previnterval, stat FROM measurement WHERE serid = ? ORDER BY dtom DESC LIMIT 1",
+                    "SELECT serid, dtom, doserate, dose, previnterval, stat "
+                    "FROM vrecent WHERE serid = ? AND dtom IS NOT NULL "
+                    "ORDER BY dtom DESC LIMIT 1",
                     (serid,),
                 )
                 row = cursor.fetchone()
