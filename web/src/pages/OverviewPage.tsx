@@ -29,7 +29,7 @@ export function OverviewPage() {
     .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat ringkasan monitoring"));
 
   useEffect(() => { void load(); }, []);
-  useWebRefresh(() => { void load(); });
+  useWebRefresh(load);
 
   const derived = useMemo(() => {
     if (!data) return { attention: [] as Station[], latest: null as string | null };
