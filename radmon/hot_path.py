@@ -24,8 +24,8 @@ def _snapshot_needs_measurement_fallback(row: dict[str, Any]) -> bool:
     except (TypeError, ValueError):
         max_idle_minutes = 30
 
-    # Keep the normal realtime path on vrecent. Only verify measurement when
-    # the source snapshot has stopped moving for several expected intervals.
+    # Keep the normal realtime path on each source's legacy vrecent. Only verify
+    # source measurement when that source snapshot has stopped moving.
     refresh_after_seconds = min(max_idle_minutes * 60, max(10, interval * 3))
     now = datetime.now(measured_at.tzinfo) if measured_at.tzinfo is not None else datetime.now()
     return (now - measured_at) > timedelta(seconds=refresh_after_seconds)
@@ -83,7 +83,7 @@ ORDER BY dtom DESC LIMIT 1""",
 
 
 class RealtimeCentralMariaDBRepository(CentralMariaDBRepository):
-    """Serve overview from the bounded one-row-per-station recent table."""
+    """Serve overview from the bounded three-hour central monitoring read model."""
 
     def overview_rows(self) -> list[dict[str, Any]]:
         connection = self._connect()
@@ -92,9 +92,18 @@ class RealtimeCentralMariaDBRepository(CentralMariaDBRepository):
                 cursor.execute(
                     """
 SELECT d.serid, d.name, d.location, d.warnlevel, d.alarmlevel, d.maxidlemin, d.unit,
-       r.dtom, r.doserate, r.dose, r.lastmeasec AS previnterval, 0 AS stat
+       v.dtom, v.doserate, v.dose, v.previnterval, v.stat
 FROM device d
-LEFT JOIN recent r ON r.serid = d.serid
+LEFT JOIN (
+  SELECT current.*
+  FROM vrecent current
+  JOIN (
+    SELECT serid, MAX(dtom) AS dtom
+    FROM vrecent
+    WHERE dtom IS NOT NULL
+    GROUP BY serid
+  ) newest ON newest.serid = current.serid AND newest.dtom = current.dtom
+) v ON v.serid = d.serid
 ORDER BY d.location, d.name
 """
                 )
