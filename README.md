@@ -96,7 +96,15 @@ news
 rawdata
 ```
 
-`measurement` menyimpan history untuk History/Chart, Reports, export, dan archive. `recent` adalah snapshot operasional satu row per detector. `vrecent` adalah sumber authoritative monitoring realtime. `alarm` mengikuti schema legacy production `serid + dtoa` dengan `lvl`, `mvalue`, `thvalue`, `nhit`, `ack`, `pic`, `note`, `i_op`, dan `i_flag`.
+`measurement`, `alarm`, dan data historis lain tetap menjadi source of truth jangka panjang untuk History, Reports, export, archive, dan retensi minimum 5 tahun. RadMon **tidak mengurangi retention atau menghapus histori itu** ketika melakukan monitoring realtime.
+
+Khusus central PC, `recent` adalah **rolling sample table tiga jam** dengan field `serid, dtom, doserate, dose, previnterval, stat`. Primary key `(serid, dtom)` membuat mirror sample idempotent dan index `dtom` membuat cleanup retention murah. Row yang lebih tua dari tiga jam dihapus **hanya dari `recent`**; copy authoritative-nya tetap berada di `measurement`.
+
+`vrecent` adalah view monitoring yang menggabungkan rolling `recent` dengan metadata `device` dan current runtime status. Grafana realtime, sparkline, trend dose tiga jam, dan current status membaca `vrecent` sehingga hot path tidak menyisir tabel `measurement` lima tahun. Panel event **Alarm Terbaru · 24 Jam** tetap membaca `alarm` karena event log itu mempunyai window yang berbeda dari rolling dose series.
+
+Saat upgrade dari schema lama, RadMon hanya merekonstruksi `recent`/`vrecent` central dari tiga jam terakhir `measurement`. Database source detector mempertahankan schema legacy miliknya dan **tidak dimigrasikan atau diubah oleh RadMon central**.
+
+`alarm` mengikuti schema legacy production `serid + dtoa` dengan `lvl`, `mvalue`, `thvalue`, `nhit`, `ack`, `pic`, `note`, `i_op`, dan `i_flag`.
 
 **RadMon tidak melakukan DDL pada database source production.** State policy/suppression, audit, checkpoint, retry metadata, session, dan security disimpan di central/runtime storage.
 
@@ -161,7 +169,7 @@ Bundle archive mencakup `manifest.json` dan `monthly-recap.csv`. Checkpoint/drai
 
 ## Grafana Monitoring TV
 
-Generator factory tetap menyediakan dashboard `Realtime -> Trends -> Operations`, refresh **2 detik**, dan **Playlist** interval **10 detik** untuk first seed/reset terkontrol. Sesudah resource ada di Grafana, saved dashboard/playlist tidak ditimpa oleh startup RadMon.
+Generator factory tetap menyediakan dashboard `Realtime -> Trends -> Operations`, refresh **2 detik**, dan **Playlist** interval **10 detik** untuk first seed/reset terkontrol. Continuous dose/time-series monitoring membaca rolling `vrecent` tiga jam; historical `measurement` tetap dikhususkan untuk History/Reports/Archive. Sesudah resource ada di Grafana, saved dashboard/playlist tidak ditimpa oleh startup RadMon.
 
 ## WhatsApp alarm
 
