@@ -23,7 +23,9 @@ export type WebEvent = {
   [key: string]: unknown;
 };
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+const inFlightReads = new Map<string, Promise<unknown>>();
+
+async function performApi<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
     headers: {
@@ -46,6 +48,25 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(detail);
   }
   return response.json() as Promise<T>;
+}
+
+export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = String(init?.method || "GET").toUpperCase();
+  if (method !== "GET") return performApi<T>(path, init);
+
+  // All authenticated control-plane reads are same-origin. Sharing an already
+  // running GET prevents the initial page load and live SSE refreshes from
+  // multiplying identical DB work when the backend is temporarily slow.
+  const existing = inFlightReads.get(path);
+  if (existing) return existing as Promise<T>;
+
+  const request = performApi<T>(path, init);
+  inFlightReads.set(path, request);
+  try {
+    return await request;
+  } finally {
+    if (inFlightReads.get(path) === request) inFlightReads.delete(path);
+  }
 }
 
 export async function currentUser(): Promise<SessionUser | null> {
