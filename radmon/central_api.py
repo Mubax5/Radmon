@@ -53,7 +53,10 @@ class CentralRepositoryProtocol(Protocol):
 class CentralMariaDBRepository:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self._recent_manager = RollingRecentManager(settings, connection_factory=self._connect)
+        self._recent_manager = RollingRecentManager(
+            settings,
+            connection_factory=lambda: self._connect(),
+        )
 
     def _connect(self):
         return connect_mariadb(self.settings)
@@ -110,6 +113,7 @@ ON DUPLICATE KEY UPDATE
                 try:
                     with connection.cursor() as cursor:
                         self._recent_manager.mirror_samples(cursor, inserted_items)
+                        self._recent_manager.cleanup_with_cursor(cursor)
                     connection.commit()
                 except Exception:
                     connection.rollback()
@@ -117,10 +121,6 @@ ON DUPLICATE KEY UPDATE
                         "historical ingest tersimpan tetapi mirror rolling recent gagal source=%s",
                         source_name,
                     )
-            try:
-                self._recent_manager.cleanup()
-            except Exception:
-                pass
             return len(inserted_items)
         except Exception:
             connection.rollback()
