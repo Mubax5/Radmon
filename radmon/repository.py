@@ -1,24 +1,37 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime
 from typing import Any, Callable
 
 from .config import Settings
 from .db import connect_mariadb
 from .models import LatestReading, Measurement, StationConfig
+from .recent_read_model import RollingRecentManager
 from .stations import station_by_id, station_catalog
 
 
-REQUIRED_SCHEMA = {
+LOG = logging.getLogger(__name__)
+
+BASE_REQUIRED_SCHEMA = {
     "device": {"serid", "name", "location", "maxidlemin", "warnlevel", "alarmlevel", "unit", "audiopath", "hwaddress", "hwtype", "description"},
     "measurement": {"serid", "dtom", "doserate", "dose", "previnterval", "stat"},
-    "recent": {"serid", "dtom", "doserate", "dose", "lastrate", "minrate", "maxrate", "avgrate", "lastdose", "mindose", "maxdose", "avgdose", "firstmea", "lastmea", "lastmeasec", "meacount"},
-    "vrecent": {"serid", "name", "location", "warnlevel", "alarmlevel", "unit", "audiopath", "description", "maxidlemin", "dtom", "doserate", "dose", "lastrate", "minrate", "maxrate", "avgrate", "lastdose", "mindose", "maxdose", "avgdose", "lastmea", "lastmeasec", "meacount", "firstmea"},
     "alarm": {"serid", "dtoa", "lvl", "mvalue", "thvalue", "nhit", "ack", "pic", "note", "i_op", "i_flag"},
     "applog": {"ts", "id", "msg"},
     "news": {"ts", "code", "content"},
     "rawdata": {"serid", "dtom", "val"},
+}
+
+REQUIRED_SCHEMA = {
+    **BASE_REQUIRED_SCHEMA,
+    "recent": {"serid", "dtom", "doserate", "dose", "previnterval", "stat"},
+    "vrecent": {
+        "serid", "name", "location", "warnlevel", "alarmlevel", "unit", "audiopath",
+        "description", "maxidlemin", "dtom", "doserate", "dose", "previnterval", "stat",
+        "underlying_status", "status", "suppressed", "trigger_count", "retrigger_locked",
+        "suppression_expires_at", "suppression_pic", "suppression_reason",
+    },
 }
 
 
@@ -55,51 +68,21 @@ def upsert_recent(
     measurement: Measurement,
     *,
     dose: float,
-    previous_time: datetime | None,
-    previous_rate: float | None,
-    previous_dose: float | None,
+    previous_time: datetime | None = None,
+    previous_rate: float | None = None,
+    previous_dose: float | None = None,
     interval: int,
 ) -> None:
-    cursor.execute(
-        """
-INSERT INTO recent
-  (serid, dtom, doserate, dose, lastrate, minrate, maxrate, avgrate,
-   lastdose, mindose, maxdose, avgdose, firstmea, lastmea, lastmeasec, meacount)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-ON DUPLICATE KEY UPDATE
-  lastrate = doserate,
-  lastdose = dose,
-  dtom = VALUES(dtom),
-  doserate = VALUES(doserate),
-  dose = VALUES(dose),
-  minrate = LEAST(COALESCE(minrate, VALUES(doserate)), VALUES(doserate)),
-  maxrate = GREATEST(COALESCE(maxrate, VALUES(doserate)), VALUES(doserate)),
-  avgrate = ((COALESCE(avgrate, 0) * COALESCE(meacount, 0)) + VALUES(doserate)) / (COALESCE(meacount, 0) + 1),
-  mindose = LEAST(COALESCE(mindose, VALUES(dose)), VALUES(dose)),
-  maxdose = GREATEST(COALESCE(maxdose, VALUES(dose)), VALUES(dose)),
-  avgdose = ((COALESCE(avgdose, 0) * COALESCE(meacount, 0)) + VALUES(dose)) / (COALESCE(meacount, 0) + 1),
-  firstmea = COALESCE(firstmea, VALUES(firstmea)),
-  lastmea = VALUES(lastmea),
-  lastmeasec = VALUES(lastmeasec),
-  meacount = COALESCE(meacount, 0) + 1
-""",
-        (
-            measurement.serid,
-            measurement.measured_at,
-            measurement.dose_rate,
-            dose,
-            float(previous_rate) if previous_rate is not None else measurement.dose_rate,
-            measurement.dose_rate,
-            measurement.dose_rate,
-            measurement.dose_rate,
-            float(previous_dose) if previous_dose is not None else 0.0,
-            dose,
-            dose,
-            dose,
-            previous_time if isinstance(previous_time, datetime) else measurement.measured_at,
-            measurement.measured_at,
-            interval,
-        ),
+    """Compatibility helper: mirror one real sample into the rolling table only."""
+    del previous_time, previous_rate, previous_dose
+    RollingRecentManager.mirror_sample(
+        cursor,
+        serid=measurement.serid,
+        dtom=measurement.measured_at,
+        doserate=measurement.dose_rate,
+        dose=dose,
+        previnterval=interval,
+        stat=measurement.stat,
     )
 
 
@@ -107,6 +90,10 @@ class MariaDBRepository:
     def __init__(self, settings: Settings, *, connection_factory: Callable[[], Any] | None = None) -> None:
         self.settings = settings
         self._connection_factory = connection_factory or (lambda: connect_mariadb(settings))
+        self._recent_manager = RollingRecentManager(
+            settings,
+            connection_factory=self._connection_factory,
+        )
 
     def _connect(self) -> Any:
         return self._connection_factory()
@@ -124,8 +111,9 @@ class MariaDBRepository:
         except Exception:
             return False
 
-    def validate_schema(self) -> list[str]:
-        names = tuple(REQUIRED_SCHEMA)
+    def validate_schema(self, required_schema: dict[str, set[str]] | None = None) -> list[str]:
+        required = required_schema or REQUIRED_SCHEMA
+        names = tuple(required)
         placeholders = ",".join("?" for _ in names)
         connection = self._connect()
         try:
@@ -143,13 +131,18 @@ class MariaDBRepository:
             column = str(_row_get(row, "COLUMN_NAME", 1)).lower()
             actual.setdefault(table, set()).add(column)
         missing: list[str] = []
-        for table, expected in REQUIRED_SCHEMA.items():
+        for table, expected in required.items():
             if table not in actual:
                 missing.append(f"table {table}")
                 continue
             for column in sorted(expected - actual[table]):
                 missing.append(f"{table}.{column}")
         return missing
+
+    def require_base_schema(self) -> None:
+        missing = self.validate_schema(BASE_REQUIRED_SCHEMA)
+        if missing:
+            raise RuntimeError("Schema ipradmon tidak sesuai. Missing: " + ", ".join(missing))
 
     def require_schema(self) -> None:
         missing = self.validate_schema()
@@ -269,34 +262,47 @@ LIMIT 1
 
     def insert_measurement(self, measurement: Measurement, *, raw: str | None = None) -> float:
         connection = self._connect()
+        dose = 0.0
+        interval = measurement.previnterval
         try:
             with connection.cursor() as cursor:
                 previous = self._previous_measurement(cursor, measurement.serid, measurement.measured_at)
                 previous_time = _row_get(previous, "dtom", 0)
                 previous_rate = _row_get(previous, "doserate", 1)
-                previous_dose = _row_get(previous, "dose", 2)
-                interval = measurement.previnterval
                 if isinstance(previous_time, datetime):
                     measured = int(round((measurement.measured_at - previous_time).total_seconds()))
                     if measured > 0:
                         interval = measured
-                dose = 0.0
                 if previous_rate is not None and interval > 0:
                     dose = ((float(previous_rate) + float(measurement.dose_rate)) / 2.0) * (interval / 3600.0)
                 if raw is not None:
-                    cursor.execute("INSERT INTO rawdata (serid, dtom, val) VALUES (?, ?, ?)", (measurement.serid, measurement.measured_at, raw))
+                    cursor.execute(
+                        "INSERT INTO rawdata (serid, dtom, val) VALUES (?, ?, ?)",
+                        (measurement.serid, measurement.measured_at, raw),
+                    )
                 cursor.execute(
                     "INSERT INTO measurement (serid, dtom, doserate, dose, previnterval, stat) VALUES (?, ?, ?, ?, ?, ?)",
                     (measurement.serid, measurement.measured_at, measurement.dose_rate, dose, interval, measurement.stat),
                 )
-                upsert_recent(
-                    cursor, measurement, dose=dose,
-                    previous_time=previous_time if isinstance(previous_time, datetime) else None,
-                    previous_rate=float(previous_rate) if previous_rate is not None else None,
-                    previous_dose=float(previous_dose) if previous_dose is not None else None,
-                    interval=interval,
-                )
+            # Historical data is authoritative: persist it before touching disposable recent.
             connection.commit()
+
+            try:
+                with connection.cursor() as cursor:
+                    upsert_recent(cursor, measurement, dose=dose, interval=interval)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                LOG.exception(
+                    "measurement tersimpan tetapi mirror recent gagal serid=%s dtom=%s",
+                    measurement.serid,
+                    measurement.measured_at,
+                )
+            try:
+                self._recent_manager.cleanup()
+            except Exception:
+                # Cleanup failure may leave a slightly wider window; it must not undo history.
+                pass
             return dose
         except Exception:
             connection.rollback()
@@ -309,15 +315,23 @@ LIMIT 1
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT dtom, doserate, lastrate FROM vrecent WHERE serid = ? LIMIT 1", (station.serid,))
-                row = cursor.fetchone()
-            if row is None:
+                cursor.execute(
+                    "SELECT dtom, doserate FROM vrecent "
+                    "WHERE serid = ? AND dtom IS NOT NULL ORDER BY dtom DESC LIMIT 2",
+                    (station.serid,),
+                )
+                rows = cursor.fetchall()
+            if not rows:
                 return LatestReading(station=station, measured_at=None, dose_rate=None)
+            current = rows[0]
+            previous = rows[1] if len(rows) > 1 else None
+            current_rate = _row_get(current, "doserate", 1)
+            previous_rate = _row_get(previous, "doserate", 1) if previous is not None else None
             return LatestReading(
                 station=station,
-                measured_at=_row_get(row, "dtom", 0),
-                dose_rate=float(_row_get(row, "doserate", 1)) if _row_get(row, "doserate", 1) is not None else None,
-                previous_dose_rate=float(_row_get(row, "lastrate", 2)) if _row_get(row, "lastrate", 2) is not None else None,
+                measured_at=_row_get(current, "dtom", 0),
+                dose_rate=float(current_rate) if current_rate is not None else None,
+                previous_dose_rate=float(previous_rate) if previous_rate is not None else None,
             )
         finally:
             connection.close()
@@ -423,7 +437,10 @@ LIMIT ?
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute("INSERT INTO applog (ts, id, msg) VALUES (?, ?, ?)", (at or datetime.now(), 0, str(message)[:4000]))
+                cursor.execute(
+                    "INSERT INTO applog (ts, id, msg) VALUES (?, ?, ?)",
+                    (at or datetime.now(), 0, str(message)[:4000]),
+                )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -432,23 +449,34 @@ LIMIT ?
             connection.close()
 
     def live_rows(self) -> list[dict[str, Any]]:
+        """Return one newest bounded monitoring row per detector."""
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute("""
-    SELECT serid, name, location, warnlevel, alarmlevel, unit, description,
-           maxidlemin, dtom, doserate, dose, lastrate, minrate, maxrate,
-           avgrate, lastdose, mindose, maxdose, avgdose, lastmea,
-           lastmeasec, meacount, firstmea
-    FROM vrecent ORDER BY serid
-    """)
+                cursor.execute(
+                    """
+SELECT v.serid, v.name, v.location, v.warnlevel, v.alarmlevel, v.unit,
+       v.description, v.maxidlemin, v.dtom, v.doserate, v.dose,
+       v.previnterval, v.stat, v.underlying_status, v.status,
+       v.suppressed, v.trigger_count, v.retrigger_locked,
+       v.suppression_expires_at, v.suppression_pic, v.suppression_reason
+FROM vrecent v
+JOIN (
+  SELECT serid, MAX(dtom) AS dtom
+  FROM vrecent
+  WHERE dtom IS NOT NULL
+  GROUP BY serid
+) newest ON newest.serid = v.serid AND newest.dtom = v.dtom
+ORDER BY v.serid
+"""
+                )
                 rows = cursor.fetchall()
         finally:
             connection.close()
         keys = (
             "serid", "name", "location", "warnlevel", "alarmlevel", "unit", "description",
-            "maxidlemin", "dtom", "doserate", "dose", "lastrate", "minrate", "maxrate",
-            "avgrate", "lastdose", "mindose", "maxdose", "avgdose", "lastmea",
-            "lastmeasec", "meacount", "firstmea",
+            "maxidlemin", "dtom", "doserate", "dose", "previnterval", "stat",
+            "underlying_status", "status", "suppressed", "trigger_count", "retrigger_locked",
+            "suppression_expires_at", "suppression_pic", "suppression_reason",
         )
         return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
