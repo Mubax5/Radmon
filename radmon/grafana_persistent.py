@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import os
 import socket
 
@@ -74,6 +75,47 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                 f"{repaired_detail or detail}"
             )
 
+    @staticmethod
+    def _refresh_managed_dashboard_queries(
+        saved_dashboard: dict,
+        factory_dashboard: dict,
+    ) -> tuple[dict, bool]:
+        """Refresh RadMon-owned SQL while preserving operator-owned presentation state."""
+        migrated = deepcopy(saved_dashboard)
+        changed = False
+
+        if migrated.get("editable") is False:
+            migrated["editable"] = True
+            changed = True
+
+        factory_panels = {
+            panel.get("id"): panel
+            for panel in factory_dashboard.get("panels", [])
+            if panel.get("id") is not None and panel.get("targets")
+        }
+        panels = migrated.get("panels")
+        if not isinstance(panels, list):
+            return migrated, changed
+
+        for panel in panels:
+            if not isinstance(panel, dict):
+                continue
+            factory_panel = factory_panels.get(panel.get("id"))
+            if not isinstance(factory_panel, dict):
+                continue
+
+            factory_targets = factory_panel.get("targets")
+            if panel.get("targets") != factory_targets:
+                panel["targets"] = deepcopy(factory_targets)
+                changed = True
+
+            factory_datasource = factory_panel.get("datasource")
+            if factory_datasource is not None and panel.get("datasource") != factory_datasource:
+                panel["datasource"] = deepcopy(factory_datasource)
+                changed = True
+
+        return migrated, changed
+
     def _provision_via_api(self, base_url: str) -> bool:
         base = base_url.rstrip("/")
         datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
@@ -117,22 +159,28 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                     },
                 )
             else:
-                # One-time compatibility migration for dashboards seeded by older
-                # RadMon builds. Preserve saved content and only unlock editing.
+                # Keep saved layout/title/visual options and custom panels, but the
+                # SQL contract of known RadMon panels must follow the installed
+                # version. Otherwise a persisted Grafana database can keep running
+                # pre-upgrade queries forever (for example FROM measurement after
+                # the rolling recent/vrecent migration) and show No data.
                 saved = current.get("dashboard") if isinstance(current, dict) else None
-                if isinstance(saved, dict) and saved.get("editable") is False:
-                    editable = dict(saved)
-                    editable["editable"] = True
-                    self._request_json(
-                        f"{base}/api/dashboards/db",
-                        method="POST",
-                        payload={
-                            "dashboard": editable,
-                            "folderId": 0,
-                            "overwrite": True,
-                            "message": "RadMon unlock existing monitoring dashboard",
-                        },
+                if isinstance(saved, dict):
+                    migrated, changed = self._refresh_managed_dashboard_queries(
+                        saved,
+                        factory_dashboard,
                     )
+                    if changed:
+                        self._request_json(
+                            f"{base}/api/dashboards/db",
+                            method="POST",
+                            payload={
+                                "dashboard": migrated,
+                                "folderId": 0,
+                                "overwrite": True,
+                                "message": "RadMon monitoring query contract migration",
+                            },
+                        )
 
         playlist_endpoint = (
             f"{base}/apis/playlist.grafana.app/v1/namespaces/default/playlists/{PLAYLIST_UID}"
