@@ -121,6 +121,18 @@ VALUES (?, ?, ?, ?, ?, ?)
             mirrored += 1
         return mirrored
 
+    def cleanup_with_cursor(self, cursor: Any, *, force: bool = False) -> int:
+        """Delete expired rolling rows using an already-open central transaction."""
+        now = self._monotonic()
+        if not force and self._last_cleanup and (
+            now - self._last_cleanup < self.cleanup_interval_seconds
+        ):
+            return 0
+        cursor.execute(f"DELETE FROM recent WHERE dtom < {self._cutoff_sql}")
+        deleted = int(getattr(cursor, "rowcount", 0) or 0)
+        self._last_cleanup = now
+        return deleted
+
     def _ensure_recent_indexes(self, cursor: Any, table: str) -> None:
         names = self._index_names(cursor, table)
         if "primary" not in names:
@@ -262,19 +274,11 @@ WHERE dtom >= {self._cutoff_sql}
             connection.close()
 
     def cleanup(self, *, force: bool = False) -> int:
-        now = self._monotonic()
-        if not force and self._last_cleanup and (
-            now - self._last_cleanup < self.cleanup_interval_seconds
-        ):
-            return 0
-
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                cursor.execute(f"DELETE FROM recent WHERE dtom < {self._cutoff_sql}")
-                deleted = int(getattr(cursor, "rowcount", 0) or 0)
+                deleted = self.cleanup_with_cursor(cursor, force=force)
             connection.commit()
-            self._last_cleanup = now
             return deleted
         except Exception:
             connection.rollback()
