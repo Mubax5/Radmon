@@ -137,10 +137,11 @@ jobs:
           if (-not $chocolateyRoot) {
             $chocolateyRoot = Join-Path $env:ProgramData "chocolatey"
           }
-          $grafana = Get-ChildItem (Join-Path $chocolateyRoot "lib\grafana\tools") -Recurse -Filter "grafana-server.exe" -ErrorAction SilentlyContinue |
+          $grafana = Get-ChildItem (Join-Path $chocolateyRoot "lib\grafana\tools") -Recurse -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -in @("grafana-server.exe", "grafana.exe") } |
             Select-Object -First 1
           if ($null -eq $grafana) {
-            throw "Chocolatey did not install grafana-server.exe"
+            throw "Chocolatey did not install a Grafana executable"
           }
 
           $databaseDeadline = [DateTime]::UtcNow.AddMinutes(2)
