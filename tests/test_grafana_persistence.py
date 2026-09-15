@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 import socket
 
@@ -44,6 +45,81 @@ def test_existing_grafana_refreshes_datasource_credentials_without_overwriting_s
     assert payload["database"] == "ipradmon"
     assert payload["user"] == "radmon_reader"
     assert payload["secureJsonData"]["password"] == "current-secret"
+
+
+def test_persisted_managed_dashboard_queries_are_refreshed_without_clobbering_layout(tmp_path: Path) -> None:
+    bootstrap = PersistentGrafanaBootstrap(Settings(), project_root=tmp_path)
+    factory_dashboards = bootstrap._dashboard_payloads()
+    factory_by_uid = {str(item["uid"]): item for item in factory_dashboards}
+    first_uid = str(factory_dashboards[0]["uid"])
+    factory_panel = next(panel for panel in factory_dashboards[0]["panels"] if panel.get("id") == 10)
+    writes: list[tuple[str, str, dict]] = []
+
+    def request(url: str, *, method: str = "GET", payload=None, use_auth=True):
+        if method != "GET":
+            writes.append((method, url, payload or {}))
+            return {"status": "ok"}
+        if url.endswith("/api/datasources/uid/ipradmon-mysql/health"):
+            return {"status": "OK", "message": "Database Connection OK"}
+        if url.endswith("/api/datasources/uid/ipradmon-mysql"):
+            return {"uid": "ipradmon-mysql", "name": "ipradmon"}
+        if "/api/dashboards/uid/" in url:
+            uid = url.rsplit("/", 1)[-1]
+            if uid == first_uid:
+                return {
+                    "dashboard": {
+                        "uid": uid,
+                        "title": "Operator custom layout",
+                        "editable": True,
+                        "panels": [
+                            {
+                                "id": 10,
+                                "title": "Operator renamed panel",
+                                "gridPos": {"x": 7, "y": 8, "w": 9, "h": 10},
+                                "datasource": {"type": "mysql", "uid": "old-datasource"},
+                                "targets": [{"rawSql": "SELECT doserate FROM measurement"}],
+                                "options": {"operator": "preserve-me"},
+                            },
+                            {
+                                "id": 999,
+                                "type": "text",
+                                "title": "Operator custom panel",
+                                "gridPos": {"x": 0, "y": 20, "w": 24, "h": 2},
+                                "targets": [],
+                            },
+                        ],
+                    }
+                }
+            saved = deepcopy(factory_by_uid[uid])
+            saved["editable"] = True
+            return {"dashboard": saved}
+        if "/apis/playlist.grafana.app/" in url:
+            return {"metadata": {"name": PLAYLIST_UID}}
+        raise AssertionError(url)
+
+    bootstrap._request_json = request  # type: ignore[method-assign]
+    assert bootstrap._provision_via_api("http://localhost:3300") is True
+
+    dashboard_writes = [
+        payload
+        for method, url, payload in writes
+        if method == "POST" and url.endswith("/api/dashboards/db")
+    ]
+    assert len(dashboard_writes) == 1
+    migrated = dashboard_writes[0]["dashboard"]
+    assert migrated["title"] == "Operator custom layout"
+    assert migrated["editable"] is True
+    assert len(migrated["panels"]) == 2
+
+    managed = next(panel for panel in migrated["panels"] if panel.get("id") == 10)
+    assert managed["title"] == "Operator renamed panel"
+    assert managed["gridPos"] == {"x": 7, "y": 8, "w": 9, "h": 10}
+    assert managed["options"] == {"operator": "preserve-me"}
+    assert managed["datasource"] == factory_panel["datasource"]
+    assert managed["targets"] == factory_panel["targets"]
+    assert "measurement" not in str(managed["targets"]).lower()
+    assert "vrecent" in str(managed["targets"]).lower()
+    assert next(panel for panel in migrated["panels"] if panel.get("id") == 999)["title"] == "Operator custom panel"
 
 
 def test_legacy_readonly_dashboard_is_unlocked_without_restoring_factory_layout(tmp_path: Path) -> None:
