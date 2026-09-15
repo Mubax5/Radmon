@@ -1,13 +1,25 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Iterable
+import logging
+from typing import Any, Callable, Iterable
 
 from .lan import MariaCentralStore, _shared_serids
+from .recent_read_model import RollingRecentManager
+
+
+LOG = logging.getLogger(__name__)
 
 
 class BatchedMariaCentralStore(MariaCentralStore):
-    """Write one source live snapshot with one central MariaDB transaction."""
+    """Write one source live snapshot efficiently while preserving history first."""
+
+    def __init__(self, settings, *, connection_factory: Callable[[], Any] | None = None) -> None:
+        super().__init__(settings, connection_factory=connection_factory)
+        self._recent_manager = RollingRecentManager(
+            settings,
+            connection_factory=self._connection,
+        )
 
     @staticmethod
     def _ensure_remote_device_with_cursor(cursor: Any, source_id: str, row: dict[str, Any]) -> None:
@@ -60,73 +72,73 @@ ON DUPLICATE KEY UPDATE
             ),
         )
 
+    @staticmethod
+    def _rolling_row(row: dict[str, Any]) -> dict[str, Any] | None:
+        measured_at = row.get("dtom")
+        rate = row.get("doserate")
+        if not isinstance(measured_at, datetime) or rate is None:
+            return None
+        try:
+            interval = int(row.get("lastmeasec") or row.get("previnterval") or 2)
+        except (TypeError, ValueError):
+            interval = 2
+        if interval < 1 or interval > 3600:
+            interval = 2
+        return {
+            "serid": int(row["serid"]),
+            "dtom": measured_at,
+            "doserate": float(rate),
+            "dose": float(row.get("dose") or 0.0),
+            "previnterval": interval,
+            "stat": int(row.get("stat") or 0),
+        }
+
     def upsert_live_rows(self, source_id: str, rows: Iterable[dict[str, Any]]) -> int:
         values = list(rows)
         if not values:
             return 0
 
         connection = self._connection()
+        rolling_rows: list[dict[str, Any]] = []
         changed = 0
         try:
+            # Phase 1: device metadata + authoritative historical measurement.
             with connection.cursor() as cursor:
                 for row in values:
                     self._ensure_remote_device_with_cursor(cursor, source_id, row)
-
-                    cursor.execute(
-                        """INSERT INTO recent
-  (serid, dtom, doserate, dose, lastrate, minrate, maxrate, avgrate,
-   lastdose, mindose, maxdose, avgdose, firstmea, lastmea, lastmeasec, meacount)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON DUPLICATE KEY UPDATE
-  dtom = VALUES(dtom), doserate = VALUES(doserate), dose = VALUES(dose),
-  lastrate = VALUES(lastrate), minrate = VALUES(minrate), maxrate = VALUES(maxrate),
-  avgrate = VALUES(avgrate), lastdose = VALUES(lastdose), mindose = VALUES(mindose),
-  maxdose = VALUES(maxdose), avgdose = VALUES(avgdose), firstmea = VALUES(firstmea),
-  lastmea = VALUES(lastmea), lastmeasec = VALUES(lastmeasec), meacount = VALUES(meacount)""",
-                        (
-                            int(row["serid"]),
-                            row.get("dtom"),
-                            float(row["doserate"]) if row.get("doserate") is not None else 0.0,
-                            row.get("dose"),
-                            row.get("lastrate"),
-                            row.get("minrate"),
-                            row.get("maxrate"),
-                            row.get("avgrate"),
-                            row.get("lastdose"),
-                            row.get("mindose"),
-                            row.get("maxdose"),
-                            row.get("avgdose"),
-                            row.get("firstmea"),
-                            row.get("lastmea"),
-                            row.get("lastmeasec"),
-                            row.get("meacount"),
-                        ),
-                    )
-                    changed += 1
-
-                    measured_at = row.get("dtom")
-                    rate = row.get("doserate")
-                    if not isinstance(measured_at, datetime) or rate is None:
+                    rolling = self._rolling_row(row)
+                    if rolling is None:
                         continue
-                    try:
-                        interval = int(row.get("lastmeasec") or 2)
-                    except (TypeError, ValueError):
-                        interval = 2
-                    if interval < 1 or interval > 3600:
-                        interval = 2
                     cursor.execute(
                         """INSERT IGNORE INTO measurement
   (serid, dtom, doserate, dose, previnterval, stat)
-VALUES (?, ?, ?, ?, ?, 0)""",
+VALUES (?, ?, ?, ?, ?, ?)""",
                         (
-                            int(row["serid"]),
-                            measured_at,
-                            float(rate),
-                            float(row.get("dose") or 0.0),
-                            interval,
+                            rolling["serid"], rolling["dtom"], rolling["doserate"],
+                            rolling["dose"], rolling["previnterval"], rolling["stat"],
                         ),
                     )
+                    rolling_rows.append(rolling)
+                    changed += 1
             connection.commit()
+
+            # Phase 2: disposable/read-optimized mirror. Failure here must not undo
+            # measurements already committed above.
+            if rolling_rows:
+                try:
+                    with connection.cursor() as cursor:
+                        self._recent_manager.mirror_samples(cursor, rolling_rows)
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    LOG.exception(
+                        "measurement source=%s tersimpan tetapi rolling recent gagal",
+                        source_id,
+                    )
+            try:
+                self._recent_manager.cleanup()
+            except Exception:
+                pass
             return changed
         except Exception:
             connection.rollback()
