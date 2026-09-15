@@ -12,8 +12,9 @@ import uvicorn
 
 from .archive import ArchiveCatalog, QuarterArchiveService
 from .archive_store import CentralArchiveStore
-from .central_api import CentralMariaDBRepository, create_central_app
+from .central_api import create_central_app
 from .config import Settings
+from .hot_path import RealtimeCentralMariaDBRepository
 from .lan_runtime import LanRuntime
 from .repository import MariaDBRepository
 from .secure_api import attach_secure_routes
@@ -107,7 +108,7 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
             timezone_name=settings.archive_timezone,
         )
 
-    repository = CentralMariaDBRepository(settings)
+    repository = RealtimeCentralMariaDBRepository(settings)
     web_events = WebEventBroker(max_queue=32)
     app = create_central_app(repository, settings)
     app.state.radmon_lan_enabled = bool(settings.lan_enabled)
