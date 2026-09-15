@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from radmon.central_api import CentralMariaDBRepository
 from radmon.config import Settings
-from radmon.lan import LIVE_KEYS, LanSource, RemoteMariaDBSource
+from radmon.hot_path import RealtimeCentralMariaDBRepository, RealtimeRemoteMariaDBSource
+from radmon.lan import LIVE_KEYS, LanSource
 
 
 def _live_tuple(*, measured_at: datetime, doserate: float, maxidlemin: int = 30, lastmeasec: int = 2):
@@ -85,7 +85,7 @@ def test_remote_live_hot_path_uses_vrecent_and_targeted_latest_fallback() -> Non
             pass
 
     connection = Connection()
-    remote = RemoteMariaDBSource(
+    remote = RealtimeRemoteMariaDBSource(
         LanSource("gd52", "192.168.1.52", 3306, "u", "p", "ipradmon"),
         connection_factory=lambda: connection,
     )
@@ -138,7 +138,7 @@ def test_remote_live_hot_path_does_not_touch_measurement_when_vrecent_is_fresh()
             pass
 
     connection = Connection()
-    remote = RemoteMariaDBSource(
+    remote = RealtimeRemoteMariaDBSource(
         LanSource("gd52", "192.168.1.52", 3306, "u", "p", "ipradmon"),
         connection_factory=lambda: connection,
     )
@@ -183,7 +183,7 @@ def test_central_overview_reads_bounded_recent_table_not_measurement_history() -
             pass
 
     connection = Connection()
-    repository = CentralMariaDBRepository(Settings())
+    repository = RealtimeCentralMariaDBRepository(Settings())
     repository._connect = lambda: connection  # type: ignore[method-assign]
 
     rows = repository.overview_rows()
