@@ -51,7 +51,7 @@ def test_every_generated_dashboard_has_shared_header_and_fits_without_scroll():
         assert "Instalasi Pengelolaan Limbah Radioaktif" in payload
 
 
-def test_page_one_live_values_and_times_use_vrecent_but_sparkline_keeps_measurement_history():
+def test_page_one_live_values_times_and_sparklines_use_rolling_vrecent():
     page1 = build_dashboard_payloads()[0]
     dose = [panel for panel in page1["panels"] if panel.get("title", "").startswith("[")]
     spark = [panel for panel in page1["panels"] if panel.get("description") == "latest-dose-sparkline"]
@@ -59,32 +59,37 @@ def test_page_one_live_values_and_times_use_vrecent_but_sparkline_keeps_measurem
     assert len(dose) == len(spark) == len(timestamp) == 15
     for panel in dose:
         assert panel["type"] == "stat"
-        assert "FROM vrecent" in panel["targets"][0]["rawSql"]
+        sql = panel["targets"][0]["rawSql"]
+        assert "FROM vrecent" in sql
+        assert "ORDER BY dtom DESC" in sql
         assert panel["fieldConfig"]["defaults"]["unit"] == "suffix: µSv/h"
     for panel in spark:
         assert panel["type"] == "timeseries"
         sql = panel["targets"][0]["rawSql"]
-        assert "FROM measurement" in sql
-        assert "CONVERT_TZ(m.dtom, '+07:00', '+00:00')" in sql
+        assert "FROM vrecent" in sql
+        assert "FROM measurement" not in sql
+        assert "CONVERT_TZ(v.dtom, '+07:00', '+00:00')" in sql
         assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
     for panel in timestamp:
         sql = panel["targets"][0]["rawSql"]
         assert "FROM vrecent" in sql
+        assert "ORDER BY dtom DESC" in sql
         assert "TIMESTAMPDIFF" in sql
         assert "CONVERT_TZ(dtom, '+07:00', '+00:00')" in sql
         assert "DATE_FORMAT" not in sql
         assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
 
 
-def test_page_two_historical_trends_keep_measurement_and_live_summary_uses_vrecent():
+def test_page_two_three_hour_trends_and_live_summary_use_rolling_vrecent():
     page2 = build_dashboard_payloads()[1]
     trends = [panel for panel in page2["panels"] if panel.get("description") == "building-dose-trend"]
     assert len(trends) == 5
     assert {panel["title"] for panel in trends} == {f"Dose Rate · Gedung {building} · 3 Jam" for building in BUILDING_PAGE_ORDER}
     for panel in trends:
         sql = panel["targets"][0]["rawSql"]
-        assert "FROM measurement" in sql
-        assert "CONVERT_TZ(m.dtom, '+07:00', '+00:00')" in sql
+        assert "FROM vrecent" in sql
+        assert "FROM measurement" not in sql
+        assert "CONVERT_TZ(v.dtom, '+07:00', '+00:00')" in sql
         assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
     summaries = {
         panel.get("title"): panel
