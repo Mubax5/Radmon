@@ -122,12 +122,13 @@ VALUES (?, ?, ?, ?, ?, ?)""",
                     changed += 1
             connection.commit()
 
-            # Phase 2: disposable/read-optimized mirror. Failure here must not undo
-            # measurements already committed above.
+            # Phase 2: disposable/read-optimized mirror. History above is already
+            # durable; mirror/cleanup failure cannot roll it back.
             if rolling_rows:
                 try:
                     with connection.cursor() as cursor:
                         self._recent_manager.mirror_samples(cursor, rolling_rows)
+                        self._recent_manager.cleanup_with_cursor(cursor)
                     connection.commit()
                 except Exception:
                     connection.rollback()
@@ -135,10 +136,6 @@ VALUES (?, ?, ?, ?, ?, ?)""",
                         "measurement source=%s tersimpan tetapi rolling recent gagal",
                         source_id,
                     )
-            try:
-                self._recent_manager.cleanup()
-            except Exception:
-                pass
             return changed
         except Exception:
             connection.rollback()
