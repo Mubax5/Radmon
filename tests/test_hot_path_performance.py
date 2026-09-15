@@ -151,7 +151,7 @@ def test_remote_live_hot_path_does_not_touch_measurement_when_vrecent_is_fresh()
     assert "measurement" not in connection.cursor_obj.statements[0]
 
 
-def test_central_overview_reads_bounded_recent_table_not_measurement_history() -> None:
+def test_central_overview_reduces_latest_from_bounded_vrecent_not_measurement_history() -> None:
     fresh_at = datetime.now()
 
     class Cursor:
@@ -190,6 +190,6 @@ def test_central_overview_reads_bounded_recent_table_not_measurement_history() -
 
     assert rows[0]["dtom"] == fresh_at
     assert rows[0]["doserate"] == 0.27
-    assert "left join recent" in connection.cursor_obj.sql
+    assert "from vrecent" in connection.cursor_obj.sql
     assert "measurement" not in connection.cursor_obj.sql
-    assert "select max(" not in connection.cursor_obj.sql
+    assert "max(dtom)" in connection.cursor_obj.sql
