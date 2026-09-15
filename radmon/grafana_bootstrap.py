@@ -17,6 +17,7 @@ from .config import Settings
 from .grafana_tv import (
     DASHBOARD_UIDS,
     PAGE_UIDS,
+    PLAYLIST_INTERVAL,
     PLAYLIST_UID,
     build_dashboard_payloads,
     build_playlist_payload,
@@ -179,7 +180,7 @@ class GrafanaBootstrap:
         }
 
     def _provision_via_api(self, base_url: str) -> bool:
-        """Install or repair datasource, TV dashboards, and the 10-second playlist."""
+        """Install or repair datasource, TV dashboards, and the 30-second playlist."""
         base = base_url.rstrip("/")
         datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
         payload = self._datasource_payload()
@@ -453,7 +454,7 @@ class GrafanaBootstrap:
             expected_items = build_playlist_payload()["spec"]["items"]
             return bool(
                 playlist.get("metadata", {}).get("name") == PLAYLIST_UID
-                and spec.get("interval") == "10s"
+                and spec.get("interval") == PLAYLIST_INTERVAL
                 and [item.get("value") for item in items]
                 == [item.get("value") for item in expected_items]
             )

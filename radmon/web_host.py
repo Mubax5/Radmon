@@ -56,21 +56,21 @@ def _is_loopback(request: Request) -> bool:
         return host.lower() == "localhost"
 
 
-def _grafana_headers(request: Request, *, trusted_local: bool) -> dict[str, str]:
-    headers: dict[str, str] = {}
-    for key, value in request.headers.items():
+def _grafana_headers(request: Request, *, trusted_local: bool) -> dict[bytes, bytes]:
+    headers: dict[bytes, bytes] = {}
+    for key, value in request.headers.raw:
         lower = key.lower()
-        if lower in _HOP_BY_HOP or lower == "content-length":
+        name = lower.decode("ascii")
+        if name in _HOP_BY_HOP or name == "content-length":
             continue
-        if not trusted_local and lower in {"authorization", "cookie"}:
+        if not trusted_local and name in {"authorization", "cookie"}:
             continue
-        headers[key] = value
-    if request.headers.get("host"):
-        headers["host"] = request.headers["host"]
-        headers["x-forwarded-host"] = request.headers["host"]
-    headers["x-forwarded-proto"] = request.url.scheme
+        headers[lower] = value
+    if b"host" in headers:
+        headers[b"x-forwarded-host"] = headers[b"host"]
+    headers[b"x-forwarded-proto"] = request.url.scheme.encode("ascii")
     if request.client:
-        headers["x-forwarded-for"] = request.client.host
+        headers[b"x-forwarded-for"] = request.client.host.encode("ascii")
     return headers
 
 

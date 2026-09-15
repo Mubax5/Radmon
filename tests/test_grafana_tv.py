@@ -20,12 +20,12 @@ from radmon.stations import station_catalog
 
 def test_playlist_keeps_three_logical_pages_and_advances_operations_subpage_each_rotation():
     payload = build_playlist_payload()
-    assert PLAYLIST_INTERVAL == "10s"
+    assert PLAYLIST_INTERVAL == "30s"
     assert len(PAGE_UIDS) == 3
     assert OPERATIONS_PAGE_COUNT == 5
     assert len(OPERATIONS_PAGE_UIDS) == 5
     assert payload["metadata"]["name"] == PLAYLIST_UID
-    assert payload["spec"]["interval"] == "10s"
+    assert payload["spec"]["interval"] == "30s"
     values = [item["value"] for item in payload["spec"]["items"]]
     assert len(values) == 15
     for index, operations_uid in enumerate(OPERATIONS_PAGE_UIDS):

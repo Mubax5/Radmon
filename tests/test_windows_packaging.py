@@ -102,6 +102,32 @@ def test_windows_installer_smoke_tests_upgrade_over_running_server():
     assert "RadMon installer upgrade smoke test failed" in workflow
 
 
+def test_windows_installer_upgrade_smoke_waits_for_control_plane_readiness():
+    workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
+    upgrade_smoke = workflow.split("Smoke test installer upgrade over running RadMon", 1)[1]
+
+    assert "http://127.0.0.1:8090/health" in upgrade_smoke
+    assert "Invoke-WebRequest" in upgrade_smoke
+    assert "$response.StatusCode -eq 200" in upgrade_smoke
+    assert '$health.status -eq "ok"' in upgrade_smoke
+    assert "Get-NetTCPConnection" in upgrade_smoke
+    assert "-LocalPort 8090" in upgrade_smoke
+    assert "control plane did not become ready after upgrade" in upgrade_smoke
+
+
+def test_windows_installer_upgrade_readiness_requires_successful_http_200_probe():
+    workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
+    upgrade_smoke = workflow.split("Smoke test installer upgrade over running RadMon", 1)[1]
+    success_predicate = '$response.StatusCode -eq 200 -and $health.status -eq "ok"'
+    predicate_start = upgrade_smoke.index(success_predicate)
+    predicate_end = upgrade_smoke.index("$lastHealthError", predicate_start)
+
+    assert "$healthReady = $false" in upgrade_smoke
+    assert "$healthReady = $true" in upgrade_smoke[predicate_start:predicate_end]
+    assert upgrade_smoke.count("$healthReady = $true") == 1
+    assert "if (-not $healthReady)" in upgrade_smoke
+
+
 def test_windows_installer_release_has_fixed_unversioned_name():
     installer_path = ROOT / "packaging/RadMon.iss"
     assert installer_path.exists(), "Inno Setup installer definition is required"

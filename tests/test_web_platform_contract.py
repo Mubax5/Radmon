@@ -64,6 +64,33 @@ def test_remote_grafana_is_proxied_through_radmon_without_client_credentials(tmp
     assert "cookie" not in forwarded.headers
 
 
+def test_grafana_proxy_preserves_non_ascii_header_bytes(tmp_path: Path) -> None:
+    seen: list[httpx.Request] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text="grafana-ok")
+
+    app = FastAPI()
+    attach_web_routes(
+        app,
+        settings=Settings(grafana_fallback_port=3300),
+        web_dist=tmp_path / "missing",
+        grafana_transport=httpx.MockTransport(upstream),
+    )
+
+    response = TestClient(app).post(
+        "/api/ds/query",
+        content=b"{}",
+        headers=[(b"x-grafana-context", b"dose \xb7 rate")],
+    )
+
+    assert response.status_code == 200
+    assert len(seen) == 1
+    forwarded = dict(seen[0].headers.raw)[b"x-grafana-context"]
+    assert b"\xb7" in forwarded
+
+
 def test_remote_clients_cannot_open_grafana_login_through_gateway(tmp_path: Path) -> None:
     calls = 0
 

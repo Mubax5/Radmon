@@ -84,7 +84,7 @@ jobs:
               assert dashboard['refresh'] == '2s'
               assert max(panel['gridPos']['y'] + panel['gridPos']['h'] for panel in dashboard['panels']) <= 24
           playlist = build_playlist_payload()
-          assert playlist['spec']['interval'] == '10s'
+          assert playlist['spec']['interval'] == '30s'
           assert len(playlist['spec']['items']) == 15
           for path in Path('grafana').rglob('*.yaml'):
               yaml.safe_load(path.read_text())

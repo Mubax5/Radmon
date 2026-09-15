@@ -185,6 +185,49 @@ jobs:
           }
           Get-ScheduledTask -TaskName "RadMon Updater" -ErrorAction Stop | Out-Null
 
+           $readinessDeadline = [DateTime]::UtcNow.AddSeconds(45)
+           $health = $null
+           $lastHealthError = $null
+           $healthReady = $false
+           do {
+             try {
+               $response = Invoke-WebRequest -Uri "http://127.0.0.1:8090/health" -TimeoutSec 2 -UseBasicParsing
+               $health = $response.Content | ConvertFrom-Json
+               if ($response.StatusCode -eq 200 -and $health.status -eq "ok") {
+                 $healthReady = $true
+                 break
+               }
+              $lastHealthError = "HTTP $($response.StatusCode), health status '$($health.status)'"
+            }
+            catch {
+              $lastHealthError = $_.Exception.Message
+            }
+            if ([DateTime]::UtcNow -lt $readinessDeadline) {
+              Start-Sleep -Milliseconds 500
+            }
+          } while ([DateTime]::UtcNow -lt $readinessDeadline)
+
+           if (-not $healthReady) {
+            $taskInfo = Get-ScheduledTaskInfo -TaskName "RadMon Server" -ErrorAction SilentlyContinue
+            $taskSummary = if ($null -eq $taskInfo) {
+              "unavailable"
+            } else {
+              "state=$($taskAfterUpgrade.State); lastTaskResult=$($taskInfo.LastTaskResult); lastRunTime=$($taskInfo.LastRunTime)"
+            }
+            $processIds = @(
+              Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object {
+                  $_.ExecutablePath -and ([System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -eq [System.IO.Path]::GetFullPath($installedExe))
+                } |
+                ForEach-Object { $_.ProcessId }
+            ) -join ", "
+            $listeners = @(
+              Get-NetTCPConnection -State Listen -LocalPort 8090 -ErrorAction SilentlyContinue |
+                ForEach-Object { "pid=$($_.OwningProcess); local=$($_.LocalAddress):$($_.LocalPort)" }
+            ) -join ", "
+            throw "RadMon control plane did not become ready after upgrade within 45 seconds. Last health result: $lastHealthError. Task: $taskSummary. RadMon PIDs: $processIds. Port 8090 listeners: $listeners"
+          }
+
       - name: Write installer checksum
         shell: pwsh
         run: |

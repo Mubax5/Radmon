@@ -10,7 +10,7 @@ from .stations import station_catalog
 
 DATASOURCE_UID = "ipradmon-mysql"
 PLAYLIST_UID = "radmon-tv"
-PLAYLIST_INTERVAL = "10s"
+PLAYLIST_INTERVAL = "30s"
 OPERATIONS_PAGE_COUNT = 5
 PAGE_UIDS = (
     "radmon-tv-page-1-realtime",

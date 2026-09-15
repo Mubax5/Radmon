@@ -62,7 +62,7 @@ def test_api_provisioner_upserts_shared_pages_and_five_operations_variants(tmp_p
     assert len(playlist_posts) == 1
     playlist = playlist_posts[0][2]
     assert playlist["metadata"]["name"] == PLAYLIST_UID
-    assert playlist["spec"]["interval"] == "10s"
+    assert playlist["spec"]["interval"] == "30s"
     values = [item["value"] for item in playlist["spec"]["items"]]
     assert len(values) == 15
     for cycle, operations_uid in enumerate(OPERATIONS_PAGE_UIDS):
