@@ -96,9 +96,11 @@ def test_docker_compose_bootstrap_has_hard_timeout(tmp_path, monkeypatch):
     grafana_dir.mkdir()
     (grafana_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     captured: dict[str, object] = {}
+
     def fake_run(command, **kwargs):
         captured.update(kwargs)
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
     monkeypatch.setattr(subprocess, "run", fake_run)
     bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
     bootstrap._run_compose(env={})
@@ -109,8 +111,10 @@ def test_docker_compose_timeout_becomes_actionable_runtime_error(tmp_path, monke
     grafana_dir = tmp_path / "grafana"
     grafana_dir.mkdir()
     (grafana_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+
     def fake_run(command, **kwargs):
         raise subprocess.TimeoutExpired(command, timeout=kwargs.get("timeout", 0))
+
     monkeypatch.setattr(subprocess, "run", fake_run)
     bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
     with pytest.raises(RuntimeError, match="timeout"):
@@ -121,8 +125,10 @@ def test_bootstrap_reuses_ready_fallback_before_starting_services():
     settings = replace(Settings(), grafana_url="http://localhost:3000", grafana_fallback_port=3300)
     compose_calls: list[dict] = []
     native_calls: list[dict] = []
+
     def probe(base_url: str) -> bool:
         return base_url == "http://localhost:3300"
+
     bootstrap = GrafanaBootstrap(
         settings,
         dashboard_probe=probe,
@@ -174,12 +180,10 @@ def test_grafana_tv_uses_three_logical_pages_with_five_operations_variants():
     assert [len(group) for group in grouped] == [3, 3, 3, 3, 3]
     assert len({station.serid for group in grouped for station in group}) == 15
     payload = json.dumps(dashboards, ensure_ascii=False)
-    for relation in ("device", "measurement", "vrecent", "alarm"):
+    for relation in ("vrecent", "alarm"):
         assert relation in payload
-    assert "radmon_runtime_status" in payload
-    # The runtime-status table is the only intentional central radmon_* SQL
-    # relation. Keep rejecting accidental reintroduction of older radmon_* views.
-    assert "radmon_" not in payload.replace("radmon_runtime_status", "")
+    assert "measurement" not in payload
+    assert "radmon_runtime_status" not in payload
     assert "REAL TIME DOSE RATE MONITORING SYSTEM" in payload
     assert "µSv/h" in payload
     assert "Dose Rate · Gedung" in payload
@@ -209,7 +213,9 @@ def test_trend_page_auto_scales_above_one_microsievert_and_keeps_large_summaries
         assert defaults["min"] == 0
         assert "max" not in defaults
         assert defaults["unit"] == "suffix: µSv/h"
-        assert "FROM measurement" in panel["targets"][0]["rawSql"]
+        sql = panel["targets"][0]["rawSql"]
+        assert "FROM vrecent" in sql
+        assert "FROM measurement" not in sql
     summary_titles = {"Dose Rate Tertinggi Saat Ini", "Rata-rata Saat Ini", "Detector Online", "Detector Offline"}
     summary_panels = [panel for panel in dashboard["panels"] if panel.get("title") in summary_titles]
     assert len(summary_panels) == 4
