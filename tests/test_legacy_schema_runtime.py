@@ -65,7 +65,7 @@ class FakeConnection:
         self.closed = True
 
 
-def test_measurement_write_uses_only_user_schema_and_updates_recent():
+def test_measurement_write_preserves_history_then_mirrors_rolling_recent():
     connection = FakeConnection()
     repo = MariaDBRepository(Settings(), connection_factory=lambda: connection)
     sample = Measurement(5201, datetime(2026, 9, 7, 10, 0, 2), 0.18, 2, 0)
@@ -75,7 +75,7 @@ def test_measurement_write_uses_only_user_schema_and_updates_recent():
     sql = "\n".join(statement for statement, _ in connection.executed)
     assert "INSERT INTO rawdata" in sql
     assert "INSERT INTO measurement" in sql
-    assert "INSERT INTO recent" in sql
+    assert "INSERT IGNORE INTO recent" in sql
     assert "radmon_sync_queue" not in sql
     assert "radmon_alarm_event" not in sql
 
@@ -85,7 +85,9 @@ def test_measurement_write_uses_only_user_schema_and_updates_recent():
     assert "dose" in measurement_sql
     assert measurement_params[:3] == (5201, datetime(2026, 9, 7, 10, 0, 2), 0.18)
     assert measurement_params[3] == pytest.approx((0.12 + 0.18) / 2 * 2 / 3600)
-    assert connection.commits == 1
+    # History is committed before the disposable rolling mirror. Cleanup may add
+    # a third commit on first use, but cannot undo the first one.
+    assert connection.commits >= 2
 
 
 def test_alarm_history_and_writes_use_existing_alarm_table_only():
