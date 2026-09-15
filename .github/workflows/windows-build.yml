@@ -133,7 +133,11 @@ jobs:
           if (-not (Test-Path $mariadbPath)) {
             throw "Chocolatey did not install mariadb.exe"
           }
-          $grafana = Get-ChildItem (Join-Path $env:ChocolateyInstall "lib\grafana\tools") -Recurse -Filter "grafana-server.exe" -ErrorAction SilentlyContinue |
+          $chocolateyRoot = [Environment]::GetEnvironmentVariable("ChocolateyInstall", "Machine")
+          if (-not $chocolateyRoot) {
+            $chocolateyRoot = Join-Path $env:ProgramData "chocolatey"
+          }
+          $grafana = Get-ChildItem (Join-Path $chocolateyRoot "lib\grafana\tools") -Recurse -Filter "grafana-server.exe" -ErrorAction SilentlyContinue |
             Select-Object -First 1
           if ($null -eq $grafana) {
             throw "Chocolatey did not install grafana-server.exe"

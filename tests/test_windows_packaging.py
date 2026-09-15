@@ -121,6 +121,7 @@ def test_windows_installer_control_plane_smoke_has_isolated_dependencies():
     assert "Start native installer control-plane smoke dependencies" in workflow
     assert "choco install innosetup mariadb grafana" in workflow
     assert "Chocolatey did not install mariadb.exe" in workflow
+    assert 'GetEnvironmentVariable("ChocolateyInstall", "Machine")' in workflow
     assert "RADMON_DB_HOST=127.0.0.1" in workflow
     assert "RADMON_GRAFANA_BIN=$grafanaExe" in workflow
 
