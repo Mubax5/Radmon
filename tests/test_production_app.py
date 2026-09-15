@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from radmon.paths import ApplicationPaths
-from radmon.production_app import run_production
+from radmon.config import Settings
+from radmon.production_app import _default_grafana_startup, run_production
 
 
 class FakeLock:
@@ -44,6 +45,24 @@ def _paths(tmp_path: Path) -> ApplicationPaths:
         tmp_path / "app" / "assets",
         tmp_path / "app" / "grafana",
     )
+
+
+def test_default_grafana_startup_uses_packaged_app_directory(tmp_path, monkeypatch):
+    paths = _paths(tmp_path)
+    seen = {}
+
+    class FakeGrafanaBootstrap:
+        def __init__(self, settings, *, project_root):
+            seen["settings"] = settings
+            seen["project_root"] = project_root
+
+        def ensure(self):
+            return "http://grafana.example/"
+
+    monkeypatch.setattr("radmon.production_app.PersistentGrafanaBootstrap", FakeGrafanaBootstrap)
+
+    assert _default_grafana_startup(Settings(), paths) == "http://grafana.example/"
+    assert seen == {"settings": Settings(), "project_root": paths.app_dir}
 
 
 def test_supervisor_stops_central_when_desktop_exits(tmp_path):

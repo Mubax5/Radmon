@@ -29,7 +29,7 @@ MONITORING_URL = "http://127.0.0.1:8090/"
 
 
 def _default_grafana_startup(settings: Settings, paths: ApplicationPaths) -> str:
-    return PersistentGrafanaBootstrap(settings, project_root=paths.install_root).ensure()
+    return PersistentGrafanaBootstrap(settings, project_root=paths.app_dir).ensure()
 
 
 def _migrate_legacy_env(paths: ApplicationPaths) -> bool:

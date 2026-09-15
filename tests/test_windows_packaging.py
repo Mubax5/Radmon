@@ -115,6 +115,15 @@ def test_windows_installer_upgrade_smoke_waits_for_control_plane_readiness():
     assert "control plane did not become ready after upgrade" in upgrade_smoke
 
 
+def test_windows_installer_control_plane_smoke_has_isolated_dependencies():
+    workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
+
+    assert "Start installer control-plane smoke dependencies" in workflow
+    assert "radmon-ci-mariadb" in workflow
+    assert "RADMON_DB_HOST=host.docker.internal" in workflow
+    assert "RADMON_GRAFANA_DOCKER_FALLBACK=1" in workflow
+
+
 def test_windows_installer_upgrade_readiness_requires_successful_http_200_probe():
     workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
     upgrade_smoke = workflow.split("Smoke test installer upgrade over running RadMon", 1)[1]
