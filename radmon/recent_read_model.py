@@ -166,7 +166,7 @@ SELECT
     WHEN r.doserate >= d.alarmlevel THEN 'ALARM'
     WHEN r.doserate >= d.warnlevel THEN 'ALERT'
     ELSE 'NORMAL'
-  END AS underlying_status,
+  END COLLATE utf8mb4_uca1400_ai_ci AS underlying_status,
   CASE
     WHEN r.dtom IS NULL OR r.doserate IS NULL THEN 'OFFLINE'
     WHEN TIMESTAMPDIFF(
@@ -178,7 +178,7 @@ SELECT
     WHEN r.doserate >= d.alarmlevel THEN 'ALARM'
     WHEN r.doserate >= d.warnlevel THEN 'ALERT'
     ELSE 'NORMAL'
-  END AS status,
+  END COLLATE utf8mb4_uca1400_ai_ci AS status,
   COALESCE(rs.suppressed, 0) AS suppressed,
   COALESCE(rs.trigger_count, 0) AS trigger_count,
   COALESCE(rs.retrigger_locked, 0) AS retrigger_locked,

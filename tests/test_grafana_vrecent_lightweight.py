@@ -105,6 +105,25 @@ def test_building_trends_use_lightweight_aggregation_over_recent():
         assert "LIMIT" in sql
 
 
+def test_status_comparisons_carry_explicit_collation():
+    """Grafana opens utf8mb4_unicode_ci sessions while vrecent.status is
+    utf8mb4_uca1400_ai_ci; bare literals raise Error 1267/1271 (No Data)."""
+    compared = [
+        sql
+        for sql in _all_raw_sql()
+        if "s.status" in sql and ("FIELD(" in sql or "<>" in sql or " = '" in sql)
+    ]
+    assert compared, "expected status-comparing panels"
+    for sql in compared:
+        assert "COLLATE utf8mb4_uca1400_ai_ci" in sql
+
+
+def test_vrecent_status_columns_pin_collation():
+    source = inspect.getsource(RollingRecentManager._create_view)
+    assert source.count("END COLLATE utf8mb4_uca1400_ai_ci AS status") == 1
+    assert source.count("END COLLATE utf8mb4_uca1400_ai_ci AS underlying_status") == 1
+
+
 def test_vrecent_view_exposes_dashboard_contract_columns():
     source = inspect.getsource(RollingRecentManager._create_view)
     for column in (

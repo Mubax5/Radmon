@@ -9,6 +9,11 @@ from .models import StationConfig
 from .stations import station_catalog
 
 DATASOURCE_UID = "ipradmon-mysql"
+# vrecent.status is utf8mb4_uca1400_ai_ci while Grafana's MySQL plugin opens
+# utf8mb4_unicode_ci sessions; every string literal compared against s.status
+# must carry this explicit collation or MariaDB raises Error 1267/1271
+# ("Illegal mix of collations") and the panel fails instead of rendering.
+STATUS_COLLATION = "COLLATE utf8mb4_uca1400_ai_ci"
 PLAYLIST_UID = "radmon-tv"
 PLAYLIST_INTERVAL = "30s"
 OPERATIONS_PAGE_COUNT = 5
@@ -287,7 +292,7 @@ SELECT
   COALESCE(s.suppression_pic, '') AS `PIC`,
   COALESCE(s.suppression_reason, '') AS `Reason`
 FROM ({relation}) s
-ORDER BY FIELD(s.status, 'OFFLINE', 'SUPPRESSED', 'ALARM', 'ALERT', 'NORMAL'), s.serid
+ORDER BY FIELD(s.status, 'OFFLINE' {STATUS_COLLATION}, 'SUPPRESSED' {STATUS_COLLATION}, 'ALARM' {STATUS_COLLATION}, 'ALERT' {STATUS_COLLATION}, 'NORMAL' {STATUS_COLLATION}), s.serid
 """)]
     table["fieldConfig"] = {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": [{"matcher": {"id": "byName", "options": "Dose Rate"}, "properties": [{"id": "unit", "value": "suffix: µSv/h"}, {"id": "decimals", "value": 3}]}, {"matcher": {"id": "byName", "options": "Status"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"NORMAL": {"color": "green", "text": "NORMAL"}, "ALERT": {"color": "orange", "text": "ALERT"}, "ALARM": {"color": "red", "text": "ALARM"}, "OFFLINE": {"color": "purple", "text": "OFFLINE"}, "SUPPRESSED": {"color": "blue", "text": "SUPPRESSED"}}}]}, {"id": "custom.cellOptions", "value": {"type": "color-background"}}]}]}
     table["options"] = {"cellHeight": "sm", "enablePagination": False, "showHeader": True}
@@ -356,8 +361,8 @@ def build_page_two() -> dict[str, Any]:
     summaries = [
         ("Dose Rate Tertinggi Saat Ini", f"SELECT MAX(m.doserate) AS value FROM ({latest}) m", 0, "red", 2),
         ("Rata-rata Saat Ini", f"SELECT AVG(m.doserate) AS value FROM ({latest}) m", 6, "blue", 2),
-        ("Detector Online", f"SELECT SUM(CASE WHEN s.status <> 'OFFLINE' THEN 1 ELSE 0 END) AS value FROM ({_status_relation()}) s", 12, "green", 0),
-        ("Detector Offline", f"SELECT SUM(CASE WHEN s.status = 'OFFLINE' THEN 1 ELSE 0 END) AS value FROM ({_status_relation()}) s", 18, "purple", 0),
+        ("Detector Online", f"SELECT SUM(CASE WHEN s.status <> 'OFFLINE' {STATUS_COLLATION} THEN 1 ELSE 0 END) AS value FROM ({_status_relation()}) s", 12, "green", 0),
+        ("Detector Offline", f"SELECT SUM(CASE WHEN s.status = 'OFFLINE' {STATUS_COLLATION} THEN 1 ELSE 0 END) AS value FROM ({_status_relation()}) s", 18, "purple", 0),
     ]
     for title, sql, x, color, decimals in summaries:
         dashboard["panels"].append(_latest_scalar_stat(
@@ -383,7 +388,7 @@ def _build_page_three_base(page_number: int = 1) -> dict[str, Any]:
 SELECT s.status AS metric, COUNT(*) AS value
 FROM ({status_relation}) s
 GROUP BY s.status
-ORDER BY FIELD(s.status, 'ALARM', 'ALERT', 'OFFLINE', 'NORMAL')
+ORDER BY FIELD(s.status, 'ALARM' {STATUS_COLLATION}, 'ALERT' {STATUS_COLLATION}, 'OFFLINE' {STATUS_COLLATION}, 'NORMAL' {STATUS_COLLATION})
 """)]
     pie["fieldConfig"] = {"defaults": {"unit": "none", "decimals": 0}, "overrides": []}
     pie["options"] = {"displayLabels": ["name", "value"], "legend": {"displayMode": "table", "placement": "bottom", "showLegend": True, "values": ["value"]}, "pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": True}, "tooltip": {"mode": "single", "sort": "none"}}
@@ -406,7 +411,7 @@ ORDER BY FIELD(s.status, 'ALARM', 'ALERT', 'OFFLINE', 'NORMAL')
         dashboard["panels"].append(_latest_scalar_stat(
             panel_id,
             status,
-            f"SELECT COUNT(*) AS value FROM ({status_relation}) s WHERE s.status = '{status}'",
+            f"SELECT COUNT(*) AS value FROM ({status_relation}) s WHERE s.status = '{status}' {STATUS_COLLATION}",
             x, 11, 6, 4,
             color=color, decimals=0, value_size=42,
         ))

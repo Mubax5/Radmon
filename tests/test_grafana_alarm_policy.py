@@ -17,7 +17,7 @@ def test_operation_status_consumes_runtime_policy_projected_by_vrecent():
     assert "retrigger_locked" in sql
     assert "suppression_expires_at" in sql
     assert "doserate" in sql.lower()
-    assert "FIELD(s.status, 'OFFLINE', 'SUPPRESSED', 'ALARM', 'ALERT', 'NORMAL')" in sql
+    assert "FIELD(s.status, 'OFFLINE' COLLATE utf8mb4_uca1400_ai_ci, 'SUPPRESSED' COLLATE utf8mb4_uca1400_ai_ci, 'ALARM' COLLATE utf8mb4_uca1400_ai_ci, 'ALERT' COLLATE utf8mb4_uca1400_ai_ci, 'NORMAL' COLLATE utf8mb4_uca1400_ai_ci)" in sql
 
     view_source = inspect.getsource(RollingRecentManager._create_view)
     assert "radmon_runtime_status" in view_source
