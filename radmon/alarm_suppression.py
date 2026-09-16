@@ -158,6 +158,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 started_by=identity.username,
             )
             tx.active_suppression = suppression
+            if event_to_silence:
+                self.store.bind_policy_event_to_suppression(
+                    event_to_silence, suppression.suppression_id, connection=tx.connection,
+                )
+                self.store.bind_source_silences_to_suppression(
+                    event_to_silence, suppression.suppression_id, connection=tx.connection,
+                )
 
         # Source write-through is best-effort here. The central suppression is
         # canonical and must remain active even when a source host is down.
@@ -196,26 +203,83 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         return result
 
     def list(self, active_only: bool = False, limit: int = 500) -> list[dict]:
-        return [
-            asdict(item)
-            for item in self.store.list_suppressions(
-                active_only=bool(active_only), limit=max(1, int(limit))
-            )
-        ]
+        result = []
+        for item in self.store.list_suppressions(active_only=bool(active_only), limit=max(1, int(limit))):
+            row = asdict(item)
+            row["source_silence_state"] = self.store.suppression_source_silence_state(item.suppression_id)
+            result.append(row)
+        return result
 
     def end(self, identity, pin: str, serid: int, *, reason: str = "MANUAL") -> dict:
         self._authorize(identity, pin)
         active = self.store.active_suppression(int(serid))
         if active is None:
             raise RuntimeError("suppression detector tidak aktif")
-        ended = self.store.end_suppression(active.suppression_id, self.now(), reason)
-        result = asdict(ended) if ended is not None else asdict(active)
-        self.audit.record(
-            "ALARM_SUPPRESSION_END",
-            identity,
-            "station",
-            str(int(serid)),
-            after=result,
-            source="central",
+        return self._end_suppression(
+            active.suppression_id, at=self.now(), reason=reason, ended_by=identity.username, identity=identity,
         )
-        return result
+
+    def _end_suppression(self, suppression_id: str, *, at: datetime, reason: str,
+                         ended_by: str, identity) -> dict:
+        """End once and atomically retain the lifecycle and in-flight uncertainty audit."""
+        db = self.security._connection()
+        try:
+            self.store._begin(db)
+            current = self.store.get_suppression(str(suppression_id), connection=db)
+            if current is None:
+                raise RuntimeError("suppression tidak ditemukan")
+            ended, changed = self.store.end_suppression(
+                str(suppression_id), at, reason, ended_by=ended_by,
+                cancel_source_silences=True, connection=db,
+            )
+            result = asdict(ended) if ended is not None else asdict(current)
+            states = {
+                str(row[0]) for row in db.execute(
+                    "SELECT source_silence_state FROM remote_alarm_state WHERE suppression_id=?",
+                    (str(suppression_id),),
+                ).fetchall() if row[0]
+            }
+            result["source_silence_state"] = next(
+                (state for state in ("UNCERTAIN", "FAILED", "RECONCILING", "PENDING", "DISPATCHING", "CANCELLED", "RECONCILED", "CONFIRMED") if state in states),
+                "NONE",
+            )
+            if changed:
+                self.audit.record(
+                    "ALARM_SUPPRESSION_END", identity, "station", str(current.serid),
+                    before=asdict(current), after=result, source="central", connection=db,
+                )
+                if "UNCERTAIN" in states:
+                    self.audit.record(
+                        "SUPPRESSION_SOURCE_SILENCE_UNCERTAIN", identity, "station", str(current.serid),
+                        success=False,
+                        reason="remote silence began before suppression ended; outcome cannot be proven",
+                        source="central", connection=db,
+                    )
+            db.commit()
+            return result
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    def cancel(self, identity, pin: str, suppression_id: str, reason: str) -> dict:
+        self._authorize(identity, pin)
+        reason_text = str(reason or "").strip()
+        if not reason_text:
+            raise ValueError("Alasan pembatalan suppression wajib diisi")
+        return self._end_suppression(
+            str(suppression_id), at=self.now(), reason=f"CANCELLED: {reason_text}",
+            ended_by=identity.username, identity=identity,
+        )
+
+    def expire_due(self) -> int:
+        now = self.now()
+        expired = 0
+        for item in self.store.due_suppressions(now):
+            result = self._end_suppression(
+                item.suppression_id, at=now, reason="EXPIRED", ended_by="system", identity=None,
+            )
+            if result.get("ended_reason") == "EXPIRED":
+                expired += 1
+        return expired

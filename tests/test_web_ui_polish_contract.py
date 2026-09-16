@@ -62,3 +62,32 @@ def test_mobile_dialogs_are_marked_for_sheet_treatment():
     users = read("pages/UsersPage.tsx")
     assert actions.count('className="radmon-dialog mobile-sheet-dialog"') >= 2
     assert 'className="radmon-dialog mobile-sheet-dialog"' in users
+
+
+def test_select_portals_have_a_layer_contract_above_dialog_and_navigation():
+    css = read("radmon.css") + "\n" + read("radmon-overlays.css")
+    assert "--radmon-layer-select: 100" in css
+    assert "--radmon-layer-toast: 110" in css
+    assert "[data-kumo-select-positioner]" in css
+    assert "z-index: var(--radmon-layer-select) !important" in css
+    assert ".mobile-sheet-dialog" not in css or "overflow: visible" not in css
+    for path in ("pages/StationsPage.tsx", "pages/HistoryPage.tsx", "pages/ArchivesPage.tsx", "Actions.tsx"):
+        assert "<Select" in read(path)
+
+
+def test_alarm_operations_offer_preset_duration_and_active_cancellation_ui():
+    actions = read("Actions.tsx")
+    assert 'label="Durasi suppression"' in actions
+    assert "15 menit" in actions and "1 jam" in actions
+    assert "/api/v1/control/suppressions/" in actions
+    assert "/cancel" in actions
+    assert "Suppression aktif" in actions
+    assert "/api/v1/control/suppressions?active_only=true" in read("pages/AlarmsPage.tsx")
+    assert "source_silence_state" in actions
+
+
+def test_alarm_events_remain_available_when_suppression_fetch_fails():
+    alarms = read("pages/AlarmsPage.tsx")
+    assert "Promise.allSettled" in alarms
+    assert "suppressionError" in alarms
+    assert "Muat ulang suppression" in alarms

@@ -81,6 +81,7 @@ class LanRuntime:
             batch_size=self.batch_size if batch_size is None else max(1, int(batch_size)),
         )
         aggregator.alarm_policy = getattr(self.services, "alarm_policy", None)
+        aggregator.alarm_suppression = getattr(self.services, "alarm_suppression", None)
         return aggregator
 
     def _publish_web_event(self, event: dict[str, Any]) -> None:

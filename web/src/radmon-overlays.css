@@ -3,7 +3,7 @@
 /* Kumo 2.13 renders dialog portal descendants without an explicit stacking level.
    Keep backdrop above application chrome and the popup above its backdrop. */
 body .fixed.inset-0.bg-kumo-recessed.opacity-80[role="presentation"] {
-  z-index: 80 !important;
+  z-index: var(--radmon-layer-backdrop) !important;
 }
 
 /* Kumo 2.13.2 Dialog popup uses this fixed centered geometry. The role selector
@@ -12,10 +12,25 @@ body .fixed.inset-0.bg-kumo-recessed.opacity-80[role="presentation"] {
 body [role="dialog"],
 body .radmon-dialog,
 body .fixed.top-1\/2.left-1\/2.max-w-lg {
-  z-index: 90 !important;
+  z-index: var(--radmon-layer-dialog) !important;
   max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   overflow-y: auto;
   overscroll-behavior-y: contain;
+}
+
+/* Select menus remain in Kumo's body portal so a mobile sheet cannot clip them.
+   This applies the same stacking contract to filter and dialog selects. */
+body [data-kumo-select-positioner],
+body [data-slot="select-positioner"],
+body .kumo-select-positioner,
+body [role="listbox"] {
+  z-index: var(--radmon-layer-select) !important;
+}
+
+body [data-kumo-toast-viewport],
+body [data-slot="toast-viewport"],
+body .kumo-toast-viewport {
+  z-index: var(--radmon-layer-toast) !important;
 }
 
 /* Mobile is an app shell: content owns the scrolling region and bottom navigation

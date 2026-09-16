@@ -36,6 +36,11 @@ class SuppressionRequest(BaseModel):
     auto_resume_on_normal: bool = True
 
 
+class SuppressionCancelRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+    reason: str = Field(min_length=1, max_length=1000)
+
+
 class PolicyResponseRequest(BaseModel):
     pin: str = Field(min_length=4, max_length=8)
     action: str = Field(min_length=1, max_length=128)
@@ -171,10 +176,10 @@ def attach_secure_routes(
             raise HTTPException(status_code=code, detail=str(exc)) from exc
 
     @app.get("/api/v1/control/suppressions")
-    def suppressions(identity: UserIdentity = Depends(require_operator)):
+    def suppressions(active_only: bool = False, identity: UserIdentity = Depends(require_operator)):
         if alarm_suppression is None:
             raise HTTPException(status_code=404, detail="alarm suppression unavailable")
-        return alarm_suppression.list(active_only=False)
+        return alarm_suppression.list(active_only=active_only)
 
     @app.post("/api/v1/control/suppressions/{serid}")
     def start_suppression(
@@ -198,6 +203,24 @@ def attach_secure_routes(
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/v1/control/suppressions/{suppression_id}/cancel")
+    def cancel_suppression(
+        suppression_id: str,
+        payload: SuppressionCancelRequest,
+        identity: UserIdentity = Depends(require_operator),
+    ):
+        if alarm_suppression is None:
+            raise HTTPException(status_code=404, detail="alarm suppression unavailable")
+        try:
+            return alarm_suppression.cancel(identity, payload.pin, suppression_id, payload.reason)
+        except SecurityError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            code = 404 if "tidak ditemukan" in str(exc).lower() else 409
+            raise HTTPException(status_code=code, detail=str(exc)) from exc
 
     @app.get("/api/v1/control/sources/health")
     def sources_health(identity: UserIdentity = Depends(current_user)):

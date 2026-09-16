@@ -2,14 +2,10 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timedelta
-import threading
 from typing import Any, Callable
 
 from .audit import AuditTrail
 from .security import SecurityStore, UserIdentity
-
-
-_REMOTE_ALARM_SCHEMA_LOCK = threading.Lock()
 
 
 class RemoteAlarmMirror:
@@ -49,7 +45,7 @@ class RemoteAlarmMirror:
                 already_notified = historical or not bool(is_active) or bool(row.get('ack')) or (ack_iso is not None)
                 notification_sent_at = ack_iso or (event_iso if already_notified else None)
                 before_changes = connection.total_changes
-                connection.execute('\nINSERT INTO remote_alarm_state\n  (source_id, serid, remote_serid, event_time, level, measured_value,\n   threshold, hit_count, acknowledged_at, pic, action, note,\n   notification_sent_at, is_active)\nVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\nON CONFLICT(source_id, serid, event_time) DO UPDATE SET\n  remote_serid = excluded.remote_serid,\n  level = excluded.level,\n  measured_value = COALESCE(excluded.measured_value, measured_value),\n  threshold = COALESCE(excluded.threshold, threshold),\n  hit_count = COALESCE(excluded.hit_count, hit_count),\n  is_active = excluded.is_active,\n  acknowledged_at = CASE\n    WHEN excluded.is_active = 1 THEN NULL\n    ELSE COALESCE(excluded.acknowledged_at, acknowledged_at)\n  END,\n  pic = COALESCE(excluded.pic, pic),\n  note = COALESCE(excluded.note, note),\n  notification_sent_at = COALESCE(notification_sent_at, excluded.notification_sent_at)\n', (source_id, serid, remote_serid, event_iso, self._level(row), row.get('mvalue'), row.get('thvalue'), row.get('nhit'), ack_iso, row.get('pic'), None, row.get('note'), notification_sent_at, is_active))
+                connection.execute('\nINSERT INTO remote_alarm_state\n  (source_id, serid, remote_serid, event_time, level, measured_value,\n   threshold, hit_count, acknowledged_at, pic, action, note,\n   notification_sent_at, is_active, source_observation_version)\nVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)\nON CONFLICT(source_id, serid, event_time) DO UPDATE SET\n  remote_serid = excluded.remote_serid,\n  level = excluded.level,\n  measured_value = COALESCE(excluded.measured_value, measured_value),\n  threshold = COALESCE(excluded.threshold, threshold),\n  hit_count = COALESCE(excluded.hit_count, hit_count),\n  is_active = excluded.is_active,\n  acknowledged_at = CASE\n    WHEN excluded.is_active = 1 THEN NULL\n    ELSE COALESCE(excluded.acknowledged_at, acknowledged_at)\n  END,\n  pic = COALESCE(excluded.pic, pic),\n  note = COALESCE(excluded.note, note),\n  notification_sent_at = COALESCE(notification_sent_at, excluded.notification_sent_at),\n  source_observation_version = COALESCE(source_observation_version, 0) + 1\n', (source_id, serid, remote_serid, event_iso, self._level(row), row.get('mvalue'), row.get('thvalue'), row.get('nhit'), ack_iso, row.get('pic'), None, row.get('note'), notification_sent_at, is_active))
                 if connection.total_changes > before_changes:
                     changed += 1
         return changed
@@ -99,17 +95,8 @@ WHERE source_id = ? AND serid = ? AND event_time = ?
             )
 
     def _ensure_active_schema(self) -> None:
-        if getattr(self, '_active_schema_ready', False):
-            return
-        with _REMOTE_ALARM_SCHEMA_LOCK:
-            if getattr(self, '_active_schema_ready', False):
-                return
-            with self.store._connection() as connection:
-                columns = {str(row[1]) for row in connection.execute('PRAGMA table_info(remote_alarm_state)').fetchall()}
-                if 'is_active' not in columns:
-                    connection.execute('ALTER TABLE remote_alarm_state ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1')
-                connection.execute('UPDATE remote_alarm_state SET is_active = 0 WHERE acknowledged_at IS NOT NULL')
-            self._active_schema_ready = True
+        # SecurityStore applies this additive schema during startup.
+        return
 
     def reconcile_source_active_keys(self, source_id: str, active_keys: set[tuple[int, datetime]]) -> list[tuple[int, datetime]]:
         self._ensure_active_schema()
@@ -121,7 +108,7 @@ WHERE source_id = ? AND serid = ? AND event_time = ?
                 key = (int(serid), str(event_text))
                 if key in normalized:
                     continue
-                cursor = connection.execute('\nUPDATE remote_alarm_state\nSET is_active = 0\nWHERE source_id = ? AND serid = ? AND event_time = ? AND is_active = 1\n', (str(source_id), int(serid), str(event_text)))
+                cursor = connection.execute('\nUPDATE remote_alarm_state\nSET is_active = 0, source_observation_version = COALESCE(source_observation_version, 0) + 1\nWHERE source_id = ? AND serid = ? AND event_time = ? AND is_active = 1\n', (str(source_id), int(serid), str(event_text)))
                 if cursor.rowcount == 1:
                     handled.append((int(serid), datetime.fromisoformat(str(event_text))))
         return handled
@@ -225,32 +212,64 @@ class AlarmControlService:
         at = self.now()
         with self.security._connection() as db:
             rows = db.execute(
-                """SELECT source_id, serid, remote_serid, event_time
+                """SELECT source_id, serid, remote_serid, event_time, suppression_id
                    FROM remote_alarm_state
                    WHERE policy_event_id=? ORDER BY event_time""",
                 (str(event_id),),
             ).fetchall()
+        if event.source_id and not rows:
+            reason_text = "tidak ada baris sumber yang cocok untuk event policy"
+            self.audit.record(
+                "ALARM_POLICY_SOURCE_RESPONSE", identity, "alarm", str(event_id),
+                success=False, reason=reason_text, source=event.source_id,
+            )
+            raise RuntimeError(reason_text)
+        failures = []
+        skipped = False
         for row in rows:
             source_id = str(row[0])
             central_serid = int(row[1])
             remote_serid = int(row[2]) if row[2] is not None else central_serid
             event_time = datetime.fromisoformat(str(row[3]))
-            try:
-                if not self.silence_source_row(
-                    source_id, remote_serid, event_time,
-                    action=action_text, pic=pic_text, reason=reason_text,
-                ):
-                    raise RuntimeError("source menolak alarm response")
-                store.mark_source_silence_result(source_id, central_serid, event_time, state="CONFIRMED")
-            except Exception as exc:
-                store.mark_source_silence_result(
-                    source_id, central_serid, event_time, state="FAILED",
-                    retry_at=at + timedelta(seconds=5),
+            suppression_id = row[4]
+            responder = lambda: self.silence_source_row(
+                        source_id, remote_serid, event_time,
+                        action=action_text, pic=pic_text, reason=reason_text,
+            )
+            active_suppression = store.active_suppression(central_serid)
+            if (
+                suppression_id
+                and active_suppression is not None
+                and active_suppression.suppression_id == suppression_id
+                and at < active_suppression.expires_at
+            ):
+                hook = getattr(self, "before_source_silence_claim", None)
+                if callable(hook):
+                    hook(str(suppression_id))
+                state, error = store.dispatch_source_silence(
+                    source_id, central_serid, event_time, at=at, responder=responder,
+                    backoff_seconds=(5, 15, 30, 60),
                 )
+            else:
+                state, error = store.dispatch_source_response(
+                    source_id, central_serid, event_time, at=at, responder=responder,
+                )
+            if state in {"FAILED", "UNCERTAIN"}:
                 self.audit.record(
                     "ALARM_POLICY_SOURCE_RESPONSE", identity, "alarm", str(event_id),
-                    success=False, reason=str(exc), source=source_id,
+                    success=False,
+                    reason=("hasil silence sumber tidak pasti setelah suppression berakhir" if state == "UNCERTAIN" else str(error)),
+                    source=source_id,
                 )
+                failures.append(f"{source_id}: {'hasil tidak pasti' if state == 'UNCERTAIN' else error}")
+            elif state in {"SKIPPED", "CANCELLED"}:
+                skipped = True
+        if failures:
+            # A remote i_flag write has not been confirmed for every linked row.
+            # Keep the central event active instead of falsely claiming response.
+            raise RuntimeError("respons sumber gagal; alarm tetap aktif: " + "; ".join(failures))
+        if skipped:
+            raise RuntimeError("respons sumber dibatalkan; alarm tetap aktif")
         policy = getattr(self, "policy", None)
         if policy is not None:
             responded = policy.mark_event_responded(str(event_id), at, pic_text, action_text, reason_text)

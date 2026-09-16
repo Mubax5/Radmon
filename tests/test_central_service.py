@@ -1,9 +1,12 @@
 import socket
+import threading
 from types import SimpleNamespace
 
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
-from radmon.central_service import CentralService, ManagedUvicornServer, smoke_server_lifecycle
+from radmon.central_api import create_central_app
+from radmon.central_service import CentralService, ManagedUvicornServer, SuppressionExpiryScheduler, smoke_server_lifecycle
 from radmon.config import Settings
 
 
@@ -114,3 +117,96 @@ def test_central_service_cleans_lan_when_api_start_fails():
     else:
         raise AssertionError("expected api startup failure")
     assert events == ["lan-start", "api-start", "lan-stop"]
+
+
+def test_expiry_scheduler_runs_periodically_without_lan_runtime_and_stops_cleanly():
+    calls = []
+
+    class StopAfterOneWait:
+        def __init__(self):
+            self.waits = []
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def wait(self, interval):
+            self.waits.append(interval)
+            self.stopped = True
+            return True
+
+        def set(self):
+            self.stopped = True
+
+    stop_event = StopAfterOneWait()
+    scheduler = SuppressionExpiryScheduler(lambda: calls.append("expire"), interval=17.0, stop_event=stop_event)
+    scheduler._run()
+
+    assert calls == ["expire"]
+    assert stop_event.waits == [17.0]
+
+
+def test_expiry_scheduler_logs_failures_recovers_and_stops_cleanly(caplog):
+    calls = []
+    second_call = threading.Event()
+
+    def expire_due():
+        calls.append("expire")
+        if len(calls) == 1:
+            raise RuntimeError("durable expiry unavailable")
+        second_call.set()
+
+    scheduler = SuppressionExpiryScheduler(expire_due, interval=0.01)
+    scheduler.start()
+    assert second_call.wait(1.0)
+    scheduler.stop(timeout=1.0)
+
+    assert calls == ["expire", "expire"]
+    assert scheduler.status["state"] == "OK"
+    assert scheduler.status["failure_count"] == 1
+    assert any("suppression expiry scheduler failed" in record.message for record in caplog.records)
+
+
+def test_central_health_reports_degraded_expiry_scheduler():
+    class Repository:
+        def ping(self):
+            return True
+
+    app = create_central_app(Repository(), Settings())
+    app.state.radmon_suppression_expiry_scheduler = SimpleNamespace(status={
+        "state": "DEGRADED", "last_error": "RuntimeError: durable expiry unavailable", "failure_count": 1,
+    })
+
+    response = TestClient(app).get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert response.json()["suppression_expiry"]["failure_count"] == 1
+
+
+def test_central_service_owns_expiry_scheduler_when_lan_is_disabled():
+    events = []
+
+    class Scheduler:
+        def start(self):
+            events.append("expiry-start")
+
+        def stop(self):
+            events.append("expiry-stop")
+
+    runtime = SimpleNamespace(
+        app=object(),
+        services=SimpleNamespace(alarm_suppression=object()),
+        archive_catalog=object(),
+        lan_runtime=None,
+    )
+    service = CentralService(
+        Settings(lan_enabled=False),
+        runtime_factory=lambda settings: runtime,
+        api_factory=lambda app, host, port: FakeApi(app, host, port, events),
+        expiry_scheduler_factory=lambda suppression: Scheduler(),
+    )
+    service.start()
+    service.stop()
+
+    assert events == ["expiry-start", "api-start", "expiry-stop", "api-stop"]

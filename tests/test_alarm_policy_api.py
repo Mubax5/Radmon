@@ -183,3 +183,30 @@ def test_suppression_payload_validation_and_overlap_conflict(tmp_path):
     payload = suppression_payload("1357")
     assert client.post("/api/v1/control/suppressions/5201", json=payload).status_code == 200
     assert client.post("/api/v1/control/suppressions/5201", json=payload).status_code == 409
+
+
+def test_operator_can_cancel_suppression_idempotently_with_reason_and_pin(tmp_path):
+    client, _ = fixture(tmp_path)
+    login(client, "operator")
+    started = client.post("/api/v1/control/suppressions/5201", json=suppression_payload("1357"))
+    suppression_id = started.json()["suppression_id"]
+    path = f"/api/v1/control/suppressions/{suppression_id}/cancel"
+
+    assert client.post(path, json={"pin": "1357", "reason": "Kalibrasi selesai"}).status_code == 200
+    repeated = client.post(path, json={"pin": "1357", "reason": "Kalibrasi selesai"})
+    assert repeated.status_code == 200
+    assert repeated.json()["ended_by"] == "operator"
+    assert client.post(path, json={"pin": "1357", "reason": ""}).status_code == 422
+    assert client.post(path, json={"pin": "0000", "reason": "x"}).status_code == 403
+
+
+def test_viewer_cannot_cancel_suppression(tmp_path):
+    client, _ = fixture(tmp_path)
+    login(client, "operator")
+    started = client.post("/api/v1/control/suppressions/5201", json=suppression_payload("1357"))
+    login(client, "viewer")
+    response = client.post(
+        f"/api/v1/control/suppressions/{started.json()['suppression_id']}/cancel",
+        json={"pin": "9999", "reason": "Tidak berwenang"},
+    )
+    assert response.status_code == 403

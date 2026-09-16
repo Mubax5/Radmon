@@ -119,6 +119,9 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
                 ],
             )
 
+        if path == "/api/v1/control/suppressions":
+            return _send_json(self, [])
+
         if path == "/api/v1/control/users":
             return _send_json(
                 self,
@@ -183,7 +186,7 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
 @contextmanager
 def _serve_ui(*, authenticated: bool = True):
     if not (DIST / "index.html").exists():
-        pytest.skip("web/dist is missing; build the Vite frontend before browser UI tests")
+        pytest.fail("web/dist is missing; build the Vite frontend before browser UI tests")
     server = ThreadingHTTPServer(("127.0.0.1", 0), RadMonUIHandler)
     server.authenticated = authenticated
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -396,3 +399,53 @@ def test_mobile_alarm_and_user_dialogs_stay_inside_viewport(chrome_driver):
         form_rect = chrome_driver.execute_script("return document.querySelector('.user-create-form').getBoundingClientRect().toJSON()")
         assert form_rect["left"] >= -1 and form_rect["right"] <= 391 and form_rect["height"] <= 844
         _assert_no_horizontal_overflow(chrome_driver)
+
+
+def test_select_portals_stay_above_dialog_and_navigation_and_restore_focus(chrome_driver):
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+
+    def open_and_assert(selector: str, *, dialog: bool):
+        trigger = chrome_driver.find_element(By.CSS_SELECTOR, selector)
+        chrome_driver.execute_script("arguments[0].click()", trigger)
+        _wait_for(chrome_driver, "[role=listbox]")
+        result = chrome_driver.execute_script(
+            "const list=document.querySelector('[role=listbox]');"
+            "const rect=list.getBoundingClientRect();"
+            "const hit=document.elementFromPoint(rect.left + Math.min(12, rect.width / 2), rect.top + Math.min(12, rect.height / 2));"
+            "const dialog=document.querySelector('[role=dialog]');"
+            "const nav=document.querySelector('.mobile-bottom-nav');"
+            "return {z:Number(getComputedStyle(list).zIndex), hit:list.contains(hit),"
+            "aboveDialog:!dialog || Number(getComputedStyle(list).zIndex)>Number(getComputedStyle(dialog).zIndex),"
+            "aboveNav:!nav || Number(getComputedStyle(list).zIndex)>Number(getComputedStyle(nav).zIndex)};"
+        )
+        assert result["z"] >= 100
+        assert result["hit"] and result["aboveDialog"] and result["aboveNav"]
+        chrome_driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+        assert not chrome_driver.find_elements(By.CSS_SELECTOR, "[role=listbox]")
+        if dialog:
+            assert chrome_driver.execute_script("return document.querySelector('[role=dialog]').contains(document.activeElement)")
+
+    with _serve_ui() as base:
+        for width, height in ((390, 844), (360, 480), (1366, 768)):
+            _set_viewport(chrome_driver, width, height)
+            chrome_driver.get(f"{base}/app/alarms")
+            _wait_for(chrome_driver, ".active-alarm-list")
+            _button(chrome_driver, "Respons alarm").click()
+            _wait_for(chrome_driver, "[role=dialog]")
+            open_and_assert("[role=dialog] [aria-haspopup=listbox]", dialog=True)
+            chrome_driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+
+            chrome_driver.get(f"{base}/app/users")
+            _wait_for(chrome_driver, ".user-summary")
+            _button(chrome_driver, "Buat pengguna").click()
+            _wait_for(chrome_driver, "[role=dialog]")
+            open_and_assert("[role=dialog] [aria-haspopup=listbox]", dialog=True)
+            chrome_driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+
+        for width, height in ((390, 844), (360, 480), (1366, 768)):
+            _set_viewport(chrome_driver, width, height)
+            for path in ("/app/stations", "/app/history?station=3801", "/app/archives"):
+                chrome_driver.get(f"{base}{path}")
+                _wait_for(chrome_driver, "[aria-haspopup=listbox]")
+                open_and_assert("[aria-haspopup=listbox]", dialog=False)

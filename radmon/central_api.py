@@ -219,12 +219,19 @@ def create_central_app(repository: CentralRepositoryProtocol, settings: Settings
 
     @app.get("/health")
     def health():
-        return {
+        scheduler = getattr(app.state, "radmon_suppression_expiry_scheduler", None)
+        expiry = getattr(scheduler, "status", None)
+        expiry_status = expiry if isinstance(expiry, dict) else None
+        database_ok = repository.ping()
+        result = {
             "service": "radmon-central",
-            "status": "ok" if repository.ping() else "error",
+            "status": "error" if not database_ok else ("degraded" if expiry_status and expiry_status.get("state") == "DEGRADED" else "ok"),
             "lan_enabled": bool(getattr(app.state, "radmon_lan_enabled", False)),
             "lan_source_count": int(getattr(app.state, "radmon_lan_source_count", 0)),
         }
+        if expiry_status is not None:
+            result["suppression_expiry"] = expiry_status
+        return result
 
     @app.post("/api/v1/measurements/batch", dependencies=[Depends(require_token)])
     def ingest(batch: IngestBatch):

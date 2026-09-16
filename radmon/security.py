@@ -39,6 +39,9 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
 }
 
 
+_SCHEMA_MIGRATION_LOCK = threading.Lock()
+
+
 class SecurityStore:
     PBKDF2_ITERATIONS = 260_000
 
@@ -135,15 +138,45 @@ CREATE TABLE IF NOT EXISTS archive_quarters (
 );
 """
             )
-            columns = {
-                str(row[1])
-                for row in connection.execute("PRAGMA table_info(remote_alarm_state)").fetchall()
-            }
-            if "remote_serid" not in columns:
-                connection.execute("ALTER TABLE remote_alarm_state ADD COLUMN remote_serid INTEGER")
-            connection.execute(
-                "UPDATE remote_alarm_state SET remote_serid = serid WHERE remote_serid IS NULL"
-            )
+        # All additive remote-alarm migrations run once during store startup,
+        # never from polling workers that may race each other.
+        with _SCHEMA_MIGRATION_LOCK:
+            with self._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                columns = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(remote_alarm_state)").fetchall()
+                }
+                additions = {
+                    "remote_serid": "INTEGER",
+                    "is_active": "INTEGER NOT NULL DEFAULT 1",
+                    "policy_decision": "TEXT",
+                    "suppression_id": "TEXT",
+                    "operator_visible": "INTEGER NOT NULL DEFAULT 0",
+                    "policy_event_id": "TEXT",
+                    "source_silence_state": "TEXT",
+                    "source_silence_retry_at": "TEXT",
+                    "source_silence_attempts": "INTEGER NOT NULL DEFAULT 0",
+                    "source_silence_claimed_at": "TEXT",
+                    "source_silence_dispatch_started_at": "TEXT",
+                    "source_observation_version": "INTEGER NOT NULL DEFAULT 0",
+                    "source_silence_claim_observation": "INTEGER",
+                    "source_response_state": "TEXT",
+                    "source_response_attempts": "INTEGER NOT NULL DEFAULT 0",
+                    "source_response_claimed_at": "TEXT",
+                    "source_response_claim_observation": "INTEGER",
+                }
+                for name, ddl in additions.items():
+                    if name not in columns:
+                        connection.execute(f"ALTER TABLE remote_alarm_state ADD COLUMN {name} {ddl}")
+                connection.execute(
+                    "UPDATE remote_alarm_state SET remote_serid = serid WHERE remote_serid IS NULL"
+                )
+                if "acknowledged_at" in columns:
+                    connection.execute(
+                        "UPDATE remote_alarm_state SET is_active = 0 WHERE acknowledged_at IS NOT NULL"
+                    )
+                connection.commit()
 
     @classmethod
     def _hash_secret(cls, value: str) -> str:

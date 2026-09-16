@@ -17,12 +17,6 @@ _BACKOFF_SECONDS = (5, 15, 30, 60)
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-def _ensure_retry_column(store) -> None:
-    with store.security._connection() as db:
-        columns = {str(row[1]) for row in db.execute('PRAGMA table_info(remote_alarm_state)')}
-        if 'source_silence_attempts' not in columns:
-            db.execute('ALTER TABLE remote_alarm_state ADD COLUMN source_silence_attempts INTEGER NOT NULL DEFAULT 0')
-
 def _pending_alarm_rows(alarm_mirror, source_id: str, *, limit: int=500) -> list[dict[str, Any]]:
     """Return mirrored source rows that policy has not classified yet."""
     if alarm_mirror is None:
@@ -49,32 +43,93 @@ def _mapped_live_rows(aggregator, source) -> list[dict[str, Any]]:
 def _retry_source_silences(aggregator, source, alarm_policy) -> None:
     """Retry at most 25 source silences using 5/15/30/60-second backoff."""
     store = alarm_policy.store
-    _ensure_retry_column(store)
     now = alarm_policy.now() if callable(getattr(alarm_policy, 'now', None)) else _utcnow()
+    audit = getattr(alarm_policy, 'audit', None)
+    recover = getattr(store, 'recover_stale_source_silences', None)
+    recovered = recover(source.source_id, at=now) if callable(recover) else []
+    for item in recovered:
+        if audit is not None:
+            audit.record(
+                'SUPPRESSION_SOURCE_SILENCE_RECONCILING', None, 'alarm',
+                f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}",
+                success=False, reason='dispatch outcome unknown after stale claim', source=item['source_id'],
+            )
+    drain_cancelled = getattr(store, 'drain_cancelled_source_silence_claims', None)
+    cancelled_claims = drain_cancelled(source.source_id, at=now) if callable(drain_cancelled) else []
+    for item in cancelled_claims:
+        if audit is not None:
+            audit.record(
+                'SUPPRESSION_SOURCE_SILENCE_CANCELLED', None, 'alarm',
+                f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}",
+                success=False, reason='suppression ended before claimed source silence could begin', source=item['source_id'],
+            )
+    recover_responses = getattr(store, 'recover_stale_source_responses', None)
+    recovered_responses = recover_responses(source.source_id, at=now) if callable(recover_responses) else []
+    for item in recovered_responses:
+        if audit is not None:
+            audit.record(
+                'ALARM_POLICY_SOURCE_RESPONSE_RECONCILING', None, 'alarm',
+                f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}",
+                success=False, reason='response dispatch outcome unknown after stale claim', source=item['source_id'],
+            )
+    reconcile = getattr(store, 'reconcile_source_silences', None)
+    reconciled = reconcile(source.source_id, at=now) if callable(reconcile) else []
+    for item in reconciled:
+        if audit is not None:
+            if item['state'] == 'RECONCILED':
+                action = 'SUPPRESSION_SOURCE_SILENCE_RECONCILED'
+                success = True
+                reason = 'source i_flag shows row already handled; original dispatch outcome remains unknown'
+            elif item['state'] == 'PENDING':
+                action = 'SUPPRESSION_SOURCE_SILENCE_RETRY_AUTHORIZED'
+                success = False
+                reason = 'fresh source row remains active; retry is authorized'
+            else:
+                action = 'SUPPRESSION_SOURCE_SILENCE_CANCELLED'
+                success = False
+                reason = 'suppression ended before stale dispatch could be reconciled'
+            audit.record(
+                action, None, 'alarm',
+                f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}",
+                success=success, reason=reason, source=item['source_id'],
+            )
+    reconcile_responses = getattr(store, 'reconcile_source_responses', None)
+    reconciled_responses = reconcile_responses(source.source_id, at=now) if callable(reconcile_responses) else []
+    for item in reconciled_responses:
+        if audit is not None:
+            if item['state'] == 'RECONCILED':
+                action = 'ALARM_POLICY_SOURCE_RESPONSE_RECONCILED'
+                success = True
+                reason = 'source shows row already handled; original response outcome remains unknown'
+            else:
+                action = 'ALARM_POLICY_SOURCE_RESPONSE_RETRY_AUTHORIZED'
+                success = False
+                reason = 'fresh source row remains active; a later operator response may retry'
+            audit.record(
+                action, None, 'alarm',
+                f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}",
+                success=success, reason=reason, source=item['source_id'],
+            )
     pending = store.pending_source_silences(source.source_id, at=now, limit=25)
     if not pending:
         return
+    hook = getattr(aggregator, "before_source_silence_claim", None)
+    if callable(hook):
+        hook()
     remote = aggregator.remote_factory(source)
     for item in pending:
-        with store.security._connection() as db:
-            row = db.execute('SELECT source_silence_attempts FROM remote_alarm_state\n                   WHERE source_id=? AND serid=? AND event_time=?', (item['source_id'], int(item['serid']), item['event_time'].isoformat())).fetchone()
-            attempts = int(row[0] or 0) if row else 0
-        try:
-            ok = bool(remote.respond_alarm(int(item.get('remote_serid') or item['serid']), item['event_time'], action='Suppressed', pic='RadMon Policy', note='Central policy auto-silence', at=now))
-            if not ok:
-                raise RuntimeError('source menolak alarm silence')
-            store.mark_source_silence_result(item['source_id'], item['serid'], item['event_time'], state='CONFIRMED')
-            with store.security._connection() as db:
-                db.execute('UPDATE remote_alarm_state SET source_silence_attempts=?\n                       WHERE source_id=? AND serid=? AND event_time=?', (attempts + 1, item['source_id'], int(item['serid']), item['event_time'].isoformat()))
-        except Exception as exc:
-            next_attempt = attempts + 1
-            delay = _BACKOFF_SECONDS[min(attempts, len(_BACKOFF_SECONDS) - 1)]
-            store.mark_source_silence_result(item['source_id'], item['serid'], item['event_time'], state='FAILED', retry_at=now + timedelta(seconds=delay))
-            with store.security._connection() as db:
-                db.execute('UPDATE remote_alarm_state SET source_silence_attempts=?\n                       WHERE source_id=? AND serid=? AND event_time=?', (next_attempt, item['source_id'], int(item['serid']), item['event_time'].isoformat()))
-            audit = getattr(alarm_policy, 'audit', None)
-            if audit is not None:
-                audit.record('SUPPRESSION_SOURCE_SILENCE_FAILED', None, 'alarm', f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}", success=False, reason=str(exc), source=item['source_id'])
+        state, error = store.dispatch_source_silence(
+            item['source_id'], item['serid'], item['event_time'], at=now,
+            responder=lambda item=item: bool(remote.respond_alarm(
+                int(item.get('remote_serid') or item['serid']), item['event_time'],
+                action='Suppressed', pic='RadMon Policy', note='Central policy auto-silence', at=now,
+            )),
+            backoff_seconds=_BACKOFF_SECONDS,
+        )
+        if state == 'FAILED' and audit is not None:
+            audit.record('SUPPRESSION_SOURCE_SILENCE_FAILED', None, 'alarm', f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}", success=False, reason=str(error), source=item['source_id'])
+        elif state == 'UNCERTAIN' and audit is not None:
+            audit.record('SUPPRESSION_SOURCE_SILENCE_UNCERTAIN', None, 'alarm', f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}", success=False, reason='remote silence began before suppression ended; outcome cannot be proven', source=item['source_id'])
 
 @dataclass(frozen=True, slots=True)
 class LanSource:
@@ -800,6 +855,9 @@ class LanAggregator:
         if result.error or alarm_policy is None:
             return result
         try:
+            suppression = getattr(self, "alarm_suppression", None)
+            if suppression is not None:
+                suppression.expire_due()
             mapped_live = result.mapped_live_rows
             mapped_alarms = _pending_alarm_rows(
                 getattr(self, "alarm_mirror", None), source.source_id, limit=500

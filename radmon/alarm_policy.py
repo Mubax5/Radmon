@@ -208,9 +208,15 @@ class AlarmPolicyService:
             suppression_id=suppression.suppression_id if suppression else None,
             operator_visible=False,
             policy_event_id=policy_event_id,
-            source_silence_state="PENDING",
-            source_silence_retry_at=self.now(),
         )
+        if suppression is not None:
+            hook = getattr(self, "before_source_silence_bind", None)
+            if callable(hook):
+                hook()
+            self.store.bind_source_silence_if_active(
+                source_id, int(row["serid"]), event_time, suppression.suppression_id,
+                retry_at=self.now(),
+            )
         result["policy_event_id"] = policy_event_id
         return result
 
@@ -224,6 +230,18 @@ class AlarmPolicyService:
 
     def restore_and_reconcile_current_state(self) -> None:
         self.notifications_enabled = False
+        for item in self.store.recover_stale_source_silences(None, at=self.now()):
+            self.audit.record(
+                "SUPPRESSION_SOURCE_SILENCE_RECONCILING", None, "alarm",
+                f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}",
+                success=False, reason="dispatch outcome unknown after stale claim", source=item["source_id"],
+            )
+        for item in self.store.recover_stale_source_responses(None, at=self.now()):
+            self.audit.record(
+                "ALARM_POLICY_SOURCE_RESPONSE_RECONCILING", None, "alarm",
+                f"{item['source_id']}:{item['serid']}:{item['event_time'].isoformat()}",
+                success=False, reason="response dispatch outcome unknown after stale claim", source=item["source_id"],
+            )
 
     def _snapshot_base(self, tx, *, underlying: str, measured_value: float | None=None, threshold: float | None=None, active_event_id: str | None=None) -> dict[str, Any]:
         state = tx.state
@@ -264,6 +282,10 @@ class AlarmPolicyService:
         state = self.store.get_state(serid)
         suppression = self.store.active_suppression(serid)
         event = self.store.get_event(state.active_event_id) if state.active_event_id else None
+        if event is None and suppression is not None:
+            # Starting suppression resets the burst state, so retain the
+            # original active event as the durable correlation for late rows.
+            event = self.store.active_suppression_event(serid, suppression.suppression_id, source_id)
         if historical:
             decision = 'HISTORICAL_SEED'
             visible = False

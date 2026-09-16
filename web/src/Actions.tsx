@@ -12,12 +12,35 @@ type AlarmEvent = {
   surfaced_at?: string;
 };
 
+export type Suppression = {
+  suppression_id: string;
+  serid: number;
+  expires_at: string;
+  pic: string;
+  reason: string;
+  ended_at?: string | null;
+  ended_reason?: string | null;
+  source_silence_state?: string;
+};
+
+const DURATION_ITEMS = {
+  "1": "1 menit",
+  "5": "5 menit",
+  "15": "15 menit",
+  "30": "30 menit",
+  "60": "1 jam",
+  "120": "2 jam",
+  "240": "4 jam",
+  "480": "8 jam",
+  "1440": "24 jam",
+};
+
 function Feedback({ state }: { state: { kind: "ok" | "error"; text: string } | null }) {
   if (!state) return null;
   return <div className={state.kind === "ok" ? "form-success" : "form-error"}>{state.text}</div>;
 }
 
-export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; onChanged: () => void }) {
+export function AlarmOperations({ events, suppressions, onChanged }: { events: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void }) {
   const active = useMemo(() => events.filter((event) => event.kind === "ALARM" && event.status === "ACTIVE"), [events]);
   const eventItems = useMemo(
     () => Object.fromEntries(active.map((item) => [item.event_id, `SERID ${item.serid} · ${item.measured_value ?? "—"}`])),
@@ -25,6 +48,7 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
   );
   const [respondOpen, setRespondOpen] = useState(false);
   const [suppressionOpen, setSuppressionOpen] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState("");
   const [eventId, setEventId] = useState("");
   const [action, setAction] = useState("Konfirmasi");
   const [pic, setPic] = useState("");
@@ -35,7 +59,9 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
   const [suppressPic, setSuppressPic] = useState("");
   const [suppressReason, setSuppressReason] = useState("");
   const [suppressPin, setSuppressPin] = useState("");
-  const [pending, setPending] = useState<"respond" | "suppress" | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelPin, setCancelPin] = useState("");
+  const [pending, setPending] = useState<"respond" | "suppress" | "cancel" | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
 
   function resetResponse() {
@@ -121,6 +147,28 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
     }
   }
 
+  async function cancelSuppression(event: React.FormEvent, item: Suppression) {
+    event.preventDefault();
+    if (pending) return;
+    setFeedback(null);
+    setPending("cancel");
+    try {
+      await api(`/api/v1/control/suppressions/${encodeURIComponent(item.suppression_id)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({ pin: cancelPin, reason: cancelReason }),
+      });
+      setFeedback({ kind: "ok", text: `Suppression stasiun ${item.serid} diakhiri.` });
+      setCancelOpen("");
+      setCancelReason("");
+      onChanged();
+    } catch (error) {
+      setFeedback({ kind: "error", text: error instanceof Error ? error.message : "Pembatalan suppression gagal" });
+    } finally {
+      setCancelPin("");
+      setPending(null);
+    }
+  }
+
   return (
     <div className="action-grid">
       <LayerCard className="action-card">
@@ -174,7 +222,13 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
               </Dialog.Description>
               <form className="action-form dialog-form" onSubmit={suppress}>
                 <Input label="SERID stasiun" inputMode="numeric" value={serid} onChange={(e) => setSerid(e.target.value)} disabled={pending === "suppress"} />
-                <Input label="Durasi (menit)" inputMode="numeric" value={minutes} onChange={(e) => setMinutes(e.target.value)} disabled={pending === "suppress"} />
+                <Select
+                  label="Durasi suppression"
+                  items={DURATION_ITEMS}
+                  value={minutes}
+                  onValueChange={(value) => setMinutes(String(value ?? "15"))}
+                  disabled={pending === "suppress"}
+                />
                 <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} disabled={pending === "suppress"} />
                 <Input label="Alasan" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} disabled={pending === "suppress"} />
                 <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} disabled={pending === "suppress"} />
@@ -188,6 +242,40 @@ export function AlarmOperations({ events, onChanged }: { events: AlarmEvent[]; o
             </div>
           </Dialog>
         </Dialog.Root>
+        <div className="active-suppression-list" aria-live="polite">
+          <h3>Suppression aktif</h3>
+          {suppressions.length === 0 ? <p className="cell-subtle">Tidak ada suppression aktif.</p> : suppressions.map((item) => (
+            <div className="active-suppression-row" key={item.suppression_id}>
+              <div>
+                <strong>SERID {item.serid}</strong>
+                <span>Sampai {new Date(item.expires_at).toLocaleString("id-ID")} · sumber {item.source_silence_state ?? "NONE"}</span>
+                <span>{item.pic}: {item.reason}</span>
+              </div>
+              <Dialog.Root open={cancelOpen === item.suppression_id} onOpenChange={(open) => {
+                if (pending === "cancel") return;
+                setCancelOpen(open ? item.suppression_id : "");
+                if (!open) { setCancelReason(""); setCancelPin(""); }
+              }}>
+                <Dialog.Trigger render={(props) => <Button {...props} variant="secondary" disabled={pending !== null}>Akhiri suppression</Button>} />
+                <Dialog className="radmon-dialog mobile-sheet-dialog">
+                  <div className="mobile-sheet-content">
+                    <div className="mobile-sheet-handle" aria-hidden />
+                    <Dialog.Title>Akhiri suppression SERID {item.serid}</Dialog.Title>
+                    <Dialog.Description>Pembatalan dicatat permanen dan tidak menghapus measurement atau riwayat alarm.</Dialog.Description>
+                    <form className="action-form dialog-form" onSubmit={(event) => void cancelSuppression(event, item)}>
+                      <Input label="Alasan pembatalan" value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} disabled={pending === "cancel"} />
+                      <Input label="PIN" type="password" value={cancelPin} onChange={(event) => setCancelPin(event.target.value)} disabled={pending === "cancel"} />
+                      <div className="form-actions">
+                        <Button type="submit" variant="primary" disabled={pending === "cancel" || !cancelReason || !cancelPin}>{pending === "cancel" ? "Mengakhiri…" : "Akhiri suppression"}</Button>
+                        <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "cancel"}>Batal</Button>} />
+                      </div>
+                    </form>
+                  </div>
+                </Dialog>
+              </Dialog.Root>
+            </div>
+          ))}
+        </div>
       </LayerCard>
       <Feedback state={feedback} />
     </div>

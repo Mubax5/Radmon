@@ -5,6 +5,7 @@ import os
 import socket
 import threading
 import time
+import logging
 from typing import Any, Callable
 
 from fastapi import FastAPI
@@ -24,6 +25,9 @@ from .web_api import attach_web_api_routes
 from .web_events import WebEventBroker
 from .web_host import attach_web_routes
 from .whatsapp import SeleniumWhatsAppSender, WhatsAppAlarmDispatcher
+
+
+LOG = logging.getLogger(__name__)
 
 
 def _enabled(name: str) -> bool:
@@ -76,6 +80,66 @@ class ManagedUvicornServer:
         self._thread = None
 
 
+class SuppressionExpiryScheduler:
+    """Periodically expire suppressions independently of LAN polling."""
+
+    def __init__(self, expire_due: Callable[[], int], *, interval: float = 30.0, stop_event=None) -> None:
+        self.expire_due = expire_due
+        self.interval = max(0.1, float(interval))
+        self.stop_event = stop_event or threading.Event()
+        self._thread: threading.Thread | None = None
+        self._status_lock = threading.Lock()
+        self._last_error: str | None = None
+        self._failure_count = 0
+
+    @property
+    def status(self) -> dict[str, object]:
+        with self._status_lock:
+            return {
+                "state": "DEGRADED" if self._last_error else "OK",
+                "last_error": self._last_error,
+                "failure_count": self._failure_count,
+            }
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self.expire_due()
+            except Exception as exc:
+                # Expiry is retried on the next interval; do not terminate the
+                # central lifecycle because its durable end operation is idempotent.
+                try:
+                    detail = str(exc)
+                except Exception:
+                    detail = "unprintable exception"
+                error = f"{type(exc).__name__}: {detail}"
+                with self._status_lock:
+                    self._last_error = error
+                    self._failure_count += 1
+                LOG.exception("suppression expiry scheduler failed; will retry")
+            else:
+                with self._status_lock:
+                    self._last_error = None
+            self.stop_event.wait(self.interval)
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self.stop_event.clear()
+        self._thread = threading.Thread(target=self._run, name="radmon-suppression-expiry", daemon=True)
+        self._thread.start()
+
+    def stop(self, timeout: float = 15.0) -> None:
+        thread = self._thread
+        if thread is None:
+            return
+        self.stop_event.set()
+        thread.join(timeout=max(0.1, timeout))
+        if thread.is_alive():
+            raise RuntimeError("suppression expiry scheduler gagal berhenti")
+        self._thread = None
+
+
 @dataclass(slots=True)
 class CentralRuntime:
     app: Any
@@ -97,6 +161,8 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
     RollingRecentManager(settings).ensure_schema()
     schema_repository.require_schema()
     services.alarm_policy.restore_and_reconcile_current_state()
+    # Expiry is wall-clock based, not dependent on the next detector reading.
+    services.alarm_suppression.expire_due()
 
     archive_catalog = ArchiveCatalog(
         services.security,
@@ -172,6 +238,7 @@ class CentralService:
         *,
         runtime_factory: Callable[[Settings], CentralRuntime] = build_central_runtime,
         api_factory: Callable[[Any, str, int], Any] = ManagedUvicornServer,
+        expiry_scheduler_factory: Callable[[Any], Any] | None = None,
     ) -> None:
         self.settings = settings
         self.host = host
@@ -180,6 +247,10 @@ class CentralService:
         self._api_factory = api_factory
         self._runtime: CentralRuntime | Any | None = None
         self._api: Any | None = None
+        self._expiry_scheduler_factory = expiry_scheduler_factory or (
+            lambda suppression: SuppressionExpiryScheduler(suppression.expire_due)
+        )
+        self._expiry_scheduler: Any | None = None
 
     @property
     def running(self) -> bool:
@@ -203,7 +274,17 @@ class CentralService:
         runtime = self._runtime_factory(self.settings)
         self._runtime = runtime
         lan_started = False
+        expiry_started = False
         try:
+            suppression = getattr(runtime.services, "alarm_suppression", None)
+            if suppression is not None:
+                scheduler = self._expiry_scheduler_factory(suppression)
+                self._expiry_scheduler = scheduler
+                app_state = getattr(runtime.app, "state", None)
+                if app_state is not None:
+                    app_state.radmon_suppression_expiry_scheduler = scheduler
+                scheduler.start()
+                expiry_started = True
             if runtime.lan_runtime is not None:
                 runtime.lan_runtime.start()
                 lan_started = True
@@ -214,6 +295,9 @@ class CentralService:
             self._api = None
             if lan_started:
                 runtime.lan_runtime.stop()
+            if expiry_started and self._expiry_scheduler is not None:
+                self._expiry_scheduler.stop()
+            self._expiry_scheduler = None
             self._runtime = None
             raise
 
@@ -229,6 +313,12 @@ class CentralService:
                     runtime.lan_runtime.stop()
                 except Exception as exc:
                     error = exc
+            if self._expiry_scheduler is not None:
+                try:
+                    self._expiry_scheduler.stop()
+                except Exception as exc:
+                    if error is None:
+                        error = exc
             if api is not None:
                 try:
                     api.stop()
@@ -237,6 +327,7 @@ class CentralService:
                         error = exc
         finally:
             self._api = None
+            self._expiry_scheduler = None
             self._runtime = None
         if error is not None:
             raise error

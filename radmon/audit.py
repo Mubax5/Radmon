@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import json
+import sqlite3
 from typing import Any
 
 from .security import SecurityStore, UserIdentity
@@ -47,13 +48,28 @@ class AuditTrail:
         success: bool = True,
         reason: str | None = None,
         source: str | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> None:
         occurred_at = datetime.now(timezone.utc).isoformat()
         before_json = json.dumps(_safe(before), ensure_ascii=False, sort_keys=True) if before is not None else None
         after_json = json.dumps(_safe(after), ensure_ascii=False, sort_keys=True) if after is not None else None
         username = identity.username if identity else None
         role = identity.role.value if identity else None
-        with self.store._connection() as connection:
+        if connection is None:
+            with self.store._connection() as db:
+                db.execute(
+                    """
+INSERT INTO audit_events
+  (occurred_at, username, role, action, target_type, target_id, source,
+   before_json, after_json, success, reason)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+""",
+                    (
+                        occurred_at, username, role, action, target_type, target_id, source,
+                        before_json, after_json, 1 if success else 0, reason,
+                    ),
+                )
+        else:
             connection.execute(
                 """
 INSERT INTO audit_events
@@ -61,19 +77,8 @@ INSERT INTO audit_events
    before_json, after_json, success, reason)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """,
-                (
-                    occurred_at,
-                    username,
-                    role,
-                    action,
-                    target_type,
-                    target_id,
-                    source,
-                    before_json,
-                    after_json,
-                    1 if success else 0,
-                    reason,
-                ),
+                (occurred_at, username, role, action, target_type, target_id, source,
+                 before_json, after_json, 1 if success else 0, reason),
             )
 
         if self.application_logger is not None and hasattr(self.application_logger, "record_applog"):
