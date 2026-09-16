@@ -208,23 +208,18 @@ def _latest_scalar_stat(
 
 def _dose_stat(panel_id, station, x, y, w, h=2):
     panel = _panel(panel_id, "stat", f"[{station.serid}] {station.room} ({station.location})", x, y, w, h)
+    # vrecent always exposes one row per known detector (NULL doserate when
+    # offline), so this returns an offline row instead of Grafana No Data.
     panel["targets"] = [_target(f"""
 SELECT doserate AS value
 FROM vrecent
-WHERE serid = {station.serid} AND dtom IS NOT NULL
+WHERE serid = {station.serid}
 ORDER BY dtom DESC
 LIMIT 1
 """)]
     panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "color": {"mode": "fixed", "fixedColor": "green"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": None}]}}, "overrides": []}
     panel["options"] = {"colorMode": "value", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False}, "text": {"valueSize": 28}, "textMode": "value", "wideLayout": True}
     return panel
-
-
-def _utc_epoch_sql(column: str) -> str:
-    return (
-        "TIMESTAMPDIFF(SECOND, '1970-01-01 00:00:00', "
-        f"CONVERT_TZ({column}, '+07:00', '+00:00'))"
-    )
 
 
 def _utc_epoch_ms_sql(column: str) -> str:
@@ -237,14 +232,18 @@ def _utc_epoch_ms_sql(column: str) -> str:
 def _dose_sparkline(panel_id, station, x, y, w, h=1):
     panel = _panel(panel_id, "timeseries", "", x, y, w, h)
     panel["description"] = "latest-dose-sparkline"
-    epoch = _utc_epoch_sql("v.dtom")
+    # Narrow indexed recent scan: $__timeFilter(dtom) becomes a PK range so
+    # the 51k-row vrecent view (device + runtime joins, per-row CONVERT_TZ)
+    # is never touched by the 10-minute sparkline. Server TZ is Asia/Jakarta,
+    # hence UNIX_TIMESTAMP(dtom) equals the old
+    # TIMESTAMPDIFF(CONVERT_TZ(dtom,'+07:00','+00:00')) epoch numerically.
     panel["targets"] = [_target(f"""
-SELECT {epoch} AS time, v.doserate AS value
-FROM vrecent v
-WHERE v.serid = {station.serid}
-  AND v.dtom IS NOT NULL
-  AND {epoch} BETWEEN $__unixEpochFrom() AND $__unixEpochTo()
-ORDER BY v.dtom
+SELECT UNIX_TIMESTAMP(dtom) AS time, doserate AS value
+FROM recent
+WHERE serid = {station.serid}
+  AND $__timeFilter(dtom)
+ORDER BY dtom
+LIMIT 600
 """, format_="time_series")]
     panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "color": {"mode": "fixed", "fixedColor": "green"}, "custom": {"axisPlacement": "hidden", "drawStyle": "line", "fillOpacity": 18, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
     panel["options"] = {"legend": {"displayMode": "hidden", "placement": "bottom", "showLegend": False}, "tooltip": {"mode": "single", "sort": "none"}}
@@ -255,10 +254,12 @@ def _time_stat(panel_id, station, x, y, w, h=1):
     panel = _panel(panel_id, "stat", "", x, y, w, h)
     panel["description"] = "latest-measurement-time"
     epoch_ms = _utc_epoch_ms_sql("dtom")
+    # No `dtom IS NOT NULL` filter: vrecent keeps one row per detector so an
+    # offline detector yields NULL (rendered as stale) instead of No Data.
     panel["targets"] = [_target(f"""
 SELECT {epoch_ms} AS value
 FROM vrecent
-WHERE serid = {station.serid} AND dtom IS NOT NULL
+WHERE serid = {station.serid}
 ORDER BY dtom DESC
 LIMIT 1
 """)]
@@ -297,17 +298,22 @@ def _building_trend(panel_id: int, building: str, x: int, y: int, w: int, h: int
     stations = _stations_for_building(building)
     panel = _panel(panel_id, "timeseries", f"Dose Rate · Gedung {building} · 3 Jam", x, y, w, h)
     panel["description"] = "building-dose-trend"
-    epoch = _utc_epoch_sql("v.dtom")
+    # Per-minute aggregation over the narrow indexed recent table keeps the
+    # 3h trend bounded (~180 points/series) and index-friendly via
+    # $__timeFilter(r.dtom). Server TZ is Asia/Jakarta, hence
+    # UNIX_TIMESTAMP(r.dtom) matches the legacy WIB epoch numerically.
     panel["targets"] = [_target(f"""
 SELECT
-  {epoch} AS time,
-  CONCAT('[', v.serid, '] ', v.name) AS metric,
-  v.doserate AS value
-FROM vrecent v
-WHERE v.serid IN ({_station_ids(stations)})
-  AND v.dtom IS NOT NULL
-  AND {epoch} BETWEEN $__unixEpochFrom() AND $__unixEpochTo()
-ORDER BY v.dtom, v.serid
+  (UNIX_TIMESTAMP(r.dtom) DIV 60) * 60 AS time,
+  CONCAT('[', r.serid, '] ', d.name) AS metric,
+  AVG(r.doserate) AS value
+FROM recent r
+JOIN device d ON d.serid = r.serid
+WHERE r.serid IN ({_station_ids(stations)})
+  AND $__timeFilter(r.dtom)
+GROUP BY 1, 2
+ORDER BY 1, 2
+LIMIT 10000
 """, format_="time_series")]
     panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 3, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
     panel["options"] = {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": True, "calcs": []}, "tooltip": {"mode": "multi", "sort": "desc"}}

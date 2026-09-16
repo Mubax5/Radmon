@@ -61,18 +61,24 @@ def test_page_one_live_values_times_and_sparklines_use_rolling_vrecent():
         assert panel["type"] == "stat"
         sql = panel["targets"][0]["rawSql"]
         assert "FROM vrecent" in sql
+        assert "FROM measurement" not in sql
+        assert "dtom IS NOT NULL" not in sql
         assert "ORDER BY dtom DESC" in sql
         assert panel["fieldConfig"]["defaults"]["unit"] == "suffix: µSv/h"
     for panel in spark:
         assert panel["type"] == "timeseries"
         sql = panel["targets"][0]["rawSql"]
-        assert "FROM vrecent" in sql
+        assert "FROM recent" in sql
         assert "FROM measurement" not in sql
-        assert "CONVERT_TZ(v.dtom, '+07:00', '+00:00')" in sql
-        assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
+        assert "FROM vrecent" not in sql
+        assert "CONVERT_TZ" not in sql
+        assert "UNIX_TIMESTAMP(dtom)" in sql
+        assert "$__timeFilter(dtom)" in sql
+        assert "LIMIT 600" in sql
     for panel in timestamp:
         sql = panel["targets"][0]["rawSql"]
         assert "FROM vrecent" in sql
+        assert "dtom IS NOT NULL" not in sql
         assert "ORDER BY dtom DESC" in sql
         assert "TIMESTAMPDIFF" in sql
         assert "CONVERT_TZ(dtom, '+07:00', '+00:00')" in sql
@@ -87,10 +93,14 @@ def test_page_two_three_hour_trends_and_live_summary_use_rolling_vrecent():
     assert {panel["title"] for panel in trends} == {f"Dose Rate · Gedung {building} · 3 Jam" for building in BUILDING_PAGE_ORDER}
     for panel in trends:
         sql = panel["targets"][0]["rawSql"]
-        assert "FROM vrecent" in sql
+        assert "FROM recent" in sql
         assert "FROM measurement" not in sql
-        assert "CONVERT_TZ(v.dtom, '+07:00', '+00:00')" in sql
-        assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
+        assert "FROM vrecent" not in sql
+        assert "CONVERT_TZ" not in sql
+        assert "UNIX_TIMESTAMP(r.dtom)" in sql
+        assert "$__timeFilter(r.dtom)" in sql
+        assert "GROUP BY" in sql
+        assert "LIMIT 10000" in sql
     summaries = {
         panel.get("title"): panel
         for panel in page2["panels"]

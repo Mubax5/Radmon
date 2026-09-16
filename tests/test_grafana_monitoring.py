@@ -222,8 +222,9 @@ def test_trend_page_auto_scales_above_one_microsievert_and_keeps_large_summaries
         assert "max" not in defaults
         assert defaults["unit"] == "suffix: µSv/h"
         sql = panel["targets"][0]["rawSql"]
-        assert "FROM vrecent" in sql
+        assert "FROM recent" in sql
         assert "FROM measurement" not in sql
+        assert "$__timeFilter(r.dtom)" in sql
     summary_titles = {"Dose Rate Tertinggi Saat Ini", "Rata-rata Saat Ini", "Detector Online", "Detector Offline"}
     summary_panels = [panel for panel in dashboard["panels"] if panel.get("title") in summary_titles]
     assert len(summary_panels) == 4

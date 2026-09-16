@@ -149,7 +149,7 @@ def test_grafana_continuous_dose_queries_use_vrecent_not_measurement():
                 sql = str(target.get("rawSql") or "")
                 if panel.get("type") == "timeseries":
                     saw_time_series = True
-                    assert "FROM vrecent" in sql
+                    assert "FROM vrecent" in sql or "FROM recent" in sql
                     assert "FROM measurement" not in sql
     assert saw_time_series is True
 
