@@ -131,12 +131,18 @@ def operation_page_stations(page_number: int) -> list[StationConfig]:
 
 def _latest_vrecent_relation(stations: Sequence[StationConfig] | None = None) -> str:
     ids = _station_ids(stations)
+    # Newest-dtom lookup hits the narrow indexed `recent` table (PK
+    # (serid, dtom)) instead of the 40k-row vrecent view with its
+    # per-row CONVERT_TZ/TIMESTAMPDIFF CASE. The outer query still
+    # reads vrecent so status/OFFLINE logic stays centralized there.
+    # LEFT JOIN + NULL branch keeps fully-offline detectors (no recent
+    # rows) as their NULL vrecent row instead of dropping them.
     return f"""
 SELECT v.*
 FROM vrecent v
 LEFT JOIN (
   SELECT serid, MAX(dtom) AS dtom
-  FROM vrecent
+  FROM recent
   WHERE serid IN ({ids}) AND dtom IS NOT NULL
   GROUP BY serid
 ) newest ON newest.serid = v.serid
@@ -242,14 +248,27 @@ def _dose_sparkline(panel_id, station, x, y, w, h=1):
     # is never touched by the 10-minute sparkline. Server TZ is Asia/Jakarta,
     # hence UNIX_TIMESTAMP(dtom) equals the old
     # TIMESTAMPDIFF(CONVERT_TZ(dtom,'+07:00','+00:00')) epoch numerically.
-    panel["targets"] = [_target(f"""
+    # 10 minutes at 2s cadence is at most ~300 points; LIMIT 300 keeps the
+    # refresh inside 1-3s. Target B is the offline fallback: without
+    # $__timeFilter it always returns the last-known point so an offline
+    # detector keeps its last data instead of rendering No Data.
+    panel["targets"] = [
+        _target(f"""
 SELECT UNIX_TIMESTAMP(dtom) AS time, doserate AS value
 FROM recent
 WHERE serid = {station.serid}
   AND $__timeFilter(dtom)
 ORDER BY dtom
-LIMIT 600
-""", format_="time_series")]
+LIMIT 300
+""", format_="time_series"),
+        _target(f"""
+SELECT UNIX_TIMESTAMP(dtom) AS time, doserate AS value
+FROM recent
+WHERE serid = {station.serid}
+ORDER BY dtom DESC
+LIMIT 1
+""", format_="time_series", ref_id="B"),
+    ]
     panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "color": {"mode": "fixed", "fixedColor": "green"}, "custom": {"axisPlacement": "hidden", "drawStyle": "line", "fillOpacity": 18, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
     panel["options"] = {"legend": {"displayMode": "hidden", "placement": "bottom", "showLegend": False}, "tooltip": {"mode": "single", "sort": "none"}}
     return panel
@@ -307,7 +326,11 @@ def _building_trend(panel_id: int, building: str, x: int, y: int, w: int, h: int
     # 3h trend bounded (~180 points/series) and index-friendly via
     # $__timeFilter(r.dtom). Server TZ is Asia/Jakarta, hence
     # UNIX_TIMESTAMP(r.dtom) matches the legacy WIB epoch numerically.
-    panel["targets"] = [_target(f"""
+    # Target B is the offline fallback: one last-known point per detector
+    # without $__timeFilter so an offline series keeps its last data
+    # instead of disappearing (No Data).
+    panel["targets"] = [
+        _target(f"""
 SELECT
   (UNIX_TIMESTAMP(r.dtom) DIV 60) * 60 AS time,
   CONCAT('[', r.serid, '] ', d.name) AS metric,
@@ -319,7 +342,23 @@ WHERE r.serid IN ({_station_ids(stations)})
 GROUP BY 1, 2
 ORDER BY 1, 2
 LIMIT 10000
-""", format_="time_series")]
+""", format_="time_series"),
+        _target(f"""
+SELECT
+  UNIX_TIMESTAMP(r.dtom) AS time,
+  CONCAT('[', r.serid, '] ', d.name) AS metric,
+  r.doserate AS value
+FROM (
+  SELECT serid, MAX(dtom) AS dtom
+  FROM recent
+  WHERE serid IN ({_station_ids(stations)})
+  GROUP BY serid
+) m
+JOIN recent r ON r.serid = m.serid AND r.dtom = m.dtom
+JOIN device d ON d.serid = r.serid
+LIMIT 15
+""", format_="time_series", ref_id="B"),
+    ]
     panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 3, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
     panel["options"] = {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": True, "calcs": []}, "tooltip": {"mode": "multi", "sort": "desc"}}
     return panel

@@ -449,7 +449,14 @@ LIMIT ?
             connection.close()
 
     def live_rows(self) -> list[dict[str, Any]]:
-        """Return one newest bounded monitoring row per detector."""
+        """Return one newest bounded monitoring row per detector.
+
+        Fully-offline detectors (no recent rows left) keep their NULL
+        vrecent row via LEFT JOIN so the admin panel renders last-known /
+        OFFLINE state instead of dropping the detector entirely. The
+        newest-dtom lookup hits indexed ``recent``, while status columns
+        keep coming from ``vrecent`` (single source of offline truth).
+        """
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
@@ -461,12 +468,13 @@ SELECT v.serid, v.name, v.location, v.warnlevel, v.alarmlevel, v.unit,
        v.suppressed, v.trigger_count, v.retrigger_locked,
        v.suppression_expires_at, v.suppression_pic, v.suppression_reason
 FROM vrecent v
-JOIN (
+LEFT JOIN (
   SELECT serid, MAX(dtom) AS dtom
-  FROM vrecent
+  FROM recent
   WHERE dtom IS NOT NULL
   GROUP BY serid
-) newest ON newest.serid = v.serid AND newest.dtom = v.dtom
+) newest ON newest.serid = v.serid
+WHERE newest.dtom IS NULL OR v.dtom = newest.dtom
 ORDER BY v.serid
 """
                 )

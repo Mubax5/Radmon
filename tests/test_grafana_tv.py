@@ -74,7 +74,7 @@ def test_page_one_live_values_times_and_sparklines_use_rolling_vrecent():
         assert "CONVERT_TZ" not in sql
         assert "UNIX_TIMESTAMP(dtom)" in sql
         assert "$__timeFilter(dtom)" in sql
-        assert "LIMIT 600" in sql
+        assert "LIMIT 300" in sql
     for panel in timestamp:
         sql = panel["targets"][0]["rawSql"]
         assert "FROM vrecent" in sql

@@ -172,8 +172,11 @@ class GrafanaBootstrap:
             "database": self.settings.db_name,
             "user": self.settings.db_user,
             "jsonData": {
-                "maxOpenConns": 10,
-                "maxIdleConns": 5,
+                # Page 1 alone fires ~60 queries per 2s refresh; 10 open
+                # conns queue behind each other and push first paint past
+                # 20s. 20/10 keeps p95 panel latency inside the 1-3s budget.
+                "maxOpenConns": 20,
+                "maxIdleConns": 10,
                 "connMaxLifetime": 14400,
             },
             "secureJsonData": {"password": self.settings.db_password},
