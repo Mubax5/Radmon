@@ -35,6 +35,17 @@ const DURATION_ITEMS = {
   "1440": "24 jam",
 };
 
+// Preset action respons alarm. Backend (PolicyResponseRequest.action: 1-128 char)
+// menerima string bebas, jadi preset ini selalu valid dan konsisten dengan
+// default historis "Konfirmasi" + dialog desktop (Confirm/Follow-up/dll).
+const RESPONSE_ACTION_ITEMS = {
+  Konfirmasi: "Konfirmasi",
+  Eskalasi: "Eskalasi",
+  Selesai: "Selesai",
+  "Verifikasi Normal": "Verifikasi Normal",
+  "Tindak Lanjut": "Tindak Lanjut",
+};
+
 function Feedback({ state }: { state: { kind: "ok" | "error"; text: string } | null }) {
   if (!state) return null;
   return <div className={state.kind === "ok" ? "form-success" : "form-error"}>{state.text}</div>;
@@ -73,6 +84,13 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
     if (eventId && !active.some((item) => item.event_id === eventId)) setEventId("");
   }, [active, eventId]);
 
+  // Auto-select satu-satunya event aktif agar trigger Select menampilkan label
+  // "SERID …", bukan placeholder "Pilih event…". Dijalankan saat dialog
+  // dibuka maupun saat live refresh menyisakan tepat satu event aktif.
+  useEffect(() => {
+    if (!eventId && active.length === 1 && respondOpen) setEventId(active[0].event_id);
+  }, [active, eventId, respondOpen]);
+
   function resetResponse() {
     setEventId("");
     setAction("Konfirmasi");
@@ -92,7 +110,11 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
   function changeRespondOpen(open: boolean) {
     if (!open && pending === "respond") return;
     setRespondOpen(open);
-    if (!open) resetResponse();
+    if (open) {
+      // Dialog dibuka saat tepat satu alarm aktif: langsung ikat valuenya
+      // sehingga trigger tidak tertinggal di placeholder.
+      if (!eventId && active.length === 1) setEventId(active[0].event_id);
+    } else resetResponse();
   }
 
   function changeSuppressionOpen(open: boolean) {
@@ -210,7 +232,13 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
                     {active.length} alarm aktif tersedia untuk direspons.
                   </p>
                 )}
-                <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} disabled={pending === "respond"} />
+                <Select
+                  label="Action"
+                  items={RESPONSE_ACTION_ITEMS}
+                  value={action}
+                  onValueChange={(value) => setAction(String(value ?? "Konfirmasi"))}
+                  disabled={pending === "respond"}
+                />
                 <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} disabled={pending === "respond"} />
                 <Input label="Alasan" value={reason} onChange={(e) => setReason(e.target.value)} disabled={pending === "respond"} />
                 <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending === "respond"} />
