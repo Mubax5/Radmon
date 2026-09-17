@@ -157,7 +157,7 @@ LEFT JOIN (
   FROM vrecent current
   JOIN (
     SELECT serid, MAX(dtom) AS dtom
-    FROM vrecent
+    FROM recent
     WHERE dtom IS NOT NULL
     GROUP BY serid
   ) newest ON newest.serid = current.serid AND newest.dtom = current.dtom

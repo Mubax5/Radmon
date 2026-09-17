@@ -100,7 +100,7 @@ def test_page_two_three_hour_trends_and_live_summary_use_rolling_vrecent():
         assert "UNIX_TIMESTAMP(r.dtom)" in sql
         assert "$__timeFilter(r.dtom)" in sql
         assert "GROUP BY" in sql
-        assert "LIMIT 10000" in sql
+        assert "LIMIT 2000" in sql
     summaries = {
         panel.get("title"): panel
         for panel in page2["panels"]

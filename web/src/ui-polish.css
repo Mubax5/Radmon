@@ -1,13 +1,43 @@
 /* Final RadMon UI polish. Loaded after Kumo + RadMon base/overlay styles. */
 
 .sidebar-brand {
-  justify-content: flex-start;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 48px;
   padding: 8px 10px;
 }
 
 .sidebar-logo {
   width: 124px;
   max-width: 100%;
+}
+
+.sidebar-collapse-button {
+  flex: 0 0 auto;
+}
+
+/* Rel collapse: logo dan teks akun disembunyikan seketika saat state
+   berbalik, sehingga transisi width 250ms milik Kumo tidak me-reflow
+   teks di tengah animasi (anti-flicker). Trigger tetap mounted agar
+   sidebar selalu bisa dibuka kembali dari rail 57px. */
+.group\/sidebar[data-state="collapsed"] .sidebar-brand {
+  justify-content: center;
+  padding: 8px 4px;
+}
+
+.group\/sidebar[data-state="collapsed"] .sidebar-logo {
+  display: none;
+}
+
+.group\/sidebar[data-state="collapsed"] .account-card {
+  justify-content: center;
+  padding: 8px 4px;
+}
+
+.account-card-collapsed {
+  justify-content: center;
 }
 
 .mobile-topbar {

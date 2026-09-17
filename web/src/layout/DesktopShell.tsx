@@ -1,10 +1,45 @@
 import type { ReactNode } from "react";
-import { Button, Sidebar } from "@cloudflare/kumo";
-import { MonitorPlay } from "@phosphor-icons/react";
+import { Button, Sidebar, useSidebar } from "@cloudflare/kumo";
+import { MonitorPlay, SignOut } from "@phosphor-icons/react";
 import type { SessionUser } from "../api";
 import brinLogo from "../assets/brin-logo.png";
 import { allowedRoutes, navigate, type AppRoute } from "../navigation";
 import { NavigationIcon } from "./NavigationIcon";
+
+function AccountFooter({
+  user,
+  onSignOut,
+}: {
+  user: SessionUser;
+  onSignOut: () => Promise<void>;
+}) {
+  const { open } = useSidebar();
+  if (!open) {
+    return (
+      <div className="account-card account-card-collapsed">
+        <Button
+          variant="secondary"
+          aria-label="Keluar"
+          title={`Keluar (${user.display_name})`}
+          onClick={() => void onSignOut()}
+        >
+          <SignOut size={18} weight="regular" aria-hidden />
+        </Button>
+      </div>
+    );
+  }
+  return (
+    <div className="account-card">
+      <div>
+        <strong>{user.display_name}</strong>
+        <span>{user.role}</span>
+      </div>
+      <Button variant="secondary" aria-label="Keluar" onClick={() => void onSignOut()}>
+        Keluar
+      </Button>
+    </div>
+  );
+}
 
 export function DesktopShell({
   user,
@@ -26,6 +61,7 @@ export function DesktopShell({
           <Sidebar.Header>
             <div className="sidebar-brand">
               <img className="sidebar-logo" src={brinLogo} alt="BRIN" />
+              <Sidebar.Trigger className="sidebar-collapse-button" />
             </div>
           </Sidebar.Header>
           <Sidebar.Content>
@@ -55,16 +91,7 @@ export function DesktopShell({
             </Sidebar.Group>
           </Sidebar.Content>
           <Sidebar.Footer>
-            <div className="account-card">
-              <div>
-                <strong>{user.display_name}</strong>
-                <span>{user.role}</span>
-              </div>
-              <Button variant="secondary" aria-label="Keluar" onClick={() => void onSignOut()}>
-                Keluar
-              </Button>
-            </div>
-            <Sidebar.Trigger />
+            <AccountFooter user={user} onSignOut={onSignOut} />
           </Sidebar.Footer>
         </Sidebar>
         <main className="content-shell">{children}</main>

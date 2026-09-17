@@ -244,29 +244,37 @@ def _dose_sparkline(panel_id, station, x, y, w, h=1):
     panel = _panel(panel_id, "timeseries", "", x, y, w, h)
     panel["description"] = "latest-dose-sparkline"
     # Narrow indexed recent scan: $__timeFilter(dtom) becomes a PK range so
-    # the 51k-row vrecent view (device + runtime joins, per-row CONVERT_TZ)
-    # is never touched by the 10-minute sparkline. Server TZ is Asia/Jakarta,
-    # hence UNIX_TIMESTAMP(dtom) equals the old
+    # the vrecent view (device + runtime joins, per-row CONVERT_TZ) is never
+    # touched by the 10-minute sparkline. Server TZ is Asia/Jakarta, hence
+    # UNIX_TIMESTAMP(dtom) equals the old
     # TIMESTAMPDIFF(CONVERT_TZ(dtom,'+07:00','+00:00')) epoch numerically.
     # 10 minutes at 2s cadence is at most ~300 points; LIMIT 300 keeps the
-    # refresh inside 1-3s. Target B is the offline fallback: without
-    # $__timeFilter it always returns the last-known point so an offline
-    # detector keeps its last data instead of rendering No Data.
+    # refresh inside 1-3s. Target B is the offline fallback: two last-known
+    # points projected to $__unixEpochFrom/To so an offline detector keeps a
+    # flat last-value line *inside* the visible range instead of
+    # "Data outside time range". ORDER BY time ASC keeps long->wide sorted.
     panel["targets"] = [
         _target(f"""
 SELECT UNIX_TIMESTAMP(dtom) AS time, doserate AS value
 FROM recent
 WHERE serid = {station.serid}
   AND $__timeFilter(dtom)
-ORDER BY dtom
+ORDER BY time ASC
 LIMIT 300
 """, format_="time_series"),
         _target(f"""
-SELECT UNIX_TIMESTAMP(dtom) AS time, doserate AS value
+(SELECT $__unixEpochFrom() AS time, doserate AS value
 FROM recent
 WHERE serid = {station.serid}
 ORDER BY dtom DESC
-LIMIT 1
+LIMIT 1)
+UNION ALL
+(SELECT $__unixEpochTo() AS time, doserate AS value
+FROM recent
+WHERE serid = {station.serid}
+ORDER BY dtom DESC
+LIMIT 1)
+ORDER BY time ASC
 """, format_="time_series", ref_id="B"),
     ]
     panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "color": {"mode": "fixed", "fixedColor": "green"}, "custom": {"axisPlacement": "hidden", "drawStyle": "line", "fillOpacity": 18, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
@@ -323,12 +331,15 @@ def _building_trend(panel_id: int, building: str, x: int, y: int, w: int, h: int
     panel = _panel(panel_id, "timeseries", f"Dose Rate · Gedung {building} · 3 Jam", x, y, w, h)
     panel["description"] = "building-dose-trend"
     # Per-minute aggregation over the narrow indexed recent table keeps the
-    # 3h trend bounded (~180 points/series) and index-friendly via
+    # 3h trend bounded (~180 points/series, max 5 series/building => ~900
+    # rows; LIMIT 2000 gives 2x headroom) and index-friendly via
     # $__timeFilter(r.dtom). Server TZ is Asia/Jakarta, hence
     # UNIX_TIMESTAMP(r.dtom) matches the legacy WIB epoch numerically.
-    # Target B is the offline fallback: one last-known point per detector
-    # without $__timeFilter so an offline series keeps its last data
-    # instead of disappearing (No Data).
+    # ORDER BY time ASC is mandatory: Grafana long->wide fails with
+    # "not sorted in ascending order by time" otherwise.
+    # Target B is the offline fallback: last-known per detector projected to
+    # $__unixEpochFrom/To (inside the visible range) so an offline series
+    # keeps a flat last-value line instead of "Data outside time range".
     panel["targets"] = [
         _target(f"""
 SELECT
@@ -340,12 +351,11 @@ JOIN device d ON d.serid = r.serid
 WHERE r.serid IN ({_station_ids(stations)})
   AND $__timeFilter(r.dtom)
 GROUP BY 1, 2
-ORDER BY 1, 2
-LIMIT 10000
+ORDER BY time ASC, metric ASC
+LIMIT 2000
 """, format_="time_series"),
         _target(f"""
-SELECT
-  UNIX_TIMESTAMP(r.dtom) AS time,
+(SELECT $__unixEpochFrom() AS time,
   CONCAT('[', r.serid, '] ', d.name) AS metric,
   r.doserate AS value
 FROM (
@@ -355,8 +365,21 @@ FROM (
   GROUP BY serid
 ) m
 JOIN recent r ON r.serid = m.serid AND r.dtom = m.dtom
-JOIN device d ON d.serid = r.serid
-LIMIT 15
+JOIN device d ON d.serid = r.serid)
+UNION ALL
+(SELECT $__unixEpochTo() AS time,
+  CONCAT('[', r.serid, '] ', d.name) AS metric,
+  r.doserate AS value
+FROM (
+  SELECT serid, MAX(dtom) AS dtom
+  FROM recent
+  WHERE serid IN ({_station_ids(stations)})
+  GROUP BY serid
+) m
+JOIN recent r ON r.serid = m.serid AND r.dtom = m.dtom
+JOIN device d ON d.serid = r.serid)
+ORDER BY time ASC, metric ASC
+LIMIT 30
 """, format_="time_series", ref_id="B"),
     ]
     panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 3, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}

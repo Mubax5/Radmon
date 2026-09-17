@@ -69,8 +69,10 @@ def test_cleanup_deletes_only_expired_recent_rows():
 
     assert deleted == 3
     sql = "\n".join(statement for statement, _ in connection.cursor_obj.calls).lower()
-    assert "delete from recent" in sql
+    assert "delete" in sql and "from recent" in sql
     assert "interval 3 hour" in sql
+    # Offline last-known per detector must survive retention cleanup.
+    assert "max(dtom)" in sql
     for protected in ("measurement", "alarm", "rawdata"):
         assert f"delete from {protected}" not in sql
         assert f"truncate table {protected}" not in sql
@@ -169,10 +171,10 @@ def test_ensure_schema_evicts_backfill_boundary_rows_before_validation():
     statements = [" ".join(str(sql).split()).lower() for sql, _ in connection.cursor_obj.calls]
     create_view = next(i for i, sql in enumerate(statements) if sql.startswith("create view vrecent"))
     cleanup_delete = next(
-        i for i, sql in enumerate(statements) if sql.startswith("delete from recent where dtom <")
+        i for i, sql in enumerate(statements) if "delete" in sql and "from recent" in sql and "dtom <" in sql
     )
     validate_select = next(
-        i for i, sql in enumerate(statements) if sql.startswith("select count(*) from recent where dtom <")
+        i for i, sql in enumerate(statements) if sql.startswith("select count(*) from recent")
     )
     assert create_view < cleanup_delete < validate_select
     assert connection.commits == 1

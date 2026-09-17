@@ -122,13 +122,26 @@ VALUES (?, ?, ?, ?, ?, ?)
         return mirrored
 
     def cleanup_with_cursor(self, cursor: Any, *, force: bool = False) -> int:
-        """Delete expired rolling rows using an already-open central transaction."""
+        """Delete expired rolling rows, preserving last-known per detector.
+
+        Offline detectors (3001-3004 stale 15 Sep, 5701 Jun) must keep their
+        single last row so Grafana/stat fallback can render last data instead
+        of No Data / Data outside time range. The anti-join on MAX(dtom) keeps
+        at most 15 preserved rows; everything else older than retention is
+        evicted via the indexed dtom range (<5ms for 49k rows).
+        """
         now = self._monotonic()
         if not force and self._last_cleanup and (
             now - self._last_cleanup < self.cleanup_interval_seconds
         ):
             return 0
-        cursor.execute(f"DELETE FROM recent WHERE dtom < {self._cutoff_sql}")
+        cursor.execute(
+            f"""DELETE r FROM recent r
+LEFT JOIN (
+  SELECT serid, MAX(dtom) AS mdtom FROM recent GROUP BY serid
+) m ON m.serid = r.serid AND m.mdtom = r.dtom
+WHERE r.dtom < {self._cutoff_sql} AND m.mdtom IS NULL"""
+        )
         deleted = int(getattr(cursor, "rowcount", 0) or 0)
         self._last_cleanup = now
         return deleted
@@ -186,7 +199,10 @@ SELECT
   rs.suppression_pic,
   rs.suppression_reason
 FROM device d
-LEFT JOIN recent r ON r.serid = d.serid
+LEFT JOIN (
+  SELECT serid, MAX(dtom) AS mdtom FROM recent GROUP BY serid
+) m ON m.serid = d.serid
+LEFT JOIN recent r ON r.serid = m.serid AND r.dtom = m.mdtom
 LEFT JOIN radmon_runtime_status rs ON rs.serid = d.serid
 """
         )
@@ -207,7 +223,15 @@ WHERE dtom >= {self._cutoff_sql}
             raise RuntimeError(
                 "Schema recent rolling tidak sesuai: " + ", ".join(sorted(columns))
             )
-        cursor.execute(f"SELECT COUNT(*) FROM recent WHERE dtom < {self._cutoff_sql}")
+        # Preserved last-known per detector (offline) is allowed to sit outside
+        # retention; only non-last expired rows indicate a retention leak.
+        cursor.execute(
+            f"""SELECT COUNT(*) FROM recent r
+LEFT JOIN (
+  SELECT serid, MAX(dtom) AS mdtom FROM recent GROUP BY serid
+) m ON m.serid = r.serid AND m.mdtom = r.dtom
+WHERE r.dtom < {self._cutoff_sql} AND m.mdtom IS NULL"""
+        )
         row = cursor.fetchone()
         expired = int(self._row_value(row, "COUNT(*)", 0) or 0)
         if expired:
