@@ -166,7 +166,7 @@ SELECT
     WHEN r.doserate >= d.alarmlevel THEN 'ALARM'
     WHEN r.doserate >= d.warnlevel THEN 'ALERT'
     ELSE 'NORMAL'
-  END COLLATE utf8mb4_uca1400_ai_ci AS underlying_status,
+  END AS underlying_status,
   CASE
     WHEN r.dtom IS NULL OR r.doserate IS NULL THEN 'OFFLINE'
     WHEN TIMESTAMPDIFF(
@@ -224,6 +224,10 @@ WHERE dtom >= {self._cutoff_sql}
                     cursor.execute("DELETE FROM recent")
                     self._backfill(cursor)
                     self._create_view(cursor)
+                    # A slow multi-minute backfill lets the rolling cutoff
+                    # advance past rows copied at its start; evict them before
+                    # validation instead of failing a healthy reconcile.
+                    self.cleanup_with_cursor(cursor, force=True)
                     self._validate_rolling(cursor)
                     cursor.execute("DROP TABLE IF EXISTS recent_radmon_legacy")
                     connection.commit()
@@ -244,6 +248,7 @@ WHERE dtom >= {self._cutoff_sql}
                 else:
                     cursor.execute("RENAME TABLE recent_radmon_next TO recent")
                 self._create_view(cursor)
+                self.cleanup_with_cursor(cursor, force=True)
                 self._validate_rolling(cursor)
                 cursor.execute("DROP TABLE IF EXISTS recent_radmon_legacy")
             connection.commit()
@@ -264,6 +269,7 @@ WHERE dtom >= {self._cutoff_sql}
                 cursor.execute("DELETE FROM recent")
                 self._backfill(cursor)
                 self._create_view(cursor)
+                self.cleanup_with_cursor(cursor, force=True)
                 self._validate_rolling(cursor)
             connection.commit()
             self._last_cleanup = self._monotonic()

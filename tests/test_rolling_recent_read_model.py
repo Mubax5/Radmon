@@ -140,6 +140,45 @@ def test_archive_rebuild_delegates_to_bounded_rolling_manager():
     assert "COUNT(*)" not in block
 
 
+def test_ensure_schema_evicts_backfill_boundary_rows_before_validation():
+    """A slow multi-minute backfill lets the rolling cutoff advance past rows
+    copied at its start; ensure_schema must evict them before validation
+    instead of failing a healthy reconcile with vrecent already recreated."""
+    from radmon.recent_read_model import ROLLING_COLUMNS, RollingRecentManager
+
+    class _SchemaCursor(_RecordingCursor):
+        def fetchall(self):
+            if self.calls and "information_schema.columns" in self.calls[-1][0].lower():
+                return [(column,) for column in sorted(ROLLING_COLUMNS)]
+            return []
+
+        def fetchone(self):
+            if self.calls and self.calls[-1][0].lower().startswith("select count(*)"):
+                return (0,)
+            return None
+
+    class _SchemaConnection(_RecordingConnection):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cursor_obj = _SchemaCursor()
+
+    connection = _SchemaConnection()
+    manager = RollingRecentManager(Settings(), connection_factory=lambda: connection)
+    manager.ensure_schema()
+
+    statements = [" ".join(str(sql).split()).lower() for sql, _ in connection.cursor_obj.calls]
+    create_view = next(i for i, sql in enumerate(statements) if sql.startswith("create view vrecent"))
+    cleanup_delete = next(
+        i for i, sql in enumerate(statements) if sql.startswith("delete from recent where dtom <")
+    )
+    validate_select = next(
+        i for i, sql in enumerate(statements) if sql.startswith("select count(*) from recent where dtom <")
+    )
+    assert create_view < cleanup_delete < validate_select
+    assert connection.commits == 1
+    assert connection.rollbacks == 0
+
+
 def test_grafana_continuous_dose_queries_use_vrecent_not_measurement():
     dashboards = build_dashboard_payloads()
     saw_time_series = False

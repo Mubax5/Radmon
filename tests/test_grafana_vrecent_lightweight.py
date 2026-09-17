@@ -120,8 +120,12 @@ def test_status_comparisons_carry_explicit_collation():
 
 def test_vrecent_status_columns_pin_collation():
     source = inspect.getsource(RollingRecentManager._create_view)
+    # Only the literal-only status CASE may pin utf8mb4 collation: pinning a
+    # CASE that merges the legacy utf8mb3 underlying_dose_status column raises
+    # "COLLATION is not valid for CHARACTER SET 'utf8mb3'" and aborts server
+    # startup with vrecent dropped.
     assert source.count("END COLLATE utf8mb4_uca1400_ai_ci AS status") == 1
-    assert source.count("END COLLATE utf8mb4_uca1400_ai_ci AS underlying_status") == 1
+    assert "END COLLATE utf8mb4_uca1400_ai_ci AS underlying_status" not in source
 
 
 def test_vrecent_view_exposes_dashboard_contract_columns():
