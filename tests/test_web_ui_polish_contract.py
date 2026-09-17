@@ -91,3 +91,71 @@ def test_alarm_events_remain_available_when_suppression_fetch_fails():
     assert "Promise.allSettled" in alarms
     assert "suppressionError" in alarms
     assert "Muat ulang suppression" in alarms
+
+
+def test_alarms_page_renders_full_content_on_suppression_partial_success():
+    alarms = read("pages/AlarmsPage.tsx")
+    # Partial-success: event + suppression dimuat lewat allSettled, suppression
+    # gagal tidak boleh mengosongkan items atau menyembunyikan operasi.
+    assert "Promise.allSettled" in alarms
+    assert "/api/v1/control/alarm-events" in alarms
+    assert "/api/v1/control/suppressions?active_only=true" in alarms
+    assert "<AlarmOperations events={items} suppressions={suppressions}" in alarms
+    # Event gagal pada load awal harus tampilkan error + retry eksplisit,
+    # bukan skeleton/blank putih selamanya.
+    assert "Muat ulang alarm" in alarms
+    assert "Memuat alarm" in alarms
+    assert "!items ? <LoadingCard" not in alarms
+    # Data basi saat live refresh gagal tetap ditampilkan dengan penanda usang.
+    assert "mungkin usang" in alarms
+
+
+def test_alarms_overlay_keeps_background_mounted_and_stacked():
+    css = read("radmon.css") + "\n" + read("radmon-overlays.css")
+    alarms = read("pages/AlarmsPage.tsx")
+    actions = read("Actions.tsx")
+    # Kontrak lapisan: backdrop 80 < dialog 90 < select portal 100 < toast 110.
+    assert "--radmon-layer-backdrop" in css
+    assert "--radmon-layer-dialog: 90" in css
+    assert "--radmon-layer-select: 100" in css
+    assert "--radmon-layer-toast: 110" in css
+    assert '[role="presentation"]' in css or "backdrop" in css.lower()
+    assert '[role="dialog"]' in css
+    assert "[data-kumo-select-positioner]" in css
+    assert "z-index: var(--radmon-layer-select) !important" in css
+    # Modal portal tidak boleh meng-unmount/menyembunyikan background halaman.
+    assert 'body:has([role="dialog"])' in css
+    assert ".page-stack" in css
+    assert "visibility: visible" in css
+    # State dialog hidup di Actions, bukan di page, sehingga background tetap mounted.
+    assert "respondOpen" not in alarms
+    assert 'className="radmon-dialog mobile-sheet-dialog"' in actions
+
+
+def test_alarms_dropdown_filled_from_active_with_empty_state():
+    actions = read("Actions.tsx")
+    # Dropdown wajib diturunkan dari event ALARM ACTIVE.
+    assert "ALARM" in actions and "ACTIVE" in actions
+    assert "eventItems" in actions
+    assert "Pilih event" in actions
+    # Empty-state jelas saat tidak ada alarm aktif, plus hitungan saat ada.
+    assert "Tidak ada alarm aktif" in actions
+    assert "alarm-empty-hint" in actions
+    assert 'role="status"' in actions
+    # Pilihan basi dibersihkan saat live refresh menyelesaikan event terpilih.
+    assert "active.some" in actions
+    assert 'setEventId("")' in actions
+
+
+def test_alarms_loading_is_skeleton_not_blank():
+    alarms = read("pages/AlarmsPage.tsx")
+    ui = read("ui.tsx")
+    css = read("radmon.css")
+    assert "Memuat alarm" in alarms
+    assert "LoadingCard" in alarms
+    assert 'role="status"' in ui
+    assert 'aria-busy="true"' in ui
+    assert "skeleton-line" in ui
+    assert "loading-skeleton-card" in css
+    assert "skeleton-line" in css
+    assert "radmon-skeleton-shimmer" in css

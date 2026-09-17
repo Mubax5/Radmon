@@ -137,6 +137,28 @@ img { max-width: 100%; }
 .cell-subtle { color: #6b7280; font-size: 11px; margin-top: 2px; overflow-wrap: anywhere; }
 .empty-card, .system-card { padding: 18px; color: #6b7280; min-width: 0; }
 .error-card { padding: 16px; border-color: #fecaca; background: #fff7f7; color: #991b1b; overflow-wrap: anywhere; }
+/* Loading skeleton: halaman tidak boleh blank putih saat fetch awal. */
+.loading-skeleton-card { display: grid; gap: 12px; }
+.skeleton-text { font-size: 13px; font-weight: 600; color: #6b7280; }
+.skeleton-block { display: grid; gap: 8px; }
+.skeleton-line {
+  height: 12px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #e5e7eb 25%, #f3f4f6 50%, #e5e7eb 75%);
+  background-size: 200% 100%;
+  animation: radmon-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+.skeleton-line.short { width: 62%; }
+@keyframes radmon-skeleton-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+/* Kontrak alarm: background halaman tetap ter-render/visible saat dialog terbuka.
+   Backdrop hanya memudarkan, tidak meng-unmount atau menyembunyikan .page-stack. */
+body:has([role="dialog"]) .page-stack { visibility: visible; }
+.alarm-suppression-error { display: grid; gap: 10px; align-items: start; }
+.alarm-events-error { display: grid; gap: 10px; align-items: start; }
+.alarm-empty-hint { margin: 0; }
 .filter-card { padding: 14px; margin-bottom: 0; min-width: 0; }
 .filter-card > * { width: 100%; }
 .station-filter-grid { display: grid; grid-template-columns: 1fr; gap: 12px; min-width: 0; width: 100%; }

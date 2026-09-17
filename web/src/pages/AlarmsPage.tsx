@@ -127,11 +127,16 @@ export function AlarmsPage() {
 
   const summary = useMemo(() => {
     const events = items ?? [];
-    const active = events.filter((event) => event.kind === "ALARM" && event.status === "ACTIVE");
+    const active = events.filter(
+      (event) => String(event.kind).toUpperCase() === "ALARM" && String(event.status).toUpperCase() === "ACTIVE",
+    );
     const retriggerLocked = events.filter((event) => event.kind === "RETRIGGER_LOCKED").length;
     const suppressed = events.filter((event) => event.kind === "SUPPRESSED").length;
     return { active, retriggerLocked, suppressed, total: events.length };
   }, [items]);
+
+  const isInitialLoading = items === null && !error;
+  const eventsFailedOnFirstLoad = items === null && Boolean(error);
 
   return (
     <div className="page-stack">
@@ -140,15 +145,24 @@ export function AlarmsPage() {
         description="Alarm aktif diprioritaskan; suppression dan riwayat event tetap dilindungi oleh role dan policy PIN operator."
         action={<Button variant="secondary" onClick={() => void load()}>Muat ulang</Button>}
       />
-      {error ? <ErrorCard message={error} /> : null}
-      {!items ? <LoadingCard /> : (
+      {error && items !== null ? <ErrorCard message={`Data alarm mungkin usang: ${error}`} /> : null}
+      {isInitialLoading ? <LoadingCard label="Memuat alarm…" /> : null}
+      {eventsFailedOnFirstLoad ? (
+        <div className="alarm-events-error">
+          <ErrorCard message={error} />
+          <div className="form-actions">
+            <Button variant="secondary" onClick={() => void load()}>Muat ulang alarm</Button>
+          </div>
+        </div>
+      ) : null}
+      {items ? (
         <>
           <PageSection
             title="Alarm aktif"
             description="Event yang memerlukan perhatian operator segera."
             className="active-alarm-section"
           >
-            <div className="active-alarm-list">
+            <div className="active-alarm-list" aria-live="polite">
               <EventCards events={summary.active} />
             </div>
           </PageSection>
@@ -177,7 +191,7 @@ export function AlarmsPage() {
             />
           </PageSection>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

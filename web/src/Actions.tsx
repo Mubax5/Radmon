@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button, Dialog, Input, LayerCard, Select } from "@cloudflare/kumo";
 import { api, type Role } from "./api";
 
@@ -41,7 +41,10 @@ function Feedback({ state }: { state: { kind: "ok" | "error"; text: string } | n
 }
 
 export function AlarmOperations({ events, suppressions, onChanged }: { events: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void }) {
-  const active = useMemo(() => events.filter((event) => event.kind === "ALARM" && event.status === "ACTIVE"), [events]);
+  const active = useMemo(
+    () => events.filter((event) => String(event.kind).toUpperCase() === "ALARM" && String(event.status).toUpperCase() === "ACTIVE"),
+    [events],
+  );
   const eventItems = useMemo(
     () => Object.fromEntries(active.map((item) => [item.event_id, `SERID ${item.serid} · ${item.measured_value ?? "—"}`])),
     [active],
@@ -63,6 +66,12 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
   const [cancelPin, setCancelPin] = useState("");
   const [pending, setPending] = useState<"respond" | "suppress" | "cancel" | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+
+  // Dropdown event aktif terisi dari ALARM ACTIVE. Bersihkan pilihan basi saat
+  // live refresh menyelesaikan event yang sedang dipilih di dalam dialog.
+  useEffect(() => {
+    if (eventId && !active.some((item) => item.event_id === eventId)) setEventId("");
+  }, [active, eventId]);
 
   function resetResponse() {
     setEventId("");
@@ -185,13 +194,22 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
               </Dialog.Description>
               <form className="action-form dialog-form" onSubmit={respond}>
                 <Select
-                  label="Event aktif"
+                  label={`Event aktif (${active.length})`}
                   placeholder="Pilih event…"
                   items={eventItems}
                   value={eventId || undefined}
                   onValueChange={(value) => setEventId(String(value ?? ""))}
                   disabled={active.length === 0 || pending === "respond"}
                 />
+                {active.length === 0 ? (
+                  <p className="cell-subtle alarm-empty-hint" role="status">
+                    Tidak ada alarm aktif saat ini. Respons tersedia setelah ada event ALARM ACTIVE.
+                  </p>
+                ) : (
+                  <p className="cell-subtle alarm-empty-hint" role="status">
+                    {active.length} alarm aktif tersedia untuk direspons.
+                  </p>
+                )}
                 <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} disabled={pending === "respond"} />
                 <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} disabled={pending === "respond"} />
                 <Input label="Alasan" value={reason} onChange={(e) => setReason(e.target.value)} disabled={pending === "respond"} />

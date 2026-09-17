@@ -114,8 +114,17 @@ export function JsonTable({ rows, empty }: { rows: Array<Record<string, unknown>
   );
 }
 
-export function LoadingCard() {
-  return <LayerCard className="empty-card">Memuat…</LayerCard>;
+export function LoadingCard({ label = "Memuat…" }: { label?: string } = {}) {
+  return (
+    <LayerCard className="empty-card loading-skeleton-card" role="status" aria-busy="true" aria-label={label}>
+      <span className="skeleton-text">{label}</span>
+      <div className="skeleton-block" aria-hidden="true">
+        <div className="skeleton-line" />
+        <div className="skeleton-line short" />
+        <div className="skeleton-line" />
+      </div>
+    </LayerCard>
+  );
 }
 
 export function ErrorCard({ message }: { message: string }) {
