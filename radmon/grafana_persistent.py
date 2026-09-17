@@ -5,7 +5,7 @@ import os
 import socket
 
 from .grafana_bootstrap import DATASOURCE_UID, GrafanaBootstrap
-from .grafana_tv import PLAYLIST_UID, build_playlist_payload, playlist_url
+from .grafana_tv import PAGE_UIDS, PLAYLIST_UID, build_playlist_payload, playlist_url
 
 
 class PersistentGrafanaBootstrap(GrafanaBootstrap):
@@ -80,9 +80,19 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         saved_dashboard: dict,
         factory_dashboard: dict,
     ) -> tuple[dict, bool]:
-        """Refresh RadMon-owned SQL while preserving operator-owned presentation state."""
+        """Refresh managed state while preserving operator-owned presentation state."""
         migrated = deepcopy(saved_dashboard)
         changed = False
+
+        # Grafana persists the dashboard root time range separately from panel
+        # queries. Sync only this managed page-2 setting; never replace the
+        # saved dashboard or its panel layout.
+        is_page_two = str(factory_dashboard.get("uid") or "") == PAGE_UIDS[1]
+        if is_page_two:
+            factory_time = factory_dashboard.get("time")
+            if isinstance(factory_time, dict) and migrated.get("time") != factory_time:
+                migrated["time"] = deepcopy(factory_time)
+                changed = True
 
         if migrated.get("editable") is False:
             migrated["editable"] = True
@@ -113,6 +123,16 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
             if factory_datasource is not None and panel.get("datasource") != factory_datasource:
                 panel["datasource"] = deepcopy(factory_datasource)
                 changed = True
+
+            # Migrate the installed factory label, but leave an operator's
+            # deliberate panel rename intact.
+            if is_page_two and factory_panel.get("description") == "building-dose-trend":
+                saved_title = panel.get("title")
+                if isinstance(saved_title, str) and saved_title.endswith(" · 3 Jam"):
+                    factory_title = factory_panel.get("title")
+                    if saved_title != factory_title:
+                        panel["title"] = factory_title
+                        changed = True
 
         return migrated, changed
 

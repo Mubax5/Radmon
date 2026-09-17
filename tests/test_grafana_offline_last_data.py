@@ -3,8 +3,8 @@
 User contract:
 - Grafana + admin panel wajib tampilkan data TERAKHIR jika offline,
   termasuk grafik page 1. Page 2 disesuaikan, page 3 sisanya.
-- Page 1 grafik pakai recent + $__timeFilter + LIMIT kecil (100-300).
-- Page 2 tren pakai agregasi per-menit dari recent + LIMIT <= 10000,
+- Page 1 grafik pakai recent + $__timeFilter + latest-10.
+- Page 2 tren pakai agregasi per-menit dari recent + LIMIT <= 600,
   dengan fallback last-known jika offline.
 - Status/offline logic terpusat di vrecent (panel tidak menduplikasi
   CASE status; subquery latest yang berat wajib dari recent berindeks,
@@ -96,7 +96,7 @@ def test_page2_trends_bounded_with_offline_fallback():
         assert "FROM recent" in main
         assert "$__timeFilter(" in main
         assert "GROUP BY" in main
-        assert _limit_value(main) <= 10000
+        assert _limit_value(main) <= 600
         assert "FROM measurement" not in fallback
         assert "$__timeFilter" not in fallback
         assert "LIMIT" in fallback

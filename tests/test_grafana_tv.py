@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import re
 
 from radmon.grafana_tv import (
     BUILDING_PAGE_ORDER,
@@ -74,7 +75,11 @@ def test_page_one_live_values_times_and_sparklines_use_rolling_vrecent():
         assert "CONVERT_TZ" not in sql
         assert "UNIX_TIMESTAMP(dtom)" in sql
         assert "$__timeFilter(dtom)" in sql
-        assert "LIMIT 300" in sql
+        assert re.search(
+            r"FROM recent.*ORDER BY dtom DESC\s+LIMIT 10.*\) latest\s+ORDER BY time ASC",
+            sql,
+            re.IGNORECASE | re.DOTALL,
+        )
     for panel in timestamp:
         sql = panel["targets"][0]["rawSql"]
         assert "FROM vrecent" in sql
@@ -86,11 +91,12 @@ def test_page_one_live_values_times_and_sparklines_use_rolling_vrecent():
         assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
 
 
-def test_page_two_three_hour_trends_and_live_summary_use_rolling_vrecent():
+def test_page_two_one_hour_trends_and_live_summary_use_rolling_vrecent():
     page2 = build_dashboard_payloads()[1]
     trends = [panel for panel in page2["panels"] if panel.get("description") == "building-dose-trend"]
     assert len(trends) == 5
-    assert {panel["title"] for panel in trends} == {f"Dose Rate · Gedung {building} · 3 Jam" for building in BUILDING_PAGE_ORDER}
+    assert page2["time"] == {"from": "now-1h", "to": "now"}
+    assert {panel["title"] for panel in trends} == {f"Dose Rate · Gedung {building} · 1 Jam" for building in BUILDING_PAGE_ORDER}
     for panel in trends:
         sql = panel["targets"][0]["rawSql"]
         assert "FROM recent" in sql
@@ -100,7 +106,7 @@ def test_page_two_three_hour_trends_and_live_summary_use_rolling_vrecent():
         assert "UNIX_TIMESTAMP(r.dtom)" in sql
         assert "$__timeFilter(r.dtom)" in sql
         assert "GROUP BY" in sql
-        assert "LIMIT 2000" in sql
+        assert "LIMIT 600" in sql
     summaries = {
         panel.get("title"): panel
         for panel in page2["panels"]

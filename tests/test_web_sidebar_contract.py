@@ -20,7 +20,7 @@ def read(path: str) -> str:
 
 def test_sidebar_collapse_trigger_lives_in_header_not_footer():
     desktop = read("layout/DesktopShell.tsx")
-    header = desktop.split("<Sidebar.Header>", 1)[1].split("</Sidebar.Header>", 1)[0]
+    header = desktop.split("<Sidebar.Header", 1)[1].split("</Sidebar.Header>", 1)[0]
     footer = desktop.split("<Sidebar.Footer>", 1)[1].split("</Sidebar.Footer>", 1)[0]
     assert "<Sidebar.Trigger" in header, "tombol collapse wajib di atas (header)"
     assert "<Sidebar.Trigger" not in footer, "tombol collapse tidak boleh di footer"
@@ -76,10 +76,10 @@ def test_api_errors_surface_backend_detail_for_401_403_409():
 
 def test_alarm_response_posts_pin_to_real_event_endpoint():
     actions = read("Actions.tsx")
-    assert "/api/v1/control/alarm-events/${encodeURIComponent(eventId)}/response" in actions
+    assert "/api/v1/control/alarm-events/${encodeURIComponent(selectedEventId)}/response" in actions
     assert '"pin, action, pic, reason"' in actions or "{ pin, action, pic, reason }" in actions
     # Tombol kirim terkunci sampai event + PIC + alasan + PIN terisi.
-    assert "!eventId || !pic || !reason || !pin" in actions
+    assert "!selectedEventId || !pic || !reason || !pin" in actions
 
 
 def test_suppression_cancel_is_real_api_call_with_pin_and_reason():

@@ -17,12 +17,12 @@ Landing RadMon tidak membungkus Grafana dengan React/header/sign-in. User anonym
 
 Dashboard Grafana yang sudah tersimpan adalah **authoritative state**.
 
-Factory generator `radmon/grafana_tv.py` hanya digunakan untuk membuat resource yang belum ada. Startup RadMon:
+Factory generator `radmon/grafana_tv.py` membuat resource yang belum ada dan menjadi sumber kontrak query panel RadMon. Startup RadMon:
 
-- tidak PUT/overwrite datasource yang sudah ada;
-- tidak overwrite dashboard existing;
-- tidak rewrite playlist existing;
-- hanya melakukan one-time compatibility unlock bila dashboard legacy masih `editable=false`, dengan mempertahankan JSON/panel/layout/query yang tersimpan.
+- memperbarui konfigurasi datasource agar mengikuti settings aktif;
+- hanya menyegarkan target/datasource panel RadMon yang dikenal;
+- melakukan migrasi aman range root page 2 dan label trend factory;
+- mempertahankan JSON/panel/layout/panel custom operator yang tersimpan.
 
 Karena itu Administrator dapat membuka `localhost:3300`, Edit, Save, lalu perubahan langsung dipakai monitoring dan tetap ada setelah:
 
@@ -84,7 +84,7 @@ Panel memakai Grafana unit `dateTimeAsLocal`, menghindari regresi `No data` dari
 
 ## Page 2 factory
 
-Trend 3 jam sebagai small-multiple per gedung plus summary kondisi realtime. Contract Y-axis `0..1 µSv/h` factory tetap dipertahankan sampai Administrator mengubahnya di Grafana.
+Trend 1 jam sebagai small-multiple per gedung plus summary kondisi realtime. Contract Y-axis `0..1 µSv/h` factory tetap dipertahankan sampai Administrator mengubahnya di Grafana.
 
 ## Page 3 factory
 

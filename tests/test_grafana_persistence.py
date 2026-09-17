@@ -6,7 +6,7 @@ import pytest
 
 from radmon.config import Settings
 from radmon.grafana_persistent import PersistentGrafanaBootstrap
-from radmon.grafana_tv import DASHBOARD_UIDS, PLAYLIST_UID
+from radmon.grafana_tv import DASHBOARD_UIDS, PAGE_UIDS, PLAYLIST_UID
 
 
 def test_existing_grafana_refreshes_datasource_credentials_without_overwriting_saved_resources(tmp_path: Path) -> None:
@@ -37,7 +37,7 @@ def test_existing_grafana_refreshes_datasource_credentials_without_overwriting_s
     bootstrap._request_json = request  # type: ignore[method-assign]
     assert bootstrap._provision_via_api("http://localhost:3300") is True
 
-    assert len(writes) == 1
+    assert len(writes) == 2
     method, url, payload = writes[0]
     assert method == "PUT"
     assert url.endswith("/api/datasources/uid/ipradmon-mysql")
@@ -45,6 +45,10 @@ def test_existing_grafana_refreshes_datasource_credentials_without_overwriting_s
     assert payload["database"] == "ipradmon"
     assert payload["user"] == "radmon_reader"
     assert payload["secureJsonData"]["password"] == "current-secret"
+    assert writes[1][0] == "POST"
+    assert writes[1][1].endswith("/api/dashboards/db")
+    assert writes[1][2]["dashboard"]["uid"] == PAGE_UIDS[1]
+    assert writes[1][2]["dashboard"]["time"] == {"from": "now-1h", "to": "now"}
 
 
 def test_persisted_managed_dashboard_queries_are_refreshed_without_clobbering_layout(tmp_path: Path) -> None:
@@ -120,6 +124,27 @@ def test_persisted_managed_dashboard_queries_are_refreshed_without_clobbering_la
     assert "measurement" not in str(managed["targets"]).lower()
     assert "vrecent" in str(managed["targets"]).lower()
     assert next(panel for panel in migrated["panels"] if panel.get("id") == 999)["title"] == "Operator custom panel"
+
+
+def test_persisted_page_two_time_and_factory_titles_are_migrated_safely(tmp_path: Path) -> None:
+    bootstrap = PersistentGrafanaBootstrap(Settings(), project_root=tmp_path)
+    factory = next(item for item in bootstrap._dashboard_payloads() if item["uid"] == PAGE_UIDS[1])
+    saved = deepcopy(factory)
+    saved["time"] = {"from": "now-3h", "to": "now"}
+    saved["panels"][4]["gridPos"] = {"x": 3, "y": 7, "w": 18, "h": 6}
+    for panel in saved["panels"]:
+        if panel.get("description") == "building-dose-trend":
+            panel["title"] = panel["title"].replace("1 Jam", "3 Jam")
+    custom = {"id": 999, "title": "Operator custom panel", "gridPos": {"x": 0, "y": 20, "w": 24, "h": 2}}
+    saved["panels"].append(custom)
+
+    migrated, changed = bootstrap._refresh_managed_dashboard_queries(saved, factory)
+
+    assert changed is True
+    assert migrated["time"] == {"from": "now-1h", "to": "now"}
+    assert all(panel["title"].endswith(" · 1 Jam") for panel in migrated["panels"] if panel.get("description") == "building-dose-trend")
+    assert migrated["panels"][4]["gridPos"] == {"x": 3, "y": 7, "w": 18, "h": 6}
+    assert migrated["panels"][-1] == custom
 
 
 def test_legacy_readonly_dashboard_is_unlocked_without_restoring_factory_layout(tmp_path: Path) -> None:

@@ -104,7 +104,7 @@ export function UsersPage() {
   const createUserAction = (
     <Dialog.Root>
       <Dialog.Trigger render={(props) => <Button {...props} variant="primary">Buat pengguna</Button>} />
-      <Dialog className="radmon-dialog mobile-sheet-dialog">
+      <Dialog className="radmon-dialog mobile-sheet-dialog" data-testid="user-create-dialog">
         <div className="mobile-sheet-content">
           <div className="mobile-sheet-handle" aria-hidden />
           <Dialog.Title>Buat pengguna</Dialog.Title>

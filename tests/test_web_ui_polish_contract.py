@@ -64,6 +64,22 @@ def test_mobile_dialogs_are_marked_for_sheet_treatment():
     assert 'className="radmon-dialog mobile-sheet-dialog"' in users
 
 
+def test_response_and_role_controls_are_native_and_browser_selectable():
+    actions = read("Actions.tsx")
+    users = read("pages/UsersPage.tsx")
+    css = read("ui-polish.css")
+    assert 'testId="alarm-event-select"' in actions
+    assert 'testId="alarm-action-select"' in actions
+    assert 'testId="user-role-select"' in actions
+    assert 'name="action"' in actions and 'name="role"' in actions
+    assert 'value={selectedEventId}' in actions
+    assert 'body: JSON.stringify({' in actions
+    assert 'role,' in actions
+    assert 'data-testid="user-create-dialog"' in users
+    assert ".native-select-field" in css
+    assert ".native-select" in css
+
+
 def test_select_portals_have_a_layer_contract_above_dialog_and_navigation():
     css = read("radmon.css") + "\n" + read("radmon-overlays.css")
     assert "--radmon-layer-select: 100" in css
@@ -73,6 +89,18 @@ def test_select_portals_have_a_layer_contract_above_dialog_and_navigation():
     assert ".mobile-sheet-dialog" not in css or "overflow: visible" not in css
     for path in ("pages/StationsPage.tsx", "pages/HistoryPage.tsx", "pages/ArchivesPage.tsx", "Actions.tsx"):
         assert "<Select" in read(path)
+
+
+def test_sidebar_icons_have_fixed_geometry_and_consistent_mobile_breakpoint():
+    desktop = read("layout/DesktopShell.tsx")
+    css = read("radmon.css") + "\n" + read("ui-polish.css")
+    responsive = read("responsive.ts")
+    assert 'data-testid="sidebar-collapse-trigger"' in desktop
+    assert 'mobileBreakpoint={768}' in desktop
+    assert "sidebar-icon-wrapper" in desktop
+    assert "width: 24px" in css and "height: 24px" in css
+    assert "(max-width: 767px)" in responsive
+    assert "@media (min-width: 768px)" in css
 
 
 def test_alarm_operations_offer_preset_duration_and_active_cancellation_ui():

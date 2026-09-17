@@ -55,13 +55,13 @@ export function DesktopShell({
   const allowed = allowedRoutes(user.role);
 
   return (
-    <Sidebar.Provider defaultOpen>
+    <Sidebar.Provider defaultOpen mobileBreakpoint={768}>
       <div className="app-shell desktop-shell">
         <Sidebar>
-          <Sidebar.Header>
+          <Sidebar.Header className="sidebar-header">
             <div className="sidebar-brand">
               <img className="sidebar-logo" src={brinLogo} alt="BRIN" />
-              <Sidebar.Trigger className="sidebar-collapse-button" />
+              <Sidebar.Trigger className="sidebar-collapse-button" data-testid="sidebar-collapse-trigger" />
             </div>
           </Sidebar.Header>
           <Sidebar.Content>
@@ -74,7 +74,9 @@ export function DesktopShell({
                     active={route === item.id}
                     onClick={() => navigate(item.id)}
                   >
-                    <NavigationIcon route={item.id} />
+                    <span className="sidebar-icon-wrapper" aria-hidden="true">
+                      <NavigationIcon route={item.id} />
+                    </span>
                     <span>{item.label}</span>
                   </Sidebar.MenuButton>
                 ))}
@@ -84,7 +86,9 @@ export function DesktopShell({
               <Sidebar.GroupLabel>Monitoring</Sidebar.GroupLabel>
               <Sidebar.Menu>
                 <Sidebar.MenuButton onClick={() => window.open("/", "_blank", "noopener,noreferrer") }>
-                  <MonitorPlay size={18} weight="regular" className="nav-icon" aria-hidden />
+                  <span className="sidebar-icon-wrapper" aria-hidden="true">
+                    <MonitorPlay size={18} weight="regular" className="nav-icon" aria-hidden />
+                  </span>
                   <span>Monitoring penuh</span>
                 </Sidebar.MenuButton>
               </Sidebar.Menu>

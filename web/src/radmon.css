@@ -105,6 +105,15 @@ img { max-width: 100%; }
 .sidebar-logo { display: block; width: 112px; max-width: calc(100% - 58px); height: auto; flex: 0 1 auto; object-fit: contain; }
 .sidebar-brand strong { font-size: 14px; font-weight: 600; white-space: nowrap; }
 .nav-icon { flex: 0 0 auto; }
+.sidebar-icon-wrapper {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  display: inline-grid;
+  place-items: center;
+  line-height: 0;
+}
+.sidebar-icon-wrapper .nav-icon { display: block; }
 .account-card { display: flex; gap: 10px; align-items: center; justify-content: space-between; padding: 8px; min-width: 0; }
 .account-card > div { min-width: 0; display: grid; }
 .account-card strong { overflow: hidden; text-overflow: ellipsis; font-size: 13px; white-space: nowrap; }
@@ -202,7 +211,7 @@ body:has([role="dialog"]) .page-stack { visibility: visible; }
 .trend-chart svg { display: block; width: 100%; height: auto; min-height: 180px; }
 .trend-chart-empty { min-height: 160px; display: grid; place-items: center; color: #6b7280; font-size: 13px; }
 
-@media (min-width: 640px) {
+@media (min-width: 768px) {
   .desktop-shell { min-height: 100dvh; display: flex; }
   .mobile-shell { display: none; }
   .content-shell { padding: 24px 22px 48px; }

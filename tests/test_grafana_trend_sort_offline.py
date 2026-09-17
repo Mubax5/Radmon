@@ -11,7 +11,7 @@ Kontrak:
 - spark page1 + tren page2 wajib punya fallback last-known TANPA $__timeFilter
   yang memproyeksikan waktu ke dalam range dashboard via $__unixEpochTo()/From()
   (bukan UNIX_TIMESTAMP(dtom) tua di luar range) sehingga offline tetap tampil.
-- spark LIMIT 100-300, tren per-menit LIMIT <= 2000, tanpa CONVERT_TZ per-baris,
+- spark latest-10, tren per-menit LIMIT <= 600, tanpa CONVERT_TZ per-baris,
   tanpa FROM measurement, newest dari recent (PK) bukan vrecent.
 """
 
@@ -83,7 +83,7 @@ def test_page1_sparkline_offline_last_data_inside_range():
         assert "FROM recent" in main
         assert "$__timeFilter(dtom)" in main
         assert "CONVERT_TZ" not in main
-        assert 100 <= _limit_value(main) <= 300
+        assert _limit_value(main) == 10
         # Fallback offline: tanpa timefilter, proyeksikan ke dalam range
         # via $__unixEpochTo/From (bukan timestamp tua di luar range).
         assert "FROM recent" in fallback
@@ -105,7 +105,7 @@ def test_page2_trend_offline_last_data_inside_range_and_bounded():
         assert "$__timeFilter(" in main
         assert "GROUP BY" in main
         assert "CONVERT_TZ" not in main
-        assert _limit_value(main) <= 2000, f"trend per-menit wajib LIMIT rendah: {main[:200]}"
+        assert _limit_value(main) <= 600, f"trend per-menit wajib LIMIT rendah: {main[:200]}"
         assert "FROM measurement" not in fallback
         assert "$__timeFilter" not in fallback
         assert ("$__unixEpochTo()" in fallback or "$__unixEpochFrom()" in fallback), (

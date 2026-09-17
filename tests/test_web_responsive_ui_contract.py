@@ -27,9 +27,9 @@ def test_mobile_first_css_has_exact_breakpoints_safe_areas_and_no_unsafe_page_wi
     css = read("radmon.css")
     assert "100dvh" in css
     assert "env(safe-area-inset-bottom" in css
-    assert "@media (min-width: 640px)" in css
+    assert "@media (min-width: 768px)" in css
     assert "@media (min-width: 1024px)" in css
-    assert "@media (max-width: 640px)" not in css
+    assert "@media (max-width: 767px)" not in css
     assert "100vw" not in css
     assert "prefers-reduced-motion" in css
 

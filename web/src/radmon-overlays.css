@@ -4,6 +4,8 @@
    Keep backdrop above application chrome and the popup above its backdrop. */
 body .fixed.inset-0.bg-kumo-recessed.opacity-80[role="presentation"] {
   z-index: var(--radmon-layer-backdrop) !important;
+  background: rgba(17, 24, 39, .42) !important;
+  opacity: 1 !important;
 }
 
 /* Kumo 2.13.2 Dialog popup uses this fixed centered geometry. The role selector
@@ -16,6 +18,22 @@ body .fixed.top-1\/2.left-1\/2.max-w-lg {
   max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
   overflow-y: auto;
   overscroll-behavior-y: contain;
+}
+
+/* Base UI/Kumo owns focus, Escape, and body scroll locking. This fallback
+   keeps the document locked while an open portal dialog is present. */
+body:has([role="dialog"]:not([hidden])) {
+  overflow: hidden;
+}
+
+body [role="dialog"] .mobile-sheet-content {
+  min-height: 0;
+}
+
+body [role="dialog"] .native-select,
+body [role="dialog"] select {
+  position: relative;
+  z-index: 1;
 }
 
 /* Select menus remain in Kumo's body portal so a mobile sheet cannot clip them.
@@ -35,7 +53,7 @@ body .kumo-toast-viewport {
 
 /* Mobile is an app shell: content owns the scrolling region and bottom navigation
    owns layout space. Nothing actionable can sit underneath the navigation. */
-@media (max-width: 639px) {
+@media (max-width: 767px) {
   .mobile-shell {
     height: 100dvh;
     min-height: 100dvh;

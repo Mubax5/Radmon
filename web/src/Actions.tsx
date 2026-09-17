@@ -51,6 +51,47 @@ function Feedback({ state }: { state: { kind: "ok" | "error"; text: string } | n
   return <div className={state.kind === "ok" ? "form-success" : "form-error"}>{state.text}</div>;
 }
 
+function NativeSelect({
+  id,
+  label,
+  value,
+  onChange,
+  children,
+  disabled = false,
+  required = false,
+  name,
+  testId,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (event: React.ChangeEvent<HTMLSelectElement>) => void;
+  children: React.ReactNode;
+  disabled?: boolean;
+  required?: boolean;
+  name?: string;
+  testId: string;
+}) {
+  return (
+    <label className="native-select-field" htmlFor={id}>
+      <span>{label}</span>
+      <select
+        id={id}
+        name={name}
+        className="native-select"
+        data-testid={testId}
+        aria-label={label}
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        required={required}
+      >
+        {children}
+      </select>
+    </label>
+  );
+}
+
 export function AlarmOperations({ events, suppressions, onChanged }: { events: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void }) {
   const active = useMemo(
     () => events.filter((event) => String(event.kind).toUpperCase() === "ALARM" && String(event.status).toUpperCase() === "ACTIVE"),
@@ -78,18 +119,18 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
   const [pending, setPending] = useState<"respond" | "suppress" | "cancel" | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
 
-  // Dropdown event aktif terisi dari ALARM ACTIVE. Bersihkan pilihan basi saat
-  // live refresh menyelesaikan event yang sedang dipilih di dalam dialog.
+  // Keep the native control bound even when a live refresh changes the active list.
   useEffect(() => {
+    if (active.length === 1) {
+      if (eventId !== active[0].event_id) setEventId(active[0].event_id);
+      return;
+    }
     if (eventId && !active.some((item) => item.event_id === eventId)) setEventId("");
   }, [active, eventId]);
 
-  // Auto-select satu-satunya event aktif agar trigger Select menampilkan label
-  // "SERID …", bukan placeholder "Pilih event…". Dijalankan saat dialog
-  // dibuka maupun saat live refresh menyisakan tepat satu event aktif.
-  useEffect(() => {
-    if (!eventId && active.length === 1 && respondOpen) setEventId(active[0].event_id);
-  }, [active, eventId, respondOpen]);
+  const selectedEventId = active.length === 1
+    ? active[0].event_id
+    : active.some((item) => item.event_id === eventId) ? eventId : "";
 
   function resetResponse() {
     setEventId("");
@@ -129,8 +170,8 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
     setFeedback(null);
     setPending("respond");
     try {
-      if (!eventId) throw new Error("Pilih event alarm aktif");
-      await api(`/api/v1/control/alarm-events/${encodeURIComponent(eventId)}/response`, {
+      if (!selectedEventId) throw new Error("Pilih event alarm aktif");
+      await api(`/api/v1/control/alarm-events/${encodeURIComponent(selectedEventId)}/response`, {
         method: "POST",
         body: JSON.stringify({ pin, action, pic, reason }),
       });
@@ -207,7 +248,7 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
         <p>Respons alarm aktif setelah memastikan event, PIC, action, alasan, dan PIN operator.</p>
         <Dialog.Root open={respondOpen} onOpenChange={changeRespondOpen}>
           <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={active.length === 0 || pending !== null}>Respons alarm</Button>} />
-          <Dialog className="radmon-dialog mobile-sheet-dialog">
+          <Dialog className="radmon-dialog mobile-sheet-dialog" data-testid="alarm-response-dialog">
             <div className="mobile-sheet-content">
               <div className="mobile-sheet-handle" aria-hidden />
               <Dialog.Title>Respons alarm</Dialog.Title>
@@ -215,14 +256,21 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
                 PIN operator diverifikasi oleh backend RadMon sebelum respons diterima.
               </Dialog.Description>
               <form className="action-form dialog-form" onSubmit={respond}>
-                <Select
+                <NativeSelect
+                  id="alarm-event-select"
+                  name="event_id"
+                  testId="alarm-event-select"
                   label={`Event aktif (${active.length})`}
-                  placeholder="Pilih event…"
-                  items={eventItems}
-                  value={eventId || undefined}
-                  onValueChange={(value) => setEventId(String(value ?? ""))}
+                  value={selectedEventId}
+                  onChange={(event) => setEventId(event.target.value)}
                   disabled={active.length === 0 || pending === "respond"}
-                />
+                  required
+                >
+                  <option value="">Pilih event...</option>
+                  {Object.entries(eventItems).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </NativeSelect>
                 {active.length === 0 ? (
                   <p className="cell-subtle alarm-empty-hint" role="status">
                     Tidak ada alarm aktif saat ini. Respons tersedia setelah ada event ALARM ACTIVE.
@@ -232,18 +280,25 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
                     {active.length} alarm aktif tersedia untuk direspons.
                   </p>
                 )}
-                <Select
+                <NativeSelect
+                  id="alarm-action-select"
+                  name="action"
+                  testId="alarm-action-select"
                   label="Action"
-                  items={RESPONSE_ACTION_ITEMS}
                   value={action}
-                  onValueChange={(value) => setAction(String(value ?? "Konfirmasi"))}
+                  onChange={(event) => setAction(event.target.value)}
                   disabled={pending === "respond"}
-                />
+                  required
+                >
+                  {Object.entries(RESPONSE_ACTION_ITEMS).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </NativeSelect>
                 <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} disabled={pending === "respond"} />
                 <Input label="Alasan" value={reason} onChange={(e) => setReason(e.target.value)} disabled={pending === "respond"} />
                 <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending === "respond"} />
                 <div className="form-actions">
-                  <Button type="submit" variant="primary" disabled={pending === "respond" || !eventId || !pic || !reason || !pin}>
+                  <Button type="submit" variant="primary" disabled={pending === "respond" || !selectedEventId || !pic || !reason || !pin}>
                     {pending === "respond" ? "Menyimpan…" : "Kirim respons"}
                   </Button>
                   <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "respond"}>Batal</Button>} />
@@ -392,13 +447,20 @@ export function CreateUserForm({
     <form className="action-form user-create-form" onSubmit={submit}>
       <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} disabled={pending} />
       <Input label="Nama tampilan" value={displayName} onChange={(e) => setDisplayName(e.target.value)} disabled={pending} />
-      <Select
+      <NativeSelect
+        id="user-role-select"
+        name="role"
+        testId="user-role-select"
         label="Role"
-        items={{ Viewer: "Viewer", Operator: "Operator", Administrator: "Administrator" }}
         value={role}
-        onValueChange={(value) => setRole((value ?? "Viewer") as Role)}
+        onChange={(event) => setRole(event.target.value as Role)}
         disabled={pending}
-      />
+        required
+      >
+        <option value="Viewer">Viewer</option>
+        <option value="Operator">Operator</option>
+        <option value="Administrator">Administrator</option>
+      </NativeSelect>
       <Input label="Password awal" type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={pending} />
       <Input label="PIN pengguna" type="password" value={userPin} onChange={(e) => setUserPin(e.target.value)} disabled={pending} />
       <Input label="PIN Administrator" type="password" value={adminPin} onChange={(e) => setAdminPin(e.target.value)} disabled={pending} />

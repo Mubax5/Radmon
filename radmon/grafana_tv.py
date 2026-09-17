@@ -32,6 +32,10 @@ DASHBOARD_FILES = (
     *(f"radmon-tv-page-3-operations-{page_number}.json" for page_number in range(1, OPERATIONS_PAGE_COUNT + 1)),
 )
 BUILDING_PAGE_ORDER = ("50", "38", "52", "55", "57")
+PAGE_TWO_TIME_FROM = "now-1h"
+PAGE_TWO_TREND_LABEL = "1 Jam"
+SPARKLINE_POINT_LIMIT = 10
+TREND_POINT_LIMIT = 600
 
 
 def _datasource() -> dict[str, str]:
@@ -248,19 +252,22 @@ def _dose_sparkline(panel_id, station, x, y, w, h=1):
     # touched by the 10-minute sparkline. Server TZ is Asia/Jakarta, hence
     # UNIX_TIMESTAMP(dtom) equals the old
     # TIMESTAMPDIFF(CONVERT_TZ(dtom,'+07:00','+00:00')) epoch numerically.
-    # 10 minutes at 2s cadence is at most ~300 points; LIMIT 300 keeps the
-    # refresh inside 1-3s. Target B is the offline fallback: two last-known
-    # points projected to $__unixEpochFrom/To so an offline detector keeps a
-    # flat last-value line *inside* the visible range instead of
-    # "Data outside time range". ORDER BY time ASC keeps long->wide sorted.
+    # Take the newest ten rows in the indexed order, then restore chronological
+    # order for Grafana's long-to-wide conversion. Target B is the offline
+    # fallback: two last-known points projected to $__unixEpochFrom/To so an
+    # offline detector keeps a flat last-value line inside the visible range.
     panel["targets"] = [
         _target(f"""
-SELECT UNIX_TIMESTAMP(dtom) AS time, doserate AS value
-FROM recent
-WHERE serid = {station.serid}
-  AND $__timeFilter(dtom)
+SELECT time, value
+FROM (
+  SELECT UNIX_TIMESTAMP(dtom) AS time, doserate AS value
+  FROM recent
+  WHERE serid = {station.serid}
+    AND $__timeFilter(dtom)
+  ORDER BY dtom DESC
+  LIMIT {SPARKLINE_POINT_LIMIT}
+) latest
 ORDER BY time ASC
-LIMIT 300
 """, format_="time_series"),
         _target(f"""
 (SELECT $__unixEpochFrom() AS time, doserate AS value
@@ -328,11 +335,11 @@ ORDER BY FIELD(s.status, 'OFFLINE' {STATUS_COLLATION}, 'SUPPRESSED' {STATUS_COLL
 
 def _building_trend(panel_id: int, building: str, x: int, y: int, w: int, h: int):
     stations = _stations_for_building(building)
-    panel = _panel(panel_id, "timeseries", f"Dose Rate · Gedung {building} · 3 Jam", x, y, w, h)
+    panel = _panel(panel_id, "timeseries", f"Dose Rate · Gedung {building} · {PAGE_TWO_TREND_LABEL}", x, y, w, h)
     panel["description"] = "building-dose-trend"
     # Per-minute aggregation over the narrow indexed recent table keeps the
-    # 3h trend bounded (~180 points/series, max 5 series/building => ~900
-    # rows; LIMIT 2000 gives 2x headroom) and index-friendly via
+    # 1h trend bounded (~60 points/series, max 5 series/building => ~300
+    # rows; the small limit gives headroom) and index-friendly via
     # $__timeFilter(r.dtom). Server TZ is Asia/Jakarta, hence
     # UNIX_TIMESTAMP(r.dtom) matches the legacy WIB epoch numerically.
     # ORDER BY time ASC is mandatory: Grafana long->wide fails with
@@ -352,7 +359,7 @@ WHERE r.serid IN ({_station_ids(stations)})
   AND $__timeFilter(r.dtom)
 GROUP BY 1, 2
 ORDER BY time ASC, metric ASC
-LIMIT 2000
+LIMIT {TREND_POINT_LIMIT}
 """, format_="time_series"),
         _target(f"""
 (SELECT $__unixEpochFrom() AS time,
@@ -407,7 +414,7 @@ def build_page_one() -> dict[str, Any]:
 
 
 def build_page_two() -> dict[str, Any]:
-    dashboard = _base_dashboard("RadMon TV · Trends", PAGE_UIDS[1], time_from="now-3h")
+    dashboard = _base_dashboard("RadMon TV · Trends", PAGE_UIDS[1], time_from=PAGE_TWO_TIME_FROM)
     placements = [
         ("50", 0, 4, 12, 5),
         ("38", 12, 4, 12, 5),

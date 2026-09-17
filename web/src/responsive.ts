@@ -15,5 +15,5 @@ export function useMediaQuery(query: string): boolean {
 }
 
 export function useMobileLayout(): boolean {
-  return useMediaQuery("(max-width: 639px)");
+  return useMediaQuery("(max-width: 767px)");
 }

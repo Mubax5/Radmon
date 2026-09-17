@@ -199,14 +199,20 @@ def test_web_uses_kumo_as_primary_component_system_without_browser_secret_storag
     assert "sessionStorage" not in combined
 
 
-def test_sensitive_alarm_actions_use_kumo_dialogs_and_native_kumo_selects() -> None:
+def test_sensitive_alarm_actions_use_kumo_dialogs_and_reliable_native_selects() -> None:
     actions = (ROOT / "web/src/Actions.tsx").read_text(encoding="utf-8")
     combined = _frontend_sources()
     assert "Dialog.Root" in actions
     assert "Dialog.Trigger" in actions
     assert "Dialog.Close" in actions
-    assert "<Select" in actions
-    assert re.search(r"<select(?:\s|>)", combined) is None
+    # Kumo remains the component system, but the screenshot-critical controls
+    # use native selects so their controlled value is observable in the DOM.
+    assert "<Select" in actions  # duration suppression still uses Kumo
+    assert "function NativeSelect" in actions
+    assert 'testId="alarm-event-select"' in actions
+    assert 'testId="alarm-action-select"' in actions
+    assert 'testId="user-role-select"' in actions
+    assert re.search(r"<select(?:\s|>)", combined) is not None
 
 
 def test_branding_uses_centered_brin_logo_and_no_letter_r_badges() -> None:
