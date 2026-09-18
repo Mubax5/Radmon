@@ -23,7 +23,15 @@ export type PolicyEvent = Record<string, unknown> & {
   surfaced_at?: string;
   action?: string | null;
   reason?: string | null;
+  source_reconciliation?: { status?: string; reason?: string } | null;
 };
+
+function lifecycle(event: PolicyEvent): string {
+  if (event.source_reconciliation?.reason) {
+    return `${event.source_reconciliation.status ?? "PENDING"}: ${event.source_reconciliation.reason}`;
+  }
+  return event.kind === "SUPPRESSION_END" ? `${event.action ?? "—"}: ${event.reason ?? "—"}` : "—";
+}
 
 function eventVariant(event: PolicyEvent): "success" | "warning" | "error" | "secondary" {
   if (event.kind === "ALARM" && event.status === "ACTIVE") return "error";
@@ -50,7 +58,7 @@ function EventCards({ events }: { events: PolicyEvent[] }) {
             <span>Measurement: {event.measured_value ?? "—"}</span>
             <span>Threshold: {event.threshold ?? "—"}</span>
             <span>Muncul: {formatTimestamp(event.surfaced_at)}</span>
-            {event.kind === "SUPPRESSION_END" ? <span>Berakhir: {event.action ?? "—"} · {event.reason ?? "—"}</span> : null}
+            {lifecycle(event) !== "—" ? <span>Lifecycle: {lifecycle(event)}</span> : null}
           </div>
         </LayerCard>
       ))}
@@ -83,7 +91,7 @@ function EventTable({ events }: { events: PolicyEvent[] }) {
               <Table.Cell>{event.measured_value ?? "—"}</Table.Cell>
               <Table.Cell>{event.threshold ?? "—"}</Table.Cell>
               <Table.Cell>{formatTimestamp(event.surfaced_at)}</Table.Cell>
-              <Table.Cell>{event.kind === "SUPPRESSION_END" ? `${event.action ?? "—"}: ${event.reason ?? "—"}` : "—"}</Table.Cell>
+              <Table.Cell>{lifecycle(event)}</Table.Cell>
             </Table.Row>
           ))}
         </Table.Body>

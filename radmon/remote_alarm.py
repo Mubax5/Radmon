@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from .audit import AuditTrail
@@ -29,6 +29,7 @@ class RemoteAlarmMirror:
     def mirror(self, source_id: str, rows: list[dict[str, Any]]) -> int:
         self._ensure_active_schema()
         changed = 0
+        observed_at = datetime.now(timezone.utc).isoformat()
         with self.store._connection() as connection:
             for row in rows:
                 event_time = self._event_time(row)
@@ -46,7 +47,7 @@ class RemoteAlarmMirror:
                 already_notified = historical or not bool(is_active) or bool(row.get('ack')) or (ack_iso is not None)
                 notification_sent_at = ack_iso or (event_iso if already_notified else None)
                 before_changes = connection.total_changes
-                connection.execute('\nINSERT INTO remote_alarm_state\n  (source_id, serid, remote_serid, event_time, level, measured_value,\n   threshold, hit_count, acknowledged_at, pic, action, note,\n   notification_sent_at, is_active, source_i_flag, source_observation_version)\nVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)\nON CONFLICT(source_id, serid, event_time) DO UPDATE SET\n  remote_serid = excluded.remote_serid,\n  level = excluded.level,\n  measured_value = COALESCE(excluded.measured_value, measured_value),\n  threshold = COALESCE(excluded.threshold, threshold),\n  hit_count = COALESCE(excluded.hit_count, hit_count),\n  is_active = excluded.is_active,\n  source_i_flag = excluded.source_i_flag,\n  acknowledged_at = CASE\n    WHEN excluded.is_active = 1 THEN NULL\n    ELSE COALESCE(excluded.acknowledged_at, acknowledged_at)\n  END,\n  pic = COALESCE(excluded.pic, pic),\n  note = COALESCE(excluded.note, note),\n  notification_sent_at = COALESCE(notification_sent_at, excluded.notification_sent_at),\n  source_observation_version = COALESCE(source_observation_version, 0) + 1\n', (source_id, serid, remote_serid, event_iso, self._level(row), row.get('mvalue'), row.get('thvalue'), row.get('nhit'), ack_iso, row.get('pic'), None, row.get('note'), notification_sent_at, is_active, source_i_flag))
+                connection.execute('\nINSERT INTO remote_alarm_state\n  (source_id, serid, remote_serid, event_time, level, measured_value,\n   threshold, hit_count, acknowledged_at, pic, action, note,\n   notification_sent_at, is_active, source_i_flag, source_observed_at, source_observation_version)\nVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)\nON CONFLICT(source_id, serid, event_time) DO UPDATE SET\n  remote_serid = excluded.remote_serid,\n  level = excluded.level,\n  measured_value = COALESCE(excluded.measured_value, measured_value),\n  threshold = COALESCE(excluded.threshold, threshold),\n  hit_count = COALESCE(excluded.hit_count, hit_count),\n  is_active = excluded.is_active,\n  source_i_flag = excluded.source_i_flag,\n  source_observed_at = excluded.source_observed_at,\n  acknowledged_at = CASE\n    WHEN excluded.is_active = 1 THEN NULL\n    ELSE COALESCE(excluded.acknowledged_at, acknowledged_at)\n  END,\n  pic = COALESCE(excluded.pic, pic),\n  note = COALESCE(excluded.note, note),\n  notification_sent_at = COALESCE(notification_sent_at, excluded.notification_sent_at),\n  source_observation_version = COALESCE(source_observation_version, 0) + 1\n', (source_id, serid, remote_serid, event_iso, self._level(row), row.get('mvalue'), row.get('thvalue'), row.get('nhit'), ack_iso, row.get('pic'), None, row.get('note'), notification_sent_at, is_active, source_i_flag, observed_at))
                 if connection.total_changes > before_changes:
                     changed += 1
         return changed

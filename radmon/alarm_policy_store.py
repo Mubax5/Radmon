@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS alarm_policy_event (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_alarm_policy_one_suppressed_per_session
 ON alarm_policy_event(suppression_id)
 WHERE kind = 'SUPPRESSED' AND suppression_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS alarm_policy_source_reconciliation (
+  event_id TEXT PRIMARY KEY REFERENCES alarm_policy_event(event_id),
+  source_id TEXT,
+  serid INTEGER NOT NULL,
+  event_occurrence_at TEXT NOT NULL,
+  source_event_time TEXT,
+  source_observed_at TEXT,
+  source_i_flag INTEGER,
+  source_i_op TEXT,
+  status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  reconciled_at TEXT
+);
 """
 
 
@@ -229,7 +243,7 @@ class AlarmPolicyStore:
                         db.execute(f"ALTER TABLE alarm_policy_event ADD COLUMN {name} TEXT")
                 db.execute(
                     "INSERT OR IGNORE INTO alarm_policy_schema_migration (version, applied_at) VALUES (?, ?)",
-                    (3, _iso(datetime.now())),
+                    (4, _iso(datetime.now())),
                 )
                 db.commit()
             except Exception:
@@ -515,19 +529,135 @@ ON CONFLICT(event_key) DO NOTHING
             ).fetchone()
         return self._event_from_row(row)
 
-    def source_handled_active_event_ids(self, source_id: str) -> list[str]:
-        """Return only events explicitly closed by a fresh source i_flag observation."""
+    def active_source_event_ids(self, source_id: str | None = None) -> list[str]:
+        where = ["status='ACTIVE'", "kind='ALARM'"]
+        params: list[Any] = []
+        if source_id is not None:
+            where.append("source_id=?")
+            params.append(str(source_id))
         with self.security._connection() as db:
             rows = db.execute(
-                """SELECT DISTINCT event.event_id
-                   FROM alarm_policy_event AS event
-                   JOIN remote_alarm_state AS raw ON raw.policy_event_id=event.event_id
-                   WHERE event.status='ACTIVE' AND raw.source_id=?
-                     AND raw.is_active=0 AND raw.source_i_flag=1
-                     AND raw.event_time>=event.surfaced_at""",
-                (str(source_id),),
+                f"SELECT event_id FROM alarm_policy_event WHERE {' AND '.join(where)} ORDER BY surfaced_at ASC",
+                tuple(params),
             ).fetchall()
         return [str(row[0]) for row in rows]
+
+    @staticmethod
+    def _not_before(value: datetime | None, reference: datetime | None) -> bool:
+        if value is None or reference is None:
+            return False
+        # Source MariaDB timestamps are usually naive while central observations
+        # are UTC-aware. Compare wall-clock occurrences only after both have been
+        # reduced to their persisted representation.
+        return value.replace(tzinfo=None) >= reference.replace(tzinfo=None)
+
+    def source_reconciliation_evidence(self, event_id: str, *, connection: sqlite3.Connection) -> dict[str, Any]:
+        event = connection.execute(
+            """SELECT event_id, source_id, serid, remote_event_time, surfaced_at
+               FROM alarm_policy_event WHERE event_id=? AND status='ACTIVE' AND kind='ALARM'""",
+            (str(event_id),),
+        ).fetchone()
+        if event is None:
+            return {"event_id": str(event_id), "status": "PENDING", "reason": "POLICY_EVENT_NOT_ACTIVE"}
+        _, source_id, serid, remote_event_time, surfaced_at = event
+        occurrence = _dt(remote_event_time) or _dt(surfaced_at)
+        base = {
+            "event_id": str(event_id), "source_id": source_id, "serid": int(serid),
+            "event_occurrence_at": _iso(occurrence), "source_event_time": None,
+            "source_observed_at": None, "source_i_flag": None, "source_i_op": None,
+        }
+        if not source_id:
+            candidates = connection.execute(
+                "SELECT COUNT(*) FROM remote_alarm_state WHERE serid=? AND event_time=?",
+                (int(serid), _iso(occurrence)),
+            ).fetchone()[0]
+            base.update({
+                "status": "AMBIGUOUS" if int(candidates) > 1 else "PENDING",
+                "reason": "AMBIGUOUS_SOURCE_CORRELATION" if int(candidates) > 1 else "SOURCE_ID_MISSING",
+            })
+            return base
+        row = connection.execute(
+            """SELECT event_time, source_observed_at, source_i_flag, acknowledged_at, is_active
+               FROM remote_alarm_state
+               WHERE source_id=? AND serid=? AND event_time=?""",
+            (str(source_id), int(serid), _iso(occurrence)),
+        ).fetchone()
+        if row is None:
+            later = connection.execute(
+                """SELECT COUNT(*) FROM remote_alarm_state
+                   WHERE source_id=? AND serid=? AND event_time>=?""",
+                (str(source_id), int(serid), _iso(occurrence)),
+            ).fetchone()[0]
+            base.update({
+                "status": "AMBIGUOUS" if int(later) > 1 else "PENDING",
+                "reason": "AMBIGUOUS_SOURCE_CORRELATION" if int(later) > 1 else "EXACT_SOURCE_ALARM_NOT_OBSERVED",
+            })
+            return base
+        source_event_time, source_observed_at, source_i_flag, source_i_op, is_active = row
+        base.update({
+            "source_event_time": str(source_event_time), "source_observed_at": source_observed_at,
+            "source_i_flag": int(source_i_flag or 0), "source_i_op": source_i_op,
+        })
+        evidence_at = _dt(source_i_op) or _dt(source_observed_at)
+        if int(source_i_flag or 0) != 1 or int(is_active or 0) != 0:
+            base.update({"status": "PENDING", "reason": "SOURCE_ALARM_STILL_ACTIVE"})
+        elif evidence_at is None:
+            base.update({"status": "PENDING", "reason": "SOURCE_HANDLED_TIME_MISSING"})
+        elif not self._not_before(evidence_at, occurrence):
+            base.update({"status": "PENDING", "reason": "SOURCE_HANDLED_TIME_BEFORE_OCCURRENCE"})
+        else:
+            base.update({"status": "CONFIRMED", "reason": "EXACT_SOURCE_I_FLAG_CONFIRMED"})
+        return base
+
+    def record_source_reconciliation(self, evidence: dict[str, Any], *, connection: sqlite3.Connection) -> bool:
+        if evidence.get("serid") is None or evidence.get("event_occurrence_at") is None:
+            return False
+        fields = (
+            "source_id", "serid", "event_occurrence_at", "source_event_time", "source_observed_at",
+            "source_i_flag", "source_i_op", "status", "reason",
+        )
+        values = tuple(evidence.get(field) for field in fields)
+        previous = connection.execute(
+            f"SELECT {', '.join(fields)} FROM alarm_policy_source_reconciliation WHERE event_id=?",
+            (str(evidence["event_id"]),),
+        ).fetchone()
+        # A polling timestamp alone is not a lifecycle change. Retaining the
+        # first observation avoids an audit write on every healthy source poll;
+        # i_flag/i_op changes still replace the complete evidence record.
+        if previous is not None and previous[:4] + previous[5:] == values[:4] + values[5:]:
+            return False
+        now = _iso(datetime.now())
+        connection.execute(
+            """INSERT INTO alarm_policy_source_reconciliation
+                 (event_id, source_id, serid, event_occurrence_at, source_event_time, source_observed_at,
+                  source_i_flag, source_i_op, status, reason, updated_at, reconciled_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(event_id) DO UPDATE SET
+                 source_id=excluded.source_id, serid=excluded.serid,
+                 event_occurrence_at=excluded.event_occurrence_at, source_event_time=excluded.source_event_time,
+                 source_observed_at=excluded.source_observed_at, source_i_flag=excluded.source_i_flag,
+                 source_i_op=excluded.source_i_op, status=excluded.status, reason=excluded.reason,
+                 updated_at=excluded.updated_at, reconciled_at=excluded.reconciled_at""",
+            (str(evidence["event_id"]), *values, now, now if evidence.get("status") == "SOURCE_HANDLED" else None),
+        )
+        return True
+
+    def source_reconciliations(self, event_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not event_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in event_ids)
+        with self.security._connection() as db:
+            rows = db.execute(
+                f"""SELECT event_id, source_id, serid, event_occurrence_at, source_event_time,
+                           source_observed_at, source_i_flag, source_i_op, status, reason, updated_at, reconciled_at
+                    FROM alarm_policy_source_reconciliation WHERE event_id IN ({placeholders})""",
+                tuple(str(event_id) for event_id in event_ids),
+            ).fetchall()
+        keys = (
+            "event_id", "source_id", "serid", "event_occurrence_at", "source_event_time",
+            "source_observed_at", "source_i_flag", "source_i_op", "status", "reason", "updated_at", "reconciled_at",
+        )
+        return {str(row[0]): dict(zip(keys, row)) for row in rows}
 
     def list_policy_events(self, *, serid: int | None = None, active_only: bool = False,
                            notify_pending_only: bool = False, limit: int = 500) -> list[PolicyEvent]:

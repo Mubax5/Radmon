@@ -41,12 +41,13 @@ class AlarmPolicyService:
         except (TypeError, ValueError, OverflowError):
             return False
 
-    def _record_resolution(self, tx, before, after, *, source_id: str | None) -> None:
+    def _record_resolution(self, tx, before, after, *, source_id: str | None, source_evidence=None) -> None:
         if before is None or after is None or before.status == after.status:
             return
         self.audit.record(
             "ALARM_POLICY_SOURCE_HANDLED" if after.status == "SOURCE_HANDLED" else "ALARM_POLICY_AUTO_RESOLVED",
-            None, "alarm", after.event_id, before=asdict(before), after=asdict(after),
+            None, "alarm", after.event_id, before=asdict(before),
+            after={"event": asdict(after), "source_evidence": source_evidence} if source_evidence else asdict(after),
             reason=after.resolution_reason, source=source_id or after.source_id, connection=tx.connection,
         )
 
@@ -229,20 +230,39 @@ class AlarmPolicyService:
         })
         return result
 
-    def reconcile_source_handled(self, source_id: str) -> int:
-        """Close only the linked active event after a source explicitly reports i_flag=1."""
+    def reconcile_source_handled(self, source_id: str | None = None) -> int:
+        """Close only an exactly correlated source alarm with timestamped i_flag evidence."""
         changed = 0
-        for event_id in self.store.source_handled_active_event_ids(source_id):
+        for event_id in self.store.active_source_event_ids(source_id):
             event = self.store.get_event(event_id)
             if event is None:
                 continue
             with self.store.detector_transaction(event.serid) as tx:
+                evidence = self.store.source_reconciliation_evidence(event_id, connection=tx.connection)
                 if tx.state.active_event_id != event_id:
+                    evidence.update({"status": "PENDING", "reason": "POLICY_STATE_NOT_LINKED"})
+                    if self.store.record_source_reconciliation(evidence, connection=tx.connection):
+                        self.audit.record(
+                            "ALARM_POLICY_SOURCE_RECONCILIATION_PENDING", None, "alarm", event_id,
+                            after=evidence, success=False, reason=evidence["reason"],
+                            source=source_id or event.source_id, connection=tx.connection,
+                        )
+                    continue
+                if evidence["status"] != "CONFIRMED":
+                    if self.store.record_source_reconciliation(evidence, connection=tx.connection):
+                        action = "ALARM_POLICY_SOURCE_RECONCILIATION_AMBIGUOUS" if evidence["status"] == "AMBIGUOUS" else "ALARM_POLICY_SOURCE_RECONCILIATION_PENDING"
+                        self.audit.record(
+                            action, None, "alarm", event_id, after=evidence, success=False,
+                            reason=evidence["reason"], source=source_id or event.source_id,
+                            connection=tx.connection,
+                        )
                     continue
                 before, resolved = tx.resolve_active_event(
-                    self.now(), "SOURCE_HANDLED", "source i_flag=1 observed after policy event was linked",
+                    self.now(), "SOURCE_HANDLED", "exact source i_flag=1 evidence confirms the correlated alarm was handled",
                 )
-                self._record_resolution(tx, before, resolved, source_id=source_id)
+                evidence["status"] = "SOURCE_HANDLED"
+                self.store.record_source_reconciliation(evidence, connection=tx.connection)
+                self._record_resolution(tx, before, resolved, source_id=source_id, source_evidence=evidence)
                 if resolved is not None:
                     changed += 1
         return changed
@@ -292,6 +312,9 @@ class AlarmPolicyService:
 
     def restore_and_reconcile_current_state(self) -> None:
         self.notifications_enabled = False
+        # Record unresolved legacy rows before a source poll supplies evidence;
+        # this is diagnostic only and cannot resolve an event.
+        self.reconcile_source_handled()
         for item in self.store.recover_stale_source_silences(None, at=self.now()):
             self.audit.record(
                 "SUPPRESSION_SOURCE_SILENCE_RECONCILING", None, "alarm",
@@ -328,7 +351,9 @@ class AlarmPolicyService:
         return {'serid': state.serid, 'trigger_count': state.trigger_count, 'retrigger_locked': state.retrigger_locked, 'active_event_id': state.active_event_id, 'window_started_at': state.window_started_at, 'last_trigger_at': state.last_trigger_at, 'last_normal_at': state.last_normal_at, 'last_measurement_at': state.last_measurement_at, 'suppressed': suppression is not None, 'suppression': asdict(suppression) if suppression else None}
 
     def _list_events_base(self, *, serid: int | None=None, active_only: bool=False, notify_pending_only: bool=False, limit: int=500) -> list[dict[str, Any]]:
-        return [asdict(item) for item in self.store.list_policy_events(serid=serid, active_only=active_only, notify_pending_only=notify_pending_only, limit=limit)]
+        events = self.store.list_policy_events(serid=serid, active_only=active_only, notify_pending_only=notify_pending_only, limit=limit)
+        reconciliations = self.store.source_reconciliations([item.event_id for item in events])
+        return [dict(asdict(item), source_reconciliation=reconciliations.get(item.event_id)) for item in events]
 
     def _process_cycle_base(self, source_id: str, live_rows: list[dict[str, Any]], alarm_rows: list[dict[str, Any]]):
         before = {item.event_id for item in self.store.list_policy_events(limit=5000)}

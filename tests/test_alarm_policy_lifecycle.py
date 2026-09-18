@@ -79,6 +79,83 @@ def test_source_i_flag_closes_linked_event_without_fabricating_operator_response
     assert any(item["action"] == "ALARM_POLICY_SOURCE_HANDLED" for item in audit.list_events())
 
 
+def test_legacy_exact_source_row_closes_once_and_preserves_timestamped_evidence(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    audit = AuditTrail(security)
+    store = AlarmPolicyStore(security)
+    policy = AlarmPolicyService(store, audit)
+    mirror = RemoteAlarmMirror(security)
+    at = datetime(2026, 9, 16, 9, 47, 51, tzinfo=timezone.utc)
+    event_id = policy.evaluate_live(live(at, 57.51), source_id="gd52")["active_event_id"]
+
+    # This models a pre-link migration: policy_event_id is deliberately absent.
+    mirror.mirror("gd52", [{
+        "serid": 5702, "_remote_serid": 5702, "dtoa": at, "lvl": 2,
+        "mvalue": 57.51, "thvalue": 25.0, "i_flag": 1,
+        "i_op": at + timedelta(minutes=2),
+    }])
+
+    assert policy.reconcile_source_handled("gd52") == 1
+    assert policy.reconcile_source_handled("gd52") == 0
+    event = store.get_event(event_id)
+    assert event.status == "SOURCE_HANDLED"
+    assert event.responded_at is None and event.pic is None and event.action is None
+    with security._connection() as db:
+        lifecycle = db.execute(
+            """SELECT source_id, serid, event_occurrence_at, source_event_time, source_i_flag,
+                      source_i_op, status, reason
+               FROM alarm_policy_source_reconciliation WHERE event_id=?""",
+            (event_id,),
+        ).fetchone()
+    assert lifecycle == (
+        "gd52", 5702, at.isoformat(), at.isoformat(), 1,
+        (at + timedelta(minutes=2)).isoformat(), "SOURCE_HANDLED", "EXACT_SOURCE_I_FLAG_CONFIRMED",
+    )
+    assert [item["action"] for item in audit.list_events()].count("ALARM_POLICY_SOURCE_HANDLED") == 1
+
+
+def test_ambiguous_later_source_rows_remain_active_with_visible_reason(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    audit = AuditTrail(security)
+    store = AlarmPolicyStore(security)
+    policy = AlarmPolicyService(store, audit)
+    mirror = RemoteAlarmMirror(security)
+    at = datetime(2026, 9, 16, 9, 47, 51, tzinfo=timezone.utc)
+    event_id = policy.evaluate_live(live(at, 57.51), source_id="gd52")["active_event_id"]
+
+    for offset in (1, 2):
+        source_at = at + timedelta(seconds=offset)
+        mirror.mirror("gd52", [{
+            "serid": 5702, "_remote_serid": 5702, "dtoa": source_at, "lvl": 2,
+            "i_flag": 1, "i_op": source_at + timedelta(minutes=2),
+        }])
+
+    assert policy.reconcile_source_handled("gd52") == 0
+    assert store.get_event(event_id).status == "ACTIVE"
+    listed = next(item for item in policy.list_events(serid=5702) if item["event_id"] == event_id)
+    assert listed["source_reconciliation"]["status"] == "AMBIGUOUS"
+    assert listed["source_reconciliation"]["reason"] == "AMBIGUOUS_SOURCE_CORRELATION"
+    assert any(item["action"] == "ALARM_POLICY_SOURCE_RECONCILIATION_AMBIGUOUS" for item in audit.list_events())
+
+
+def test_stale_or_offline_data_never_substitutes_for_exact_source_evidence(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    audit = AuditTrail(security)
+    store = AlarmPolicyStore(security)
+    policy = AlarmPolicyService(store, audit)
+    at = datetime(2026, 9, 16, 9, 47, 51, tzinfo=timezone.utc)
+    event_id = policy.evaluate_live(live(at, 57.51, observed=at), source_id="gd52")["active_event_id"]
+
+    stale = policy.evaluate_live(
+        live(at + timedelta(seconds=1), 0.2, observed=at + timedelta(minutes=10)), source_id="gd52",
+    )
+    assert stale["underlying_dose_status"] == "UNKNOWN"
+    assert policy.reconcile_source_handled("gd52") == 0
+    assert store.get_event(event_id).status == "ACTIVE"
+    listed = next(item for item in policy.list_events(serid=5702) if item["event_id"] == event_id)
+    assert listed["source_reconciliation"]["reason"] == "EXACT_SOURCE_ALARM_NOT_OBSERVED"
+
+
 def test_policy_schema_migrates_old_runtime_database_without_losing_event_history(tmp_path):
     path = tmp_path / "runtime-security.db"
     security = SecurityStore(path)
@@ -115,4 +192,4 @@ def test_policy_schema_migrates_old_runtime_database_without_losing_event_histor
     assert event is not None and event.status == "ACTIVE"
     assert {"last_measurement_at"} <= state_columns
     assert {"resolved_at", "resolution_code", "resolution_reason"} <= event_columns
-    assert versions == [3]
+    assert versions == [4]

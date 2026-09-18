@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS archive_quarters (
                     "source_response_claimed_at": "TEXT",
                     "source_response_claim_observation": "INTEGER",
                     "source_i_flag": "INTEGER NOT NULL DEFAULT 0",
+                    "source_observed_at": "TEXT",
                 }
                 for name, ddl in additions.items():
                     if name not in columns:
