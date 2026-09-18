@@ -237,6 +237,23 @@ def _wait_for(driver, selector: str):
     WebDriverWait(driver, 12).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, selector))
 
 
+def _wait_for_portal_layout(driver):
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    return WebDriverWait(driver, 12).until(lambda browser: browser.execute_script(
+        "const list=document.querySelector('[role=listbox]');"
+        "if (!list) return null;"
+        "const rect=list.getBoundingClientRect();"
+        "const hit=document.elementFromPoint(rect.left + Math.min(12, rect.width / 2), rect.top + Math.min(12, rect.height / 2));"
+        "if (!list.contains(hit)) return null;"
+        "const dialog=document.querySelector('[role=dialog]');"
+        "const nav=document.querySelector('.mobile-bottom-nav');"
+        "return {z:Number(getComputedStyle(list).zIndex), hit:true,"
+        "aboveDialog:!dialog || Number(getComputedStyle(list).zIndex)>Number(getComputedStyle(dialog).zIndex),"
+        "aboveNav:!nav || Number(getComputedStyle(list).zIndex)>Number(getComputedStyle(nav).zIndex)};"
+    ))
+
+
 def _element_text(element) -> str:
     return (element.get_attribute("textContent") or "").strip()
 
@@ -413,16 +430,7 @@ def test_native_dialog_selects_and_filter_portals_stay_above_navigation(chrome_d
         trigger = chrome_driver.find_element(By.CSS_SELECTOR, selector)
         chrome_driver.execute_script("arguments[0].click()", trigger)
         _wait_for(chrome_driver, "[role=listbox]")
-        result = chrome_driver.execute_script(
-            "const list=document.querySelector('[role=listbox]');"
-            "const rect=list.getBoundingClientRect();"
-            "const hit=document.elementFromPoint(rect.left + Math.min(12, rect.width / 2), rect.top + Math.min(12, rect.height / 2));"
-            "const dialog=document.querySelector('[role=dialog]');"
-            "const nav=document.querySelector('.mobile-bottom-nav');"
-            "return {z:Number(getComputedStyle(list).zIndex), hit:list.contains(hit),"
-            "aboveDialog:!dialog || Number(getComputedStyle(list).zIndex)>Number(getComputedStyle(dialog).zIndex),"
-            "aboveNav:!nav || Number(getComputedStyle(list).zIndex)>Number(getComputedStyle(nav).zIndex)};"
-        )
+        result = _wait_for_portal_layout(chrome_driver)
         assert result["z"] >= 100
         assert result["hit"] and result["aboveDialog"] and result["aboveNav"]
     with _serve_ui() as base:
