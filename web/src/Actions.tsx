@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Dialog, Input, LayerCard, Select } from "@cloudflare/kumo";
+import { Button, Dialog, Input, LayerCard } from "@cloudflare/kumo";
 import { api, type Role } from "./api";
 
 type AlarmEvent = {
@@ -323,13 +323,19 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
               </Dialog.Description>
               <form className="action-form dialog-form" onSubmit={suppress}>
                 <Input label="SERID stasiun" inputMode="numeric" value={serid} onChange={(e) => setSerid(e.target.value)} disabled={pending === "suppress"} />
-                <Select
+                <NativeSelect
+                  id="suppression-duration-select"
+                  testId="suppression-duration-select"
                   label="Durasi suppression"
-                  items={DURATION_ITEMS}
                   value={minutes}
-                  onValueChange={(value) => setMinutes(String(value ?? "15"))}
+                  onChange={(event) => setMinutes(event.target.value)}
                   disabled={pending === "suppress"}
-                />
+                  required
+                >
+                  {Object.entries(DURATION_ITEMS).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </NativeSelect>
                 <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} disabled={pending === "suppress"} />
                 <Input label="Alasan" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} disabled={pending === "suppress"} />
                 <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} disabled={pending === "suppress"} />

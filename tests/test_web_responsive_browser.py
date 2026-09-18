@@ -325,6 +325,7 @@ def test_all_control_plane_pages_fit_mobile_and_desktop_viewports(chrome_driver)
         ("/app/stations", ".station-search"),
         ("/app/history?station=3801", ".history-summary"),
         ("/app/archives", ".archive-summary"),
+        ("/app/reports", "#report-station"),
         ("/app/alarms", ".active-alarm-list"),
         ("/app/users", ".user-summary"),
         ("/app/system", ".source-health-summary"),
@@ -354,9 +355,9 @@ def test_mobile_more_sheet_and_history_deep_link_are_reachable(chrome_driver):
         _button(chrome_driver, "Lainnya").click()
         _wait_for(chrome_driver, ".mobile-more-sheet")
         route_container = chrome_driver.find_element(By.CSS_SELECTOR, ".mobile-more-sheet")
-        assert route_container.get_attribute("data-secondary-routes") == "history,archives,users,system"
+        assert route_container.get_attribute("data-secondary-routes") == "history,archives,reports,users,system"
         labels = {_element_text(element) for element in route_container.find_elements(By.TAG_NAME, "button") if _element_text(element)}
-        assert {"Riwayat", "Arsip", "Pengguna", "Sistem", "Monitoring penuh", "Keluar"} <= labels
+        assert {"Riwayat", "Arsip", "Laporan", "Pengguna", "Sistem", "Monitoring penuh", "Keluar"} <= labels
         _assert_no_horizontal_overflow(chrome_driver)
         next(
             button for button in route_container.find_elements(By.TAG_NAME, "button")
@@ -401,11 +402,11 @@ def test_mobile_alarm_and_user_dialogs_stay_inside_viewport(chrome_driver):
         _assert_no_horizontal_overflow(chrome_driver)
 
 
-def test_select_portals_stay_above_dialog_and_navigation_and_restore_focus(chrome_driver):
+def test_native_dialog_selects_and_filter_portals_stay_above_navigation(chrome_driver):
     from selenium.webdriver.common.by import By
     from selenium.webdriver.common.keys import Keys
 
-    def open_and_assert(selector: str, *, dialog: bool):
+    def open_and_assert(selector: str):
         trigger = chrome_driver.find_element(By.CSS_SELECTOR, selector)
         chrome_driver.execute_script("arguments[0].click()", trigger)
         _wait_for(chrome_driver, "[role=listbox]")
@@ -423,9 +424,6 @@ def test_select_portals_stay_above_dialog_and_navigation_and_restore_focus(chrom
         assert result["hit"] and result["aboveDialog"] and result["aboveNav"]
         chrome_driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
         assert not chrome_driver.find_elements(By.CSS_SELECTOR, "[role=listbox]")
-        if dialog:
-            assert chrome_driver.execute_script("return document.querySelector('[role=dialog]').contains(document.activeElement)")
-
     with _serve_ui() as base:
         for width, height in ((390, 844), (360, 480), (1366, 768)):
             _set_viewport(chrome_driver, width, height)
@@ -433,14 +431,14 @@ def test_select_portals_stay_above_dialog_and_navigation_and_restore_focus(chrom
             _wait_for(chrome_driver, ".active-alarm-list")
             _button(chrome_driver, "Respons alarm").click()
             _wait_for(chrome_driver, "[role=dialog]")
-            open_and_assert("[role=dialog] [aria-haspopup=listbox]", dialog=True)
+            assert chrome_driver.find_elements(By.CSS_SELECTOR, "[role=dialog] select.native-select")
             chrome_driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
 
             chrome_driver.get(f"{base}/app/users")
             _wait_for(chrome_driver, ".user-summary")
             _button(chrome_driver, "Buat pengguna").click()
             _wait_for(chrome_driver, "[role=dialog]")
-            open_and_assert("[role=dialog] [aria-haspopup=listbox]", dialog=True)
+            assert chrome_driver.find_elements(By.CSS_SELECTOR, "[role=dialog] select.native-select")
             chrome_driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
 
         for width, height in ((390, 844), (360, 480), (1366, 768)):
@@ -448,4 +446,4 @@ def test_select_portals_stay_above_dialog_and_navigation_and_restore_focus(chrom
             for path in ("/app/stations", "/app/history?station=3801", "/app/archives"):
                 chrome_driver.get(f"{base}{path}")
                 _wait_for(chrome_driver, "[aria-haspopup=listbox]")
-                open_and_assert("[aria-haspopup=listbox]", dialog=False)
+                open_and_assert("[aria-haspopup=listbox]")
