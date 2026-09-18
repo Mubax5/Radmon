@@ -242,13 +242,13 @@ def test_sensitive_alarm_actions_use_kumo_dialogs_and_reliable_native_selects() 
     assert "Dialog.Root" in actions
     assert "Dialog.Trigger" in actions
     assert "Dialog.Close" in actions
-    # Kumo remains the component system, but the screenshot-critical controls
-    # use native selects so their controlled value is observable in the DOM.
-    assert "<Select" in actions  # duration suppression still uses Kumo
+    # Kumo remains the component system, while sensitive controls use native
+    # selects so their controlled values are observable in the DOM.
     assert "function NativeSelect" in actions
     assert 'testId="alarm-event-select"' in actions
     assert 'testId="alarm-action-select"' in actions
     assert 'testId="user-role-select"' in actions
+    assert 'testId="suppression-duration-select"' in actions
     assert re.search(r"<select(?:\s|>)", combined) is not None
 
 

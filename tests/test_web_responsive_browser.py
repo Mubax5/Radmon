@@ -132,6 +132,9 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
                 ],
             )
 
+        if path == "/api/v1/control/reports":
+            return _send_json(self, [])
+
         if path == "/api/v1/web/system":
             return _send_json(
                 self,
@@ -437,8 +440,8 @@ def test_native_dialog_selects_and_filter_portals_stay_above_navigation(chrome_d
             chrome_driver.get(f"{base}/app/users")
             _wait_for(chrome_driver, ".user-summary")
             _button(chrome_driver, "Buat pengguna").click()
-            _wait_for(chrome_driver, "[role=dialog]")
-            assert chrome_driver.find_elements(By.CSS_SELECTOR, "[role=dialog] select.native-select")
+            _wait_for(chrome_driver, "dialog[open]")
+            assert chrome_driver.find_elements(By.CSS_SELECTOR, "dialog[open] select.native-select")
             chrome_driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
 
         for width, height in ((390, 844), (360, 480), (1366, 768)):

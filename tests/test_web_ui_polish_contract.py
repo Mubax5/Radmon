@@ -87,8 +87,9 @@ def test_select_portals_have_a_layer_contract_above_dialog_and_navigation():
     assert "[data-kumo-select-positioner]" in css
     assert "z-index: var(--radmon-layer-select) !important" in css
     assert ".mobile-sheet-dialog" not in css or "overflow: visible" not in css
-    for path in ("pages/StationsPage.tsx", "pages/HistoryPage.tsx", "pages/ArchivesPage.tsx", "Actions.tsx"):
+    for path in ("pages/StationsPage.tsx", "pages/HistoryPage.tsx", "pages/ArchivesPage.tsx"):
         assert "<Select" in read(path)
+    assert 'testId="suppression-duration-select"' in read("Actions.tsx")
 
 
 def test_sidebar_icons_have_fixed_geometry_and_consistent_mobile_breakpoint():
