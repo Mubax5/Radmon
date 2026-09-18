@@ -114,6 +114,76 @@ def test_legacy_exact_source_row_closes_once_and_preserves_timestamped_evidence(
     assert [item["action"] for item in audit.list_events()].count("ALARM_POLICY_SOURCE_HANDLED") == 1
 
 
+def test_exact_source_row_closes_legacy_event_after_policy_state_was_reset(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    audit = AuditTrail(security)
+    store = AlarmPolicyStore(security)
+    policy = AlarmPolicyService(
+        store, audit, now=lambda: datetime(2026, 9, 17, 15, 26, 53, tzinfo=timezone.utc),
+    )
+    mirror = RemoteAlarmMirror(security)
+    at = datetime(2026, 9, 16, 9, 47, 51, tzinfo=timezone.utc)
+    event = store.create_policy_event(
+        event_key="alarm:legacy-state-reset", serid=5702, kind="ALARM",
+        origin="central_policy", surfaced_at=at, measured_value=57.51,
+        threshold=25.0, status="ACTIVE", source_id="gd52", reason="legacy reason",
+    )
+    state = store.get_state(5702)
+    state.last_normal_at = datetime(2026, 9, 17, 15, 26, 53)
+    state.updated_at = state.last_normal_at
+    store.save_state(state)
+    mirror.mirror("gd52", [{
+        "serid": 5702, "_remote_serid": 5702, "dtoa": at, "lvl": 2,
+        "mvalue": 57.51, "thvalue": 25.0, "i_flag": 1,
+        "i_op": at + timedelta(minutes=2), "pic": "budi", "note": "test",
+    }])
+
+    assert policy.reconcile_source_handled("gd52") == 1
+    assert policy.reconcile_source_handled("gd52") == 0
+    resolved = store.get_event(event.event_id)
+    assert resolved.status == "SOURCE_HANDLED"
+    assert resolved.reason == "legacy reason"
+    assert resolved.responded_at is None and resolved.pic is None and resolved.action is None
+    assert store.get_state(5702).active_event_id is None
+    with security._connection() as db:
+        raw = db.execute(
+            """SELECT policy_event_id, pic, note, is_active, source_i_flag
+               FROM remote_alarm_state WHERE source_id=? AND serid=? AND event_time=?""",
+            ("gd52", 5702, at.isoformat()),
+        ).fetchone()
+    assert raw == (event.event_id, "budi", "test", 0, 1)
+    assert [item["action"] for item in audit.list_events()].count("ALARM_POLICY_SOURCE_HANDLED") == 1
+
+
+def test_conflicting_source_event_link_is_not_terminalized(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    audit = AuditTrail(security)
+    store = AlarmPolicyStore(security)
+    policy = AlarmPolicyService(store, audit)
+    mirror = RemoteAlarmMirror(security)
+    at = datetime(2026, 9, 16, 9, 47, 51, tzinfo=timezone.utc)
+    event = store.create_policy_event(
+        event_key="alarm:conflicting-source-link", serid=5702, kind="ALARM",
+        origin="central_policy", surfaced_at=at, measured_value=57.51,
+        threshold=25.0, status="ACTIVE", source_id="gd52",
+    )
+    mirror.mirror("gd52", [{
+        "serid": 5702, "_remote_serid": 5702, "dtoa": at, "lvl": 2,
+        "i_flag": 1, "i_op": at + timedelta(minutes=2),
+    }])
+    with security._connection() as db:
+        db.execute(
+            "UPDATE remote_alarm_state SET policy_event_id=? WHERE source_id=? AND serid=? AND event_time=?",
+            ("different-event", "gd52", 5702, at.isoformat()),
+        )
+
+    assert policy.reconcile_source_handled("gd52") == 0
+    assert store.get_event(event.event_id).status == "ACTIVE"
+    listed = next(item for item in policy.list_events(serid=5702) if item["event_id"] == event.event_id)
+    assert listed["source_reconciliation"]["status"] == "AMBIGUOUS"
+    assert listed["source_reconciliation"]["reason"] == "SOURCE_EVENT_LINK_CONFLICT"
+
+
 def test_ambiguous_later_source_rows_remain_active_with_visible_reason(tmp_path):
     security = SecurityStore(tmp_path / "security.db")
     audit = AuditTrail(security)

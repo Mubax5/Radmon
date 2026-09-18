@@ -577,7 +577,8 @@ ON CONFLICT(event_key) DO NOTHING
             })
             return base
         row = connection.execute(
-            """SELECT event_time, source_observed_at, source_i_flag, acknowledged_at, is_active
+            """SELECT event_time, source_observed_at, source_i_flag, acknowledged_at, is_active,
+                      policy_event_id
                FROM remote_alarm_state
                WHERE source_id=? AND serid=? AND event_time=?""",
             (str(source_id), int(serid), _iso(occurrence)),
@@ -593,11 +594,15 @@ ON CONFLICT(event_key) DO NOTHING
                 "reason": "AMBIGUOUS_SOURCE_CORRELATION" if int(later) > 1 else "EXACT_SOURCE_ALARM_NOT_OBSERVED",
             })
             return base
-        source_event_time, source_observed_at, source_i_flag, source_i_op, is_active = row
+        source_event_time, source_observed_at, source_i_flag, source_i_op, is_active, source_policy_event_id = row
         base.update({
             "source_event_time": str(source_event_time), "source_observed_at": source_observed_at,
             "source_i_flag": int(source_i_flag or 0), "source_i_op": source_i_op,
+            "source_policy_event_id": source_policy_event_id,
         })
+        if source_policy_event_id not in (None, str(event_id)):
+            base.update({"status": "AMBIGUOUS", "reason": "SOURCE_EVENT_LINK_CONFLICT"})
+            return base
         evidence_at = _dt(source_i_op) or _dt(source_observed_at)
         if int(source_i_flag or 0) != 1 or int(is_active or 0) != 0:
             base.update({"status": "PENDING", "reason": "SOURCE_ALARM_STILL_ACTIVE"})
@@ -608,6 +613,17 @@ ON CONFLICT(event_key) DO NOTHING
         else:
             base.update({"status": "CONFIRMED", "reason": "EXACT_SOURCE_I_FLAG_CONFIRMED"})
         return base
+
+    def link_source_policy_event(self, source_id: str, serid: int, event_time: datetime,
+                                 event_id: str, *, connection: sqlite3.Connection) -> bool:
+        cursor = connection.execute(
+            """UPDATE remote_alarm_state
+               SET policy_event_id=?
+               WHERE source_id=? AND serid=? AND event_time=?
+                 AND (policy_event_id IS NULL OR policy_event_id=?)""",
+            (str(event_id), str(source_id), int(serid), _iso(event_time), str(event_id)),
+        )
+        return cursor.rowcount == 1
 
     def record_source_reconciliation(self, evidence: dict[str, Any], *, connection: sqlite3.Connection) -> bool:
         if evidence.get("serid") is None or evidence.get("event_occurrence_at") is None:
@@ -1331,14 +1347,16 @@ class _DetectorTransaction:
         self.state.last_measurement_at = measured_at
         return True
 
-    def resolve_active_event(self, at: datetime, status: str, reason: str) -> tuple[PolicyEvent | None, PolicyEvent | None]:
-        event_id = self.state.active_event_id
+    def resolve_active_event(self, at: datetime, status: str, reason: str,
+                             *, event_id: str | None = None) -> tuple[PolicyEvent | None, PolicyEvent | None]:
+        event_id = self.state.active_event_id if event_id is None else str(event_id)
         if not event_id:
             return None, None
         before = self.store.get_event(event_id)
         if before is None or before.status != "ACTIVE":
-            self.state.active_event_id = None
-            self.save_state(at=at)
+            if self.state.active_event_id == event_id:
+                self.state.active_event_id = None
+                self.save_state(at=at)
             return before, before
         self.connection.execute(
             """UPDATE alarm_policy_event
@@ -1354,8 +1372,9 @@ class _DetectorTransaction:
                FROM alarm_policy_event WHERE event_id=?""",
             (str(event_id),),
         ).fetchone()
-        self.state.active_event_id = None
-        self.save_state(at=at)
+        if self.state.active_event_id == event_id:
+            self.state.active_event_id = None
+            self.save_state(at=at)
         return before, self.store._event_from_row(row)
 
     def create_alarm_event(self, *, event_key: str, trigger_index: int, surfaced_at: datetime,

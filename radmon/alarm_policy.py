@@ -239,7 +239,7 @@ class AlarmPolicyService:
                 continue
             with self.store.detector_transaction(event.serid) as tx:
                 evidence = self.store.source_reconciliation_evidence(event_id, connection=tx.connection)
-                if tx.state.active_event_id != event_id:
+                if tx.state.active_event_id not in (None, event_id):
                     evidence.update({"status": "PENDING", "reason": "POLICY_STATE_NOT_LINKED"})
                     if self.store.record_source_reconciliation(evidence, connection=tx.connection):
                         self.audit.record(
@@ -257,8 +257,24 @@ class AlarmPolicyService:
                             connection=tx.connection,
                         )
                     continue
+                source_event_time = evidence.get("source_event_time")
+                if source_event_time:
+                    source_event_time = datetime.fromisoformat(str(source_event_time))
+                if source_event_time is None or not self.store.link_source_policy_event(
+                    str(evidence["source_id"]), int(evidence["serid"]), source_event_time,
+                    event_id, connection=tx.connection,
+                ):
+                    evidence.update({"status": "PENDING", "reason": "SOURCE_EVENT_LINK_NOT_WRITTEN"})
+                    if self.store.record_source_reconciliation(evidence, connection=tx.connection):
+                        self.audit.record(
+                            "ALARM_POLICY_SOURCE_RECONCILIATION_PENDING", None, "alarm", event_id,
+                            after=evidence, success=False, reason=evidence["reason"],
+                            source=source_id or event.source_id, connection=tx.connection,
+                        )
+                    continue
                 before, resolved = tx.resolve_active_event(
                     self.now(), "SOURCE_HANDLED", "exact source i_flag=1 evidence confirms the correlated alarm was handled",
+                    event_id=event_id,
                 )
                 evidence["status"] = "SOURCE_HANDLED"
                 self.store.record_source_reconciliation(evidence, connection=tx.connection)
