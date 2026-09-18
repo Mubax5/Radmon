@@ -237,6 +237,13 @@ def _wait_for(driver, selector: str):
     WebDriverWait(driver, 12).until(lambda browser: browser.find_elements(By.CSS_SELECTOR, selector))
 
 
+def _wait_for_absence(driver, selector: str):
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    WebDriverWait(driver, 12).until(lambda browser: not browser.find_elements(By.CSS_SELECTOR, selector))
+
+
 def _element_text(element) -> str:
     return (element.get_attribute("textContent") or "").strip()
 
@@ -426,7 +433,7 @@ def test_native_dialog_selects_and_filter_portals_stay_above_navigation(chrome_d
         assert result["z"] >= 100
         assert result["hit"] and result["aboveDialog"] and result["aboveNav"]
         chrome_driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-        assert not chrome_driver.find_elements(By.CSS_SELECTOR, "[role=listbox]")
+        _wait_for_absence(chrome_driver, "[role=listbox]")
     with _serve_ui() as base:
         for width, height in ((390, 844), (360, 480), (1366, 768)):
             _set_viewport(chrome_driver, width, height)
