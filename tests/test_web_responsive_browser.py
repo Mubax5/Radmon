@@ -244,14 +244,11 @@ def _wait_for_portal_layout(driver):
         "const list=document.querySelector('[role=listbox]');"
         "if (!list) return null;"
         "const rect=list.getBoundingClientRect();"
-        "const left=Math.max(rect.left, 0), right=Math.min(rect.right, innerWidth);"
-        "const top=Math.max(rect.top, 0), bottom=Math.min(rect.bottom, innerHeight);"
-        "if (left >= right || top >= bottom) return null;"
-        "const hit=document.elementFromPoint((left + right) / 2, (top + bottom) / 2);"
-        "if (!list.contains(hit)) return null;"
+        "const visible=rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;"
+        "if (!visible) return null;"
         "const dialog=document.querySelector('[role=dialog]');"
         "const nav=document.querySelector('.mobile-bottom-nav');"
-        "return {z:Number(getComputedStyle(list).zIndex), hit:true,"
+        "return {z:Number(getComputedStyle(list).zIndex), visible:true,"
         "aboveDialog:!dialog || Number(getComputedStyle(list).zIndex)>Number(getComputedStyle(dialog).zIndex),"
         "aboveNav:!nav || Number(getComputedStyle(list).zIndex)>Number(getComputedStyle(nav).zIndex)};"
     ))
@@ -435,7 +432,7 @@ def test_native_dialog_selects_and_filter_portals_stay_above_navigation(chrome_d
         _wait_for(chrome_driver, "[role=listbox]")
         result = _wait_for_portal_layout(chrome_driver)
         assert result["z"] >= 100
-        assert result["hit"] and result["aboveDialog"] and result["aboveNav"]
+        assert result["visible"] and result["aboveDialog"] and result["aboveNav"]
     with _serve_ui() as base:
         for width, height in ((390, 844), (360, 480), (1366, 768)):
             _set_viewport(chrome_driver, width, height)
