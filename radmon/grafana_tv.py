@@ -339,9 +339,9 @@ def _building_trend(panel_id: int, building: str, x: int, y: int, w: int, h: int
     panel["description"] = "building-dose-trend"
     # Per-minute aggregation over the narrow indexed recent table keeps the
     # 1h trend bounded (~60 points/series, max 5 series/building => ~300
-    # rows; the small limit gives headroom) and index-friendly via
-    # $__timeFilter(r.dtom). Server TZ is Asia/Jakarta, hence
-    # UNIX_TIMESTAMP(r.dtom) matches the legacy WIB epoch numerically.
+    # rows; the small limit gives headroom). recent.dtom is a WIB wall-clock
+    # DATETIME, so resolve Grafana's UTC epoch macros explicitly rather than
+    # relying on the datasource session timezone.
     # ORDER BY time ASC is mandatory: Grafana long->wide fails with
     # "not sorted in ascending order by time" otherwise.
     # Target B is the offline fallback: last-known per detector projected to
@@ -350,13 +350,15 @@ def _building_trend(panel_id: int, building: str, x: int, y: int, w: int, h: int
     panel["targets"] = [
         _target(f"""
 SELECT
-  (UNIX_TIMESTAMP(r.dtom) DIV 60) * 60 AS time,
+  ((TIMESTAMPDIFF(SECOND, '1970-01-01 00:00:00', r.dtom) - 7 * 60 * 60) DIV 60) * 60 AS time,
   CONCAT('[', r.serid, '] ', d.name) AS metric,
   AVG(r.doserate) AS value
 FROM recent r
 JOIN device d ON d.serid = r.serid
 WHERE r.serid IN ({_station_ids(stations)})
-  AND $__timeFilter(r.dtom)
+  AND r.dtom BETWEEN
+    TIMESTAMPADD(SECOND, $__unixEpochFrom() + 7 * 60 * 60, '1970-01-01 00:00:00') AND
+    TIMESTAMPADD(SECOND, $__unixEpochTo() + 7 * 60 * 60, '1970-01-01 00:00:00')
 GROUP BY 1, 2
 ORDER BY time ASC, metric ASC
 LIMIT {TREND_POINT_LIMIT}

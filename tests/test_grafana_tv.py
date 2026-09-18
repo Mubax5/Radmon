@@ -103,8 +103,9 @@ def test_page_two_one_hour_trends_and_live_summary_use_rolling_vrecent():
         assert "FROM measurement" not in sql
         assert "FROM vrecent" not in sql
         assert "CONVERT_TZ" not in sql
-        assert "UNIX_TIMESTAMP(r.dtom)" in sql
-        assert "$__timeFilter(r.dtom)" in sql
+        assert "TIMESTAMPDIFF(SECOND" in sql
+        assert "$__unixEpochFrom()" in sql
+        assert "$__unixEpochTo()" in sql
         assert "GROUP BY" in sql
         assert "LIMIT 600" in sql
     summaries = {

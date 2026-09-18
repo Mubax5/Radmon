@@ -52,12 +52,18 @@ def test_operation_offline_check_is_projected_by_vrecent_using_wib_now():
     assert "maxidlemin" in view_source
 
 
-def test_trend_query_uses_wib_to_utc_numeric_epoch_filter():
+def test_trend_query_resolves_epoch_range_as_wib_without_session_timezone():
     trends = build_dashboard_payloads()[1]
     trend = _panel(trends, description="building-dose-trend")
     sql = trend["targets"][0]["rawSql"]
     assert "FROM recent r" in sql
-    assert "UNIX_TIMESTAMP(r.dtom)" in sql
-    assert "$__timeFilter(r.dtom)" in sql
+    # recent.dtom is a WIB wall-clock DATETIME. $__timeFilter and
+    # UNIX_TIMESTAMP depend on the Grafana datasource session timezone, so a
+    # UTC session excludes fresh WIB rows from now-1h and shifts point times.
+    assert "$__unixEpochFrom()" in sql
+    assert "$__unixEpochTo()" in sql
+    assert "TIMESTAMPADD(SECOND" in sql
+    assert "TIMESTAMPDIFF(SECOND" in sql
+    assert "UNIX_TIMESTAMP(r.dtom)" not in sql
+    assert "$__timeFilter(r.dtom)" not in sql
     assert "CONVERT_TZ" not in sql
-    assert "$__unixEpochFrom()" not in sql

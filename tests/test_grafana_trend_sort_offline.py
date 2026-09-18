@@ -102,7 +102,8 @@ def test_page2_trend_offline_last_data_inside_range_and_bounded():
         assert len(targets) == 2, "trend wajib main + fallback offline"
         main, fallback = targets[0]["rawSql"], targets[1]["rawSql"]
         assert "FROM recent" in main
-        assert "$__timeFilter(" in main
+        assert "$__unixEpochFrom()" in main
+        assert "$__unixEpochTo()" in main
         assert "GROUP BY" in main
         assert "CONVERT_TZ" not in main
         assert _limit_value(main) <= 600, f"trend per-menit wajib LIMIT rendah: {main[:200]}"

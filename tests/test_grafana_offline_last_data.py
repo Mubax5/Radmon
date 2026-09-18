@@ -94,7 +94,8 @@ def test_page2_trends_bounded_with_offline_fallback():
         main, fallback = targets[0]["rawSql"], targets[1]["rawSql"]
         assert "FROM measurement" not in main
         assert "FROM recent" in main
-        assert "$__timeFilter(" in main
+        assert "$__unixEpochFrom()" in main
+        assert "$__unixEpochTo()" in main
         assert "GROUP BY" in main
         assert _limit_value(main) <= 600
         assert "FROM measurement" not in fallback
@@ -118,7 +119,7 @@ def test_status_logic_stays_centralized_in_vrecent():
         # threshold CASE logic inline. (TIMESTAMPDIFF(MICROSECOND, ...)
         # epoch conversion for the time panel is presentation, not
         # status logic; the SECOND-based idle check belongs to the view.)
-        assert "TIMESTAMPDIFF(SECOND" not in sql.upper().replace(" ", ""), (
+        assert "TIMESTAMPDIFF(SECOND,DTOM,NOW())" not in sql.upper().replace(" ", ""), (
             f"panel duplicates offline idle logic: {sql[:160]}"
         )
         assert "MAXIDLEMIN" not in sql.upper() or "COALESCE(v.maxidlemin" in sql or "COALESCE(s.maxidlemin" in sql, (

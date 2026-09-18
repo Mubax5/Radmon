@@ -98,8 +98,9 @@ def test_building_trends_use_lightweight_aggregation_over_recent():
         # Aggregated recent rows (or vrecent) keep the 3h trend bounded and
         # cheap; raw per-sample scans of the 51k-row view are not allowed.
         assert "FROM recent" in sql or "FROM vrecent" in sql
-        assert "$__timeFilter(" in sql
-        assert "CONVERT_TZ" not in sql or "$__timeFilter(" in sql
+        assert "$__unixEpochFrom()" in sql
+        assert "$__unixEpochTo()" in sql
+        assert "CONVERT_TZ" not in sql
         assert "BETWEEN $__unixEpochFrom() AND $__unixEpochTo()" not in sql
         assert "GROUP BY" in sql
         assert "LIMIT" in sql
