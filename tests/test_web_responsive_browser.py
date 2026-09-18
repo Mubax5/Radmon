@@ -432,7 +432,9 @@ def test_native_dialog_selects_and_filter_portals_stay_above_navigation(chrome_d
         )
         assert result["z"] >= 100
         assert result["hit"] and result["aboveDialog"] and result["aboveNav"]
-        chrome_driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+        # Toggle the combobox through its trigger; body-targeted synthetic
+        # Escape does not reach Kumo's portal dismissal handler in WebDriver.
+        chrome_driver.execute_script("arguments[0].click()", trigger)
         _wait_for_absence(chrome_driver, "[role=listbox]")
     with _serve_ui() as base:
         for width, height in ((390, 844), (360, 480), (1366, 768)):
