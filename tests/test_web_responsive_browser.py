@@ -411,7 +411,7 @@ def test_native_dialog_selects_and_filter_portals_stay_above_navigation(chrome_d
 
     def open_and_assert(selector: str):
         trigger = chrome_driver.find_element(By.CSS_SELECTOR, selector)
-        trigger.click()
+        chrome_driver.execute_script("arguments[0].click()", trigger)
         _wait_for(chrome_driver, "[role=listbox]")
         result = chrome_driver.execute_script(
             "const list=document.querySelector('[role=listbox]');"
