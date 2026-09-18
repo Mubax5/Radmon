@@ -43,7 +43,7 @@ def test_role_permission_matrix(tmp_path):
     assert store.role_allows(Role.ADMINISTRATOR, "ack_alarm")
     assert store.role_allows(Role.OPERATOR, "ack_alarm")
     assert not store.role_allows(Role.OPERATOR, "manage_users")
-    assert not store.role_allows(Role.OPERATOR, "edit_station")
+    assert store.role_allows(Role.OPERATOR, "edit_station")
     assert not store.role_allows(Role.VIEWER, "ack_alarm")
     assert store.role_allows(Role.VIEWER, "view")
 

@@ -194,6 +194,16 @@ WHERE serid = ?
             unit=_display_unit(self.settings.unit),
         )
 
+    def has_station(self, serid: int) -> bool:
+        """Check persisted station ownership without catalog fallback metadata."""
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM device WHERE serid = ?", (int(serid),))
+                return cursor.fetchone() is not None
+        finally:
+            connection.close()
+
     def station_configs(self) -> list[StationConfig]:
         connection = self._connect()
         try:

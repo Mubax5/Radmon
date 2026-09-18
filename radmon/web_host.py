@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ipaddress import ip_address
+import logging
 from pathlib import Path
 import sys
 from urllib.parse import urlsplit
@@ -34,6 +35,7 @@ _SPA_HEADERS = {
     "Cache-Control": "no-store, max-age=0",
     "Pragma": "no-cache",
 }
+LOG = logging.getLogger(__name__)
 
 
 def monitoring_url(settings: Settings) -> str:
@@ -86,6 +88,26 @@ def _spa_shell(index: Path) -> FileResponse:
     return FileResponse(index, headers=_SPA_HEADERS)
 
 
+def _grafana_client(app: FastAPI, *, transport: httpx.AsyncBaseTransport | None) -> httpx.AsyncClient:
+    client = getattr(app.state, "radmon_grafana_client", None)
+    if client is None or client.is_closed:
+        client = httpx.AsyncClient(
+            transport=transport,
+            timeout=httpx.Timeout(connect=5.0, read=30.0, write=30.0, pool=5.0),
+            limits=httpx.Limits(max_connections=32, max_keepalive_connections=16, keepalive_expiry=30.0),
+            follow_redirects=False,
+        )
+        app.state.radmon_grafana_client = client
+    return client
+
+
+def _upstream_error_detail(exc: Exception) -> str:
+    try:
+        return str(exc).replace("\r", " ").replace("\n", " ")[:500]
+    except Exception:
+        return "unprintable exception"
+
+
 def attach_web_routes(
     app: FastAPI,
     *,
@@ -95,6 +117,16 @@ def attach_web_routes(
 ) -> FastAPI:
     """Attach BRIN monitoring gateway and authenticated app static shell."""
     dist = Path(web_dist) if web_dist is not None else bundled_web_dist()
+
+    @app.on_event("startup")
+    async def start_grafana_client() -> None:
+        _grafana_client(app, transport=grafana_transport)
+
+    @app.on_event("shutdown")
+    async def stop_grafana_client() -> None:
+        client = getattr(app.state, "radmon_grafana_client", None)
+        if client is not None and not client.is_closed:
+            await client.aclose()
 
     @app.get("/", include_in_schema=False)
     def monitoring_landing():
@@ -140,18 +172,20 @@ def attach_web_routes(
 
         body = await request.body()
         try:
-            async with httpx.AsyncClient(
-                transport=grafana_transport,
-                timeout=30.0,
-                follow_redirects=False,
-            ) as client:
-                upstream = await client.request(
-                    request.method,
-                    upstream_url,
-                    headers=_grafana_headers(request, trusted_local=trusted_local),
-                    content=body,
-                )
+            upstream = await _grafana_client(app, transport=grafana_transport).request(
+                request.method,
+                upstream_url,
+                headers=_grafana_headers(request, trusted_local=trusted_local),
+                content=body,
+            )
         except httpx.HTTPError as exc:
+            LOG.warning(
+                "Grafana upstream request failed method=%s path=/%s error=%s: %s",
+                request.method,
+                path,
+                type(exc).__name__,
+                _upstream_error_detail(exc),
+            )
             raise HTTPException(status_code=502, detail="Grafana monitoring is unavailable") from exc
 
         response_headers: dict[str, str] = {}

@@ -23,7 +23,7 @@ export function useAppRoute(user: SessionUser | null): AppRoute {
   }, []);
 
   if (!user) return "overview";
-  const allowed = NAV_ITEMS.some(
+  const allowed = route === "station" || NAV_ITEMS.some(
     (item) => item.id === route && roleAllows(user.role, item.minimum),
   );
   return allowed ? route : "overview";

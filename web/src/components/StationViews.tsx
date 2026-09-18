@@ -113,10 +113,11 @@ export function StationCards({
             </div>
             <Badge variant={statusVariant(station.status)}>{statusLabel(station.status)}</Badge>
           </div>
-          <div className="card-meta">
+           <div className="card-meta">
             <span>Dose rate: <strong>{station.doserate == null ? "—" : `${station.doserate.toFixed(3)} ${station.unit}`}</strong></span>
             <span>Diperbarui: {formatTimestamp(station.dtom)}</span>
             <span>{freshnessLabel(station.dtom)}</span>
+            {station.status === "offline" && station.offline_reason ? <span>Alasan offline: {station.offline_reason}</span> : null}
           </div>
           {(onOpen || onHistory) ? (
             <div className="card-actions">
@@ -159,6 +160,12 @@ export function StationDetail({ station, onHistory }: { station: Station | null;
         <div className="station-detail-item"><span>Kesegaran data</span><strong>{freshnessLabel(station.dtom)}</strong></div>
         <div className="station-detail-item"><span>Peringatan</span><strong>{station.warnlevel} {station.unit}</strong></div>
         <div className="station-detail-item"><span>Alarm</span><strong>{station.alarmlevel} {station.unit}</strong></div>
+      </div>
+      <div className="card-meta">
+        <span>Deskripsi: {station.description || "—"}</span>
+        {station.status === "offline" && station.offline_reason ? <span>Alasan offline: {station.offline_reason}</span> : null}
+        {station.status === "offline" && station.offline_context ? <span>Konteks offline: {station.offline_context}</span> : null}
+        <span>Dikelola: {station.ownership === "source" ? `sumber LAN ${station.source_id}` : "pusat"}</span>
       </div>
       <div className="card-meta"><span>Measurement terakhir: {formatTimestamp(station.dtom)}</span></div>
       {onHistory ? <div className="card-actions"><Button variant="primary" onClick={() => onHistory(station)}>Lihat riwayat</Button></div> : null}

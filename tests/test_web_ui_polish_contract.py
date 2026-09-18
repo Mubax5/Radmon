@@ -61,7 +61,7 @@ def test_mobile_dialogs_are_marked_for_sheet_treatment():
     actions = read("Actions.tsx")
     users = read("pages/UsersPage.tsx")
     assert actions.count('className="radmon-dialog mobile-sheet-dialog"') >= 2
-    assert 'className="radmon-dialog mobile-sheet-dialog"' in users
+    assert '<dialog ref={dialog} className="native-user-dialog"' in users
 
 
 def test_response_and_role_controls_are_native_and_browser_selectable():

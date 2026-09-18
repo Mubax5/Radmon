@@ -8,5 +8,13 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "kumo-vendor": ["@cloudflare/kumo"],
+          "icons-vendor": ["@phosphor-icons/react"],
+        },
+      },
+    },
   },
 });

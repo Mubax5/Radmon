@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Input, LayerCard, Select } from "@cloudflare/kumo";
+import { Button, Input, LayerCard, Select } from "@cloudflare/kumo";
 import { api, type Station } from "../api";
+import { useSession } from "../auth";
 import { useWebRefresh } from "../live";
 import { navigate } from "../navigation";
 import {
@@ -27,11 +28,21 @@ const STATUS_ITEMS = {
 };
 
 export function StationsPage() {
+  const { user } = useSession();
   const [overview, setOverview] = useState<Overview | null>(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState("");
+  const [newSerid, setNewSerid] = useState("");
+  const [newName, setNewName] = useState("");
+  const [newLocation, setNewLocation] = useState("");
+  const [newDescription, setNewDescription] = useState("");
+  const [newWarnlevel, setNewWarnlevel] = useState("");
+  const [newAlarmlevel, setNewAlarmlevel] = useState("");
+  const [newMaxidlemin, setNewMaxidlemin] = useState("30");
+  const [newPin, setNewPin] = useState("");
+  const [creating, setCreating] = useState(false);
 
   const load = () => api<Overview>("/api/v1/web/overview")
     .then((value) => {
@@ -45,6 +56,21 @@ export function StationsPage() {
 
   useEffect(() => { void load(); }, []);
   useWebRefresh(() => { void load(); });
+
+  async function createStation(event: React.FormEvent) {
+    event.preventDefault();
+    const serid = Number(newSerid);
+    if (!Number.isInteger(serid) || serid <= 0) { setError("SERID harus berupa angka positif"); return; }
+    setCreating(true); setError("");
+    const warnlevel = Number(newWarnlevel);
+    const alarmlevel = Number(newAlarmlevel);
+    const maxidlemin = Number(newMaxidlemin);
+    if (![warnlevel, alarmlevel, maxidlemin].every(Number.isFinite) || warnlevel < 0 || alarmlevel < warnlevel || maxidlemin < 1 || !Number.isInteger(maxidlemin)) { setError("Threshold dan batas idle tidak valid"); return; }
+    try {
+      await api("/api/v1/control/stations", { method: "POST", body: JSON.stringify({ pin: newPin, serid, values: { name: newName, location: newLocation, description: newDescription, warnlevel, alarmlevel, maxidlemin } }) });
+      setNewSerid(""); setNewName(""); setNewLocation(""); setNewDescription(""); setNewWarnlevel(""); setNewAlarmlevel(""); setNewMaxidlemin("30"); setNewPin(""); load();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Pembuatan stasiun gagal"); } finally { setCreating(false); }
+  }
 
   const filtered = useMemo(() => {
     if (!overview) return [];
@@ -101,7 +127,7 @@ export function StationsPage() {
             <div className="station-workspace">
               <ResponsiveStationView
                 stations={filtered}
-                onOpen={(station) => setSelected(station.serid)}
+                onOpen={(station) => navigate("station", { serid: station.serid })}
                 onHistory={(station) => navigate("history", { station: station.serid })}
               />
               <StationDetail
@@ -110,6 +136,19 @@ export function StationsPage() {
               />
             </div>
           </PageSection>
+          {user && user.role !== "Viewer" ? <PageSection title="Tambah stasiun pusat" description="Hanya membuat stasiun yang dikelola pusat. Stasiun detector milik sumber LAN tidak dibuat, diubah, atau dihapus dari sini.">
+            <LayerCard className="action-card"><form className="action-form" onSubmit={createStation}>
+              <Input label="SERID" type="number" min="1" value={newSerid} onChange={(event) => setNewSerid(event.target.value)} disabled={creating} />
+              <Input label="Nama" value={newName} onChange={(event) => setNewName(event.target.value)} disabled={creating} />
+              <Input label="Lokasi" value={newLocation} onChange={(event) => setNewLocation(event.target.value)} disabled={creating} />
+              <Input label="Deskripsi perangkat" value={newDescription} onChange={(event) => setNewDescription(event.target.value)} disabled={creating} />
+              <Input label="Threshold peringatan" type="number" min="0" value={newWarnlevel} onChange={(event) => setNewWarnlevel(event.target.value)} disabled={creating} />
+              <Input label="Threshold alarm" type="number" min="0" value={newAlarmlevel} onChange={(event) => setNewAlarmlevel(event.target.value)} disabled={creating} />
+              <Input label="Batas idle (menit)" type="number" min="1" value={newMaxidlemin} onChange={(event) => setNewMaxidlemin(event.target.value)} disabled={creating} />
+              <Input label="PIN" type="password" value={newPin} onChange={(event) => setNewPin(event.target.value)} disabled={creating} />
+              <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !newSerid || !newName || !newLocation || !newWarnlevel || !newAlarmlevel || !newPin}>{creating ? "Membuat…" : "Tambah stasiun"}</Button></div>
+            </form></LayerCard>
+          </PageSection> : null}
         </>
       ) : null}
     </div>

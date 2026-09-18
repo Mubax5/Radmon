@@ -24,6 +24,7 @@ from .secure_services import build_secure_services
 from .web_api import attach_web_api_routes
 from .web_events import WebEventBroker
 from .web_host import attach_web_routes
+from .web_reports import WebReportJobs
 from .whatsapp import SeleniumWhatsAppSender, WhatsAppAlarmDispatcher
 
 
@@ -35,49 +36,164 @@ def _enabled(name: str) -> bool:
 
 
 class ManagedUvicornServer:
-    """Own one Uvicorn server and its worker thread explicitly."""
+    """Own one Uvicorn listener and restart an unexpectedly terminated worker."""
 
-    def __init__(self, app, host: str, port: int) -> None:
+    def __init__(self, app, host: str, port: int, *, server_factory: Callable[[Any, str, int], Any] | None = None) -> None:
+        self.app = app
         self.host = host
         self.port = int(port)
-        self._server = uvicorn.Server(
-            uvicorn.Config(app, host=host, port=self.port, reload=False, log_config=None)
-        )
+        self._server_factory = server_factory or self._new_uvicorn_server
+        self._server: Any | None = None
         self._thread: threading.Thread | None = None
+        self._supervisor: threading.Thread | None = None
+        self._lock = threading.RLock()
+        self._desired_running = False
+        self._stopped = threading.Event()
+        self._worker_exited = threading.Event()
+        self._status_lock = threading.Lock()
+        self._state = "STOPPED"
+        self._last_error: str | None = None
+        self._failure_count = 0
+
+    @staticmethod
+    def _new_uvicorn_server(app, host: str, port: int):
+        return uvicorn.Server(uvicorn.Config(app, host=host, port=port, reload=False, log_config=None))
+
+    @staticmethod
+    def _exception_detail(exc: BaseException) -> str:
+        try:
+            text = str(exc).replace("\n", " ").replace("\r", " ")
+        except Exception:
+            text = "unprintable exception"
+        return f"{type(exc).__name__}: {text[:500]}"
+
+    @property
+    def status(self) -> dict[str, object]:
+        running = self.running
+        with self._status_lock:
+            return {
+                "state": self._state,
+                "last_error": self._last_error,
+                "failure_count": self._failure_count,
+                "running": running,
+            }
 
     @property
     def running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive() and self._server.started)
+        with self._lock:
+            return bool(self._thread and self._thread.is_alive() and self._server and self._server.started)
+
+    def _set_status(self, state: str, error: str | None = None, *, failed: bool = False) -> None:
+        with self._status_lock:
+            self._state = state
+            self._last_error = error
+            if failed:
+                self._failure_count += 1
+
+    def _run_worker(self, server) -> None:
+        unexpected_error: str | None = None
+        try:
+            server.run()
+        except BaseException as exc:
+            unexpected_error = self._exception_detail(exc)
+            LOG.exception("central API listener terminated with an exception")
+        finally:
+            with self._lock:
+                desired = self._desired_running
+            if desired:
+                detail = unexpected_error or "Uvicorn listener exited unexpectedly"
+                self._set_status("DEGRADED", detail, failed=True)
+                LOG.error("central API listener unavailable on %s:%s: %s", self.host, self.port, detail)
+                self._worker_exited.set()
+
+    def _start_worker_locked(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._worker_exited.clear()
+        self._server = self._server_factory(self.app, self.host, self.port)
+        self._thread = threading.Thread(
+            target=self._run_worker, args=(self._server,), name="radmon-central-api", daemon=False,
+        )
+        self._thread.start()
+
+    def _supervise(self) -> None:
+        while not self._stopped.wait(0.1):
+            if not self._worker_exited.is_set():
+                continue
+            with self._lock:
+                if not self._desired_running:
+                    return
+                worker = self._thread
+            if worker is not None:
+                worker.join(timeout=0)
+                if worker.is_alive():
+                    continue
+            with self._status_lock:
+                delay = min(0.25 * (2 ** min(self._failure_count - 1, 5)), 8.0)
+            LOG.warning("central API listener restart scheduled in %.2fs", delay)
+            if self._stopped.wait(delay):
+                return
+            with self._lock:
+                if not self._desired_running or (self._thread is not None and self._thread.is_alive()):
+                    continue
+                self._set_status("RESTARTING", self._last_error)
+                self._start_worker_locked()
 
     def start(self, timeout: float = 30.0) -> None:
-        if self.running:
-            return
-        self._server.should_exit = False
-        self._server.force_exit = False
-        self._thread = threading.Thread(target=self._server.run, name="radmon-central-api", daemon=False)
-        self._thread.start()
+        with self._lock:
+            if self._desired_running and self.running:
+                return
+            if self._desired_running:
+                raise RuntimeError("central API sedang memulai ulang")
+            self._desired_running = True
+            self._stopped.clear()
+            self._set_status("STARTING")
+            self._start_worker_locked()
         deadline = time.monotonic() + max(0.1, timeout)
         while time.monotonic() < deadline:
-            if self._server.started:
+            if self.running:
+                self._set_status("OK")
+                with self._lock:
+                    if self._supervisor is None or not self._supervisor.is_alive():
+                        self._supervisor = threading.Thread(
+                            target=self._supervise, name="radmon-central-api-supervisor", daemon=True,
+                        )
+                        self._supervisor.start()
                 return
-            if not self._thread.is_alive():
+            with self._lock:
+                worker = self._thread
+            if worker is None or not worker.is_alive():
                 break
             time.sleep(0.05)
         self.stop(timeout=1.0)
         raise RuntimeError(f"central API gagal start pada {self.host}:{self.port}")
 
     def stop(self, timeout: float = 15.0) -> None:
-        thread = self._thread
+        with self._lock:
+            self._desired_running = False
+            self._stopped.set()
+            thread = self._thread
+            server = self._server
+            supervisor = self._supervisor
+            if server is not None:
+                server.should_exit = True
+        if supervisor is not None and supervisor is not threading.current_thread():
+            supervisor.join(timeout=max(0.1, timeout))
         if thread is None:
+            self._set_status("STOPPED")
             return
-        self._server.should_exit = True
         thread.join(timeout=max(0.1, timeout))
         if thread.is_alive():
-            self._server.force_exit = True
+            if server is not None:
+                server.force_exit = True
             thread.join(timeout=2.0)
         if thread.is_alive():
             raise RuntimeError("central API gagal berhenti")
-        self._thread = None
+        with self._lock:
+            self._thread = None
+            self._server = None
+            self._supervisor = None
+        self._set_status("STOPPED")
 
 
 class SuppressionExpiryScheduler:
@@ -182,6 +298,7 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         )
 
     repository = RealtimeCentralMariaDBRepository(settings)
+    report_jobs = WebReportJobs(services.security, services.audit, MariaDBRepository(settings), settings)
     web_events = WebEventBroker(max_queue=32)
     app = create_central_app(repository, settings)
     app.state.radmon_lan_enabled = bool(settings.lan_enabled)
@@ -194,6 +311,8 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         alarm_mirror=services.alarm_mirror,
         alarm_control=services.alarm_control,
         device_admin=services.device_admin,
+        user_admin=services.user_admin,
+        report_jobs=report_jobs,
         cookie_secure=_enabled("RADMON_WEB_COOKIE_SECURE"),
         archive_catalog=archive_catalog,
         archive_service=archive_service,
@@ -209,6 +328,10 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         event_broker=web_events,
     )
     attach_web_routes(app, settings=settings)
+
+    @app.on_event("shutdown")
+    async def stop_report_jobs() -> None:
+        report_jobs.shutdown()
 
     whatsapp = None
     if _enabled("RADMON_WHATSAPP_ENABLED"):
@@ -290,6 +413,9 @@ class CentralService:
                 lan_started = True
             api = self._api_factory(runtime.app, self.host, self.port)
             self._api = api
+            app_state = getattr(runtime.app, "state", None)
+            if app_state is not None:
+                app_state.radmon_api_server = api
             api.start()
         except Exception:
             self._api = None

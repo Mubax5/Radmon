@@ -1,13 +1,17 @@
+import { lazy, Suspense } from "react";
 import { LayerCard } from "@cloudflare/kumo";
 import { AuthProvider, LoginPage, useSession } from "./auth";
 import { AppLayout, useAppRoute } from "./layout";
-import { AlarmsPage } from "./pages/AlarmsPage";
-import { ArchivesPage } from "./pages/ArchivesPage";
-import { HistoryPage } from "./pages/HistoryPage";
-import { OverviewPage } from "./pages/OverviewPage";
-import { StationsPage } from "./pages/StationsPage";
-import { SystemPage } from "./pages/SystemPage";
-import { UsersPage } from "./pages/UsersPage";
+
+const AlarmsPage = lazy(() => import("./pages/AlarmsPage").then(({ AlarmsPage }) => ({ default: AlarmsPage })));
+const ArchivesPage = lazy(() => import("./pages/ArchivesPage").then(({ ArchivesPage }) => ({ default: ArchivesPage })));
+const HistoryPage = lazy(() => import("./pages/HistoryPage").then(({ HistoryPage }) => ({ default: HistoryPage })));
+const OverviewPage = lazy(() => import("./pages/OverviewPage").then(({ OverviewPage }) => ({ default: OverviewPage })));
+const StationsPage = lazy(() => import("./pages/StationsPage").then(({ StationsPage }) => ({ default: StationsPage })));
+const StationDetailPage = lazy(() => import("./pages/StationDetailPage").then(({ StationDetailPage }) => ({ default: StationDetailPage })));
+const ReportsPage = lazy(() => import("./pages/ReportsPage").then(({ ReportsPage }) => ({ default: ReportsPage })));
+const SystemPage = lazy(() => import("./pages/SystemPage").then(({ SystemPage }) => ({ default: SystemPage })));
+const UsersPage = lazy(() => import("./pages/UsersPage").then(({ UsersPage }) => ({ default: UsersPage })));
 
 function RadMonApplication() {
   const { user, loading, signOut } = useSession();
@@ -20,13 +24,17 @@ function RadMonApplication() {
 
   return (
     <AppLayout user={user} route={route} onSignOut={signOut}>
-      {route === "overview" && <OverviewPage />}
-      {route === "stations" && <StationsPage />}
-      {route === "history" && <HistoryPage />}
-      {route === "archives" && <ArchivesPage />}
-      {route === "alarms" && <AlarmsPage />}
-      {route === "users" && <UsersPage />}
-      {route === "system" && <SystemPage />}
+      <Suspense fallback={<LayerCard className="login-card">Memuat halaman...</LayerCard>}>
+        {route === "overview" && <OverviewPage />}
+        {route === "stations" && <StationsPage />}
+        {route === "station" && <StationDetailPage />}
+        {route === "history" && <HistoryPage />}
+        {route === "archives" && <ArchivesPage />}
+        {route === "reports" && <ReportsPage />}
+        {route === "alarms" && <AlarmsPage />}
+        {route === "users" && <UsersPage />}
+        {route === "system" && <SystemPage />}
+      </Suspense>
     </AppLayout>
   );
 }

@@ -133,11 +133,11 @@ ON DUPLICATE KEY UPDATE
         try:
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT serid, name, location, warnlevel, alarmlevel, maxidlemin, unit "
+                    "SELECT serid, name, location, description, warnlevel, alarmlevel, maxidlemin, unit "
                     "FROM device ORDER BY location, name"
                 )
                 rows = cursor.fetchall()
-            keys = ("serid", "name", "location", "warnlevel", "alarmlevel", "maxidlemin", "unit")
+            keys = ("serid", "name", "location", "description", "warnlevel", "alarmlevel", "maxidlemin", "unit")
             return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
         finally:
             connection.close()
@@ -149,7 +149,7 @@ ON DUPLICATE KEY UPDATE
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-SELECT d.serid, d.name, d.location, d.warnlevel, d.alarmlevel, d.maxidlemin, d.unit,
+SELECT d.serid, d.name, d.location, d.description, d.warnlevel, d.alarmlevel, d.maxidlemin, d.unit,
        v.dtom, v.doserate, v.dose, v.previnterval, v.stat
 FROM device d
 LEFT JOIN (
@@ -167,7 +167,7 @@ ORDER BY d.location, d.name
                 )
                 rows = cursor.fetchall()
             keys = (
-                "serid", "name", "location", "warnlevel", "alarmlevel", "maxidlemin", "unit",
+                "serid", "name", "location", "description", "warnlevel", "alarmlevel", "maxidlemin", "unit",
                 "dtom", "doserate", "dose", "previnterval", "stat",
             )
             return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
@@ -222,15 +222,20 @@ def create_central_app(repository: CentralRepositoryProtocol, settings: Settings
         scheduler = getattr(app.state, "radmon_suppression_expiry_scheduler", None)
         expiry = getattr(scheduler, "status", None)
         expiry_status = expiry if isinstance(expiry, dict) else None
+        api_server = getattr(app.state, "radmon_api_server", None)
+        api = getattr(api_server, "status", None)
+        api_status = api if isinstance(api, dict) else None
         database_ok = repository.ping()
         result = {
             "service": "radmon-central",
-            "status": "error" if not database_ok else ("degraded" if expiry_status and expiry_status.get("state") == "DEGRADED" else "ok"),
+            "status": "error" if not database_ok else ("degraded" if (expiry_status and expiry_status.get("state") == "DEGRADED") or (api_status and api_status.get("state") != "OK") else "ok"),
             "lan_enabled": bool(getattr(app.state, "radmon_lan_enabled", False)),
             "lan_source_count": int(getattr(app.state, "radmon_lan_source_count", 0)),
         }
         if expiry_status is not None:
             result["suppression_expiry"] = expiry_status
+        if api_status is not None:
+            result["api_listener"] = api_status
         return result
 
     @app.post("/api/v1/measurements/batch", dependencies=[Depends(require_token)])

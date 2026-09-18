@@ -34,7 +34,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[str]] = {
     Role.ADMINISTRATOR: frozenset({
         "view", "ack_alarm", "suppress_alarm", "manage_users", "edit_station", "manage_sources",
     }),
-    Role.OPERATOR: frozenset({"view", "ack_alarm", "suppress_alarm"}),
+    Role.OPERATOR: frozenset({"view", "ack_alarm", "suppress_alarm", "edit_station"}),
     Role.VIEWER: frozenset({"view"}),
 }
 
@@ -165,6 +165,7 @@ CREATE TABLE IF NOT EXISTS archive_quarters (
                     "source_response_attempts": "INTEGER NOT NULL DEFAULT 0",
                     "source_response_claimed_at": "TEXT",
                     "source_response_claim_observation": "INTEGER",
+                    "source_i_flag": "INTEGER NOT NULL DEFAULT 0",
                 }
                 for name, ddl in additions.items():
                     if name not in columns:
@@ -270,8 +271,8 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
 
     def set_user_enabled(self, username: str, enabled: bool) -> None:
         self._set_user_enabled_base(username, enabled)
-        if not enabled:
-            self.clear_sensitive_lease(username)
+        self.revoke_user_sessions(username)
+        self.clear_sensitive_lease(username)
 
     def reset_password(self, username: str, password: str) -> None:
         if len(password) < 8:
@@ -281,10 +282,55 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
                 "UPDATE users SET password_hash = ?, updated_at = ? WHERE username = ?",
                 (self._hash_secret(password), self._now().isoformat(), username.strip().lower()),
             )
+        self.revoke_user_sessions(username)
+        self.clear_sensitive_lease(username)
 
     def reset_pin(self, username: str, pin: str) -> None:
         self._reset_pin_base(username, pin)
+        self.revoke_user_sessions(username)
         self.clear_sensitive_lease(username)
+
+    def update_user(self, username: str, *, display_name: str | None = None, role: Role | str | None = None) -> dict[str, object]:
+        name = username.strip().lower()
+        if display_name is None and role is None:
+            raise ValueError("tidak ada perubahan pengguna")
+        assignments: list[str] = ["updated_at = ?"]
+        values: list[object] = [self._now().isoformat()]
+        if display_name is not None:
+            cleaned = display_name.strip()
+            if not cleaned or len(cleaned) > 128:
+                raise ValueError("nama tampilan tidak valid")
+            assignments.append("display_name = ?")
+            values.append(cleaned)
+        if role is not None:
+            selected = role if isinstance(role, Role) else Role(role)
+            assignments.append("role = ?")
+            values.append(selected.value)
+        values.append(name)
+        with self._connection() as connection:
+            cursor = connection.execute(
+                f"UPDATE users SET {', '.join(assignments)} WHERE username = ?", tuple(values)
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("user tidak ditemukan")
+        self.revoke_user_sessions(name)
+        self.clear_sensitive_lease(name)
+        return self.get_user(name)
+
+    def get_user(self, username: str) -> dict[str, object]:
+        name = username.strip().lower()
+        for item in self.list_users():
+            if item["username"] == name:
+                return item
+        raise ValueError("user tidak ditemukan")
+
+    def delete_user(self, username: str) -> dict[str, object]:
+        name = username.strip().lower()
+        # Retain the user row and its audit target for historical accountability.
+        # A deactivated account cannot authenticate and all of its sessions/leases
+        # are removed by set_user_enabled.
+        self.set_user_enabled(name, False)
+        return self.get_user(name)
 
     def list_users(self) -> list[dict[str, object]]:
         with self._connection() as connection:
@@ -370,6 +416,11 @@ WHERE s.token_hash = ?
         self._revoke_session_base(token)
         if identity is not None:
             self.clear_sensitive_lease(identity.username)
+
+    def revoke_user_sessions(self, username: str) -> None:
+        name = username.strip().lower()
+        with self._connection() as connection:
+            connection.execute("DELETE FROM sessions WHERE username = ?", (name,))
 
     def resolve_station(self, source_id: str, remote_serid: int) -> int:
         source = source_id.strip()
@@ -599,3 +650,14 @@ ON CONFLICT(quarter_id) DO UPDATE SET
         for source_id, _remote_serid, central_serid in rows:
             candidates.setdefault(int(central_serid), set()).add(str(source_id))
         return {serid: next(iter(source_ids)) for serid, source_ids in candidates.items() if len(source_ids) == 1}
+
+    def station_source_ids_map(self) -> dict[int, tuple[str, ...]]:
+        """Return every source claiming a central station, including conflicts."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                '\nSELECT source_id, central_serid\nFROM source_station_map\nORDER BY source_id, remote_serid\n'
+            ).fetchall()
+        candidates: dict[int, set[str]] = {}
+        for source_id, central_serid in rows:
+            candidates.setdefault(int(central_serid), set()).add(str(source_id))
+        return {serid: tuple(sorted(source_ids)) for serid, source_ids in candidates.items()}

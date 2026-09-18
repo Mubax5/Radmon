@@ -91,7 +91,7 @@ class RealtimeCentralMariaDBRepository(CentralMariaDBRepository):
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-SELECT d.serid, d.name, d.location, d.warnlevel, d.alarmlevel, d.maxidlemin, d.unit,
+SELECT d.serid, d.name, d.location, d.description, d.warnlevel, d.alarmlevel, d.maxidlemin, d.unit,
        v.dtom, v.doserate, v.dose, v.previnterval, v.stat
 FROM device d
 LEFT JOIN (
@@ -109,7 +109,7 @@ ORDER BY d.location, d.name
                 )
                 rows = cursor.fetchall()
             keys = (
-                "serid", "name", "location", "warnlevel", "alarmlevel", "maxidlemin", "unit",
+                "serid", "name", "location", "description", "warnlevel", "alarmlevel", "maxidlemin", "unit",
                 "dtom", "doserate", "dose", "previnterval", "stat",
             )
             return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]

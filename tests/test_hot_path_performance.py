@@ -169,7 +169,7 @@ def test_central_overview_reduces_latest_from_bounded_vrecent_not_measurement_hi
 
         def fetchall(self):
             return [
-                (5201, "IS-1", "Gd.52", 23.0, 25.0, 30, "µSv/h", fresh_at, 0.27, 0.02, 2, 0)
+                (5201, "IS-1", "Gd.52", "Configured offline context", 23.0, 25.0, 30, "µSv/h", fresh_at, 0.27, 0.02, 2, 0)
             ]
 
     class Connection:
@@ -190,6 +190,7 @@ def test_central_overview_reduces_latest_from_bounded_vrecent_not_measurement_hi
 
     assert rows[0]["dtom"] == fresh_at
     assert rows[0]["doserate"] == 0.27
+    assert rows[0]["description"] == "Configured offline context"
     assert "from vrecent" in connection.cursor_obj.sql
     assert "measurement" not in connection.cursor_obj.sql
     assert "max(dtom)" in connection.cursor_obj.sql

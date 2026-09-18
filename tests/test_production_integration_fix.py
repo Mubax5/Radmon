@@ -83,83 +83,30 @@ class _CentralDeviceRepo:
         return dict(self.row)
 
 
-class _RemoteDeviceRepo:
-    def __init__(self, calls, *, fail=False):
-        self.calls = calls
-        self.fail = fail
-        self.row = {
-            "serid": 5201,
-            "name": "IS-1",
-            "location": "Gd.52",
-            "description": "old",
-            "warnlevel": 23.0,
-            "alarmlevel": 25.0,
-            "maxidlemin": 30,
-            "unit": "µSv/h",
-            "audiopath": "",
-        }
-
-    def update_device(self, serid, changes):
-        self.calls.append("remote")
-        if self.fail:
-            raise RuntimeError("source write failed")
-        self.row.update(changes)
-        return dict(self.row)
-
-
-def _lan_device_service(tmp_path, calls, *, fail=False):
+def _lan_device_service(tmp_path, calls):
     store = SecurityStore(tmp_path / "security.db")
     store.create_user("admin", "Admin", Role.ADMINISTRATOR, "Password123!", "2468")
     store.resolve_station("gd52", 5201)
     central = _CentralDeviceRepo(calls)
-    remote = _RemoteDeviceRepo(calls, fail=fail)
     service = DeviceAdminService(
         store,
         central,
         AuditTrail(store),
         station_source=store.station_source,
-        remote_factory=lambda source_id: remote,
-        write_through=True,
     )
-    return store, central, remote, service
+    return store, central, service
 
 
-def test_lan_station_edit_writes_source_before_central(tmp_path):
+def test_lan_station_edit_is_rejected_without_remote_or_central_write(tmp_path):
     calls = []
-    store, central, remote, service = _lan_device_service(tmp_path, calls)
+    store, central, service = _lan_device_service(tmp_path, calls)
     identity = store.authenticate("admin", "Password123!")
 
-    updated = service.update_station(
-        identity,
-        "2468",
-        5201,
-        {"warnlevel": 20.0, "alarmlevel": 24.0, "name": "IS-1 Utama"},
-    )
-
-    assert calls == ["remote", "central"]
-    assert remote.row["warnlevel"] == 20.0
-    assert central.row["warnlevel"] == 20.0
-    assert updated["alarmlevel"] == 24.0
-
-
-def test_lan_station_edit_does_not_mutate_central_when_source_write_fails(tmp_path):
-    calls = []
-    store, central, _remote, service = _lan_device_service(tmp_path, calls, fail=True)
-    identity = store.authenticate("admin", "Password123!")
-
-    with pytest.raises(RuntimeError, match="source write failed"):
+    with pytest.raises(ValueError, match="milik sumber LAN"):
         service.update_station(identity, "2468", 5201, {"warnlevel": 20.0, "alarmlevel": 24.0})
 
-    assert calls == ["remote"]
+    assert calls == []
     assert central.row["warnlevel"] == 23.0
-
-
-def test_lan_station_edit_rejects_hardware_identity_fields(tmp_path):
-    calls = []
-    store, _central, _remote, service = _lan_device_service(tmp_path, calls)
-    identity = store.authenticate("admin", "Password123!")
-    with pytest.raises(ValueError, match="LAN"):
-        service.update_station(identity, "2468", 5201, {"hwaddress": "changed"})
 
 
 class _AlarmRemote:

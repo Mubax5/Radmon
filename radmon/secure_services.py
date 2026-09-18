@@ -109,22 +109,9 @@ def build_secure_services(settings) -> SecureServices:
     )
     user_admin = UserAdminService(security, audit)
 
-    device_admin.source_definitions = dict(sources)
-    if bool(getattr(settings, "lan_enabled", False)) and sources:
-        device_admin.write_through = True
-        device_admin.station_source = security.station_source
-
-        def remote_device_factory(source_id: str):
-            source = sources.get(str(source_id))
-            if source is None:
-                raise KeyError(f"LAN source tidak ditemukan: {source_id}")
-            return RemoteMariaDBSource(source)
-
-        device_admin.remote_factory = remote_device_factory
-    else:
-        device_admin.write_through = False
-        device_admin.station_source = None
-        device_admin.remote_factory = None
+    # Persisted mappings remain the ownership authority whether a LAN source is
+    # connected or not. Station administration never writes remote records.
+    device_admin.station_source = security.station_source
 
     bootstrap_user = os.getenv("RADMON_BOOTSTRAP_ADMIN_USER", "").strip()
     bootstrap_password = os.getenv("RADMON_BOOTSTRAP_ADMIN_PASSWORD", "")

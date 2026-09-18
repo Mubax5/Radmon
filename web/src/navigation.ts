@@ -1,6 +1,6 @@
 import type { Role } from "./api";
 
-export type AppRoute = "overview" | "stations" | "history" | "archives" | "alarms" | "users" | "system";
+export type AppRoute = "overview" | "stations" | "station" | "history" | "archives" | "reports" | "alarms" | "users" | "system";
 export type NavItem = { id: AppRoute; label: string; minimum: Role };
 
 export const ROLE_RANK: Record<Role, number> = {
@@ -14,6 +14,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { id: "stations", label: "Stasiun", minimum: "Viewer" },
   { id: "history", label: "Riwayat", minimum: "Viewer" },
   { id: "archives", label: "Arsip", minimum: "Viewer" },
+  { id: "reports", label: "Laporan", minimum: "Operator" },
   { id: "alarms", label: "Alarm", minimum: "Operator" },
   { id: "users", label: "Pengguna", minimum: "Administrator" },
   { id: "system", label: "Sistem", minimum: "Administrator" },
@@ -30,7 +31,7 @@ export function allowedRoutes(role: Role): NavItem[] {
 export function routeFromLocation(): AppRoute {
   const part = window.location.pathname.replace(/^\/app\/?/, "").split("/")[0];
   const route = (part && part !== "login" ? part : "overview") as AppRoute;
-  return NAV_ITEMS.some((item) => item.id === route) ? route : "overview";
+  return (route === "station" || NAV_ITEMS.some((item) => item.id === route)) ? route : "overview";
 }
 
 export function routeLabel(route: AppRoute): string {

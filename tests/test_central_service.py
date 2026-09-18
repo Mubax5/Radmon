@@ -1,5 +1,6 @@
 import socket
 import threading
+import time
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -45,6 +46,87 @@ def test_managed_uvicorn_stop_is_idempotent():
 
 def test_smoke_server_lifecycle_completes_without_leaking_listener():
     smoke_server_lifecycle()
+
+
+def test_managed_uvicorn_supervises_unexpected_listener_exit_without_duplicate_workers():
+    app = FastAPI()
+    exits: list[threading.Event] = []
+
+    class ControlledServer:
+        def __init__(self):
+            self.started = False
+            self.should_exit = False
+            self.force_exit = False
+            self.exit = threading.Event()
+            exits.append(self.exit)
+
+        def run(self):
+            self.started = True
+            while not self.should_exit and not self.force_exit and not self.exit.wait(0.01):
+                pass
+            self.started = False
+
+    created = []
+
+    def factory(app, host, port):
+        server = ControlledServer()
+        created.append(server)
+        return server
+
+    server = ManagedUvicornServer(app, "127.0.0.1", _free_port(), server_factory=factory)
+    server.start(timeout=1)
+    server.start(timeout=1)
+    assert len(created) == 1
+
+    exits[0].set()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and len(created) < 2:
+        time.sleep(0.02)
+
+    assert len(created) == 2
+    assert server.running
+    assert server.status["failure_count"] == 1
+    server.stop(timeout=1)
+
+
+def test_managed_uvicorn_restarts_after_worker_exception():
+    app = FastAPI()
+    release_failure = threading.Event()
+    created = []
+
+    class FailingServer:
+        def __init__(self, fails):
+            self.fails = fails
+            self.started = False
+            self.should_exit = False
+            self.force_exit = False
+
+        def run(self):
+            self.started = True
+            if self.fails:
+                release_failure.wait(1)
+                self.started = False
+                raise OSError("simulated accept failure")
+            while not self.should_exit and not self.force_exit:
+                time.sleep(0.01)
+            self.started = False
+
+    def factory(app, host, port):
+        server = FailingServer(not created)
+        created.append(server)
+        return server
+
+    server = ManagedUvicornServer(app, "127.0.0.1", _free_port(), server_factory=factory)
+    server.start(timeout=1)
+    release_failure.set()
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline and len(created) < 2:
+        time.sleep(0.02)
+
+    assert len(created) == 2
+    assert server.running
+    assert "OSError: simulated accept failure" in str(server.status["last_error"])
+    server.stop(timeout=1)
 
 
 class FakeLanRuntime:

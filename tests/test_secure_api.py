@@ -144,13 +144,13 @@ def test_viewer_cannot_ack_or_use_admin_mutations(tmp_path):
     assert client.post("/api/v1/control/users", json=user_payload("9999")).status_code == 403
 
 
-def test_operator_cannot_use_administrator_mutations(tmp_path):
+def test_operator_can_edit_station_but_cannot_manage_users(tmp_path):
     client, _, _ = make_client(tmp_path)
     login(client, "op")
     assert client.post(
         "/api/v1/control/stations/5201",
         json={"pin": "1357", "changes": {"name": "Nope"}},
-    ).status_code == 403
+    ).status_code == 200
     assert client.post("/api/v1/control/users", json=user_payload("1357")).status_code == 403
 
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import sqlite3
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field, model_validator
 
 from .audit import AuditTrail
 from .remote_alarm import RemoteAlarmMirror
@@ -13,6 +15,9 @@ from .security import Role, SecurityError, SecurityStore, UserIdentity
 
 SESSION_COOKIE = "radmon_session"
 SESSION_TTL_SECONDS = 8 * 60 * 60
+STATION_EDIT_FIELDS = frozenset({
+    "name", "location", "description", "warnlevel", "alarmlevel", "maxidlemin",
+})
 
 
 class LoginRequest(BaseModel):
@@ -53,6 +58,16 @@ class StationUpdateRequest(BaseModel):
     changes: dict[str, Any]
 
 
+class StationCreateRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+    serid: int = Field(gt=0)
+    values: dict[str, Any]
+
+
+class PinRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+
+
 class CreateUserRequest(BaseModel):
     pin: str = Field(min_length=4, max_length=8)
     username: str = Field(min_length=1, max_length=64)
@@ -62,8 +77,54 @@ class CreateUserRequest(BaseModel):
     user_pin: str = Field(min_length=4, max_length=8)
 
 
+class UpdateUserRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+    display_name: str | None = Field(default=None, min_length=1, max_length=128)
+    role: Role | None = None
+
+
+class UserEnabledRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+    enabled: bool
+
+
+class ResetPasswordRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+    password: str = Field(min_length=8, max_length=256)
+
+
+class ResetPinRequest(BaseModel):
+    pin: str = Field(min_length=4, max_length=8)
+    new_pin: str = Field(min_length=4, max_length=8)
+
+
+class ReportCreateRequest(BaseModel):
+    serid: int = Field(gt=0)
+    start_at: datetime
+    end_at: datetime
+
+    @model_validator(mode="after")
+    def validate_range(self):
+        start = self.start_at if self.start_at.tzinfo else self.start_at.replace(tzinfo=timezone.utc)
+        end = self.end_at if self.end_at.tzinfo else self.end_at.replace(tzinfo=timezone.utc)
+        if end <= start:
+            raise ValueError("report end must be after start")
+        if end - start > timedelta(days=366):
+            raise ValueError("rentang report terlalu panjang")
+        return self
+
+
 class ArchiveRetryRequest(BaseModel):
     pin: str = Field(min_length=4, max_length=8)
+
+
+def _report_response(item: dict[str, Any]) -> dict[str, Any]:
+    """Return only browser-safe persisted job metadata, never owner internals."""
+    fields = (
+        "job_id", "serid", "start_at", "end_at", "status", "artifact_name",
+        "error", "created_at", "completed_at",
+    )
+    return {field: item.get(field) for field in fields}
 
 
 def attach_secure_routes(
@@ -74,6 +135,8 @@ def attach_secure_routes(
     alarm_mirror: RemoteAlarmMirror,
     alarm_control: Any,
     device_admin: Any,
+    user_admin: Any | None = None,
+    report_jobs: Any | None = None,
     cookie_secure: bool = False,
     archive_catalog: Any | None = None,
     archive_service: Any | None = None,
@@ -96,6 +159,25 @@ def attach_secure_routes(
         if identity.role is not Role.ADMINISTRATOR:
             raise HTTPException(status_code=403, detail="administrator required")
         return identity
+
+    def require_station_editor(identity: UserIdentity = Depends(current_user)) -> UserIdentity:
+        if not security.role_allows(identity.role, "edit_station"):
+            raise HTTPException(status_code=403, detail="station editor permission required")
+        return identity
+
+    def user_error(exc: Exception) -> HTTPException:
+        if isinstance(exc, SecurityError):
+            return HTTPException(status_code=403, detail=str(exc))
+        if isinstance(exc, sqlite3.IntegrityError):
+            return HTTPException(status_code=409, detail="username sudah digunakan")
+        if isinstance(exc, ValueError):
+            detail = str(exc)
+            if detail == "user tidak ditemukan":
+                return HTTPException(status_code=404, detail=detail)
+            if "terakhir" in detail or "sedang dipakai" in detail:
+                return HTTPException(status_code=409, detail=detail)
+            return HTTPException(status_code=422, detail=detail)
+        return HTTPException(status_code=409, detail="perubahan pengguna tidak dapat disimpan")
 
     @app.post("/auth/login")
     def login(payload: LoginRequest, response: Response):
@@ -249,12 +331,39 @@ def attach_secure_routes(
     def update_station(
         serid: int,
         payload: StationUpdateRequest,
-        identity: UserIdentity = Depends(require_admin),
+        identity: UserIdentity = Depends(require_station_editor),
     ):
+        disallowed = set(payload.changes) - STATION_EDIT_FIELDS
+        if disallowed:
+            raise HTTPException(
+                status_code=422,
+                detail="field station tidak diizinkan: " + ", ".join(sorted(disallowed)),
+            )
         try:
             return device_admin.update_station(identity, payload.pin, serid, payload.changes)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/control/stations")
+    def create_station(payload: StationCreateRequest, identity: UserIdentity = Depends(require_station_editor)):
+        disallowed = set(payload.values) - STATION_EDIT_FIELDS
+        if disallowed:
+            raise HTTPException(
+                status_code=422,
+                detail="field station tidak diizinkan: " + ", ".join(sorted(disallowed)),
+            )
+        try:
+            return device_admin.create_station(identity, payload.pin, payload.serid, payload.values)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/v1/control/stations/{serid}")
+    def delete_station(serid: int, payload: PinRequest, identity: UserIdentity = Depends(require_station_editor)):
+        try:
+            device_admin.delete_station(identity, payload.pin, serid)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"status": "deleted", "serid": serid}
 
     @app.get("/api/v1/control/users")
     def users(identity: UserIdentity = Depends(require_admin)):
@@ -265,28 +374,107 @@ def attach_secure_routes(
         payload: CreateUserRequest,
         identity: UserIdentity = Depends(require_admin),
     ):
+        from .user_admin import UserAdminService
+        manager = user_admin or UserAdminService(security, audit)
         try:
-            security.require_sensitive(identity, "manage_users", payload.pin)
-            created = security.create_user(
-                payload.username, payload.display_name, payload.role,
-                payload.password, payload.user_pin, actor=identity.username,
+            created = manager.create_user(
+                identity, payload.pin, payload.username, payload.display_name,
+                payload.role, payload.password, payload.user_pin,
             )
         except Exception as exc:
-            audit.record(
-                "USER_CREATE", identity, "user", payload.username,
-                after={"display_name": payload.display_name, "role": payload.role.value},
-                success=False, reason=str(exc),
-            )
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        audit.record(
-            "USER_CREATE", identity, "user", created.username,
-            after={"display_name": created.display_name, "role": created.role.value},
-        )
-        return {
-            "username": created.username,
-            "display_name": created.display_name,
-            "role": created.role.value,
-        }
+            raise user_error(exc) from exc
+        return security.get_user(created.username)
+
+    def user_manager():
+        from .user_admin import UserAdminService
+        return user_admin or UserAdminService(security, audit)
+
+    @app.patch("/api/v1/control/users/{username}")
+    def update_user(username: str, payload: UpdateUserRequest, identity: UserIdentity = Depends(require_admin)):
+        try:
+            return user_manager().update_user(identity, payload.pin, username, display_name=payload.display_name, role=payload.role)
+        except Exception as exc:
+            raise user_error(exc) from exc
+
+    @app.post("/api/v1/control/users/{username}/enabled")
+    def set_user_enabled(username: str, payload: UserEnabledRequest, identity: UserIdentity = Depends(require_admin)):
+        try:
+            user_manager().set_enabled(identity, payload.pin, username, payload.enabled)
+            return security.get_user(username)
+        except Exception as exc:
+            raise user_error(exc) from exc
+
+    @app.post("/api/v1/control/users/{username}/password")
+    def reset_user_password(username: str, payload: ResetPasswordRequest, identity: UserIdentity = Depends(require_admin)):
+        try:
+            user_manager().reset_password(identity, payload.pin, username, payload.password)
+        except Exception as exc:
+            raise user_error(exc) from exc
+        return {"status": "reset"}
+
+    @app.post("/api/v1/control/users/{username}/pin")
+    def reset_user_pin(username: str, payload: ResetPinRequest, identity: UserIdentity = Depends(require_admin)):
+        try:
+            user_manager().reset_pin(identity, payload.pin, username, payload.new_pin)
+        except Exception as exc:
+            raise user_error(exc) from exc
+        return {"status": "reset"}
+
+    @app.delete("/api/v1/control/users/{username}")
+    def delete_user(username: str, payload: PinRequest, identity: UserIdentity = Depends(require_admin)):
+        try:
+            user_manager().delete_user(identity, payload.pin, username)
+        except Exception as exc:
+            raise user_error(exc) from exc
+        return {"status": "deactivated", "user": security.get_user(username)}
+
+    @app.get("/api/v1/control/reports")
+    def reports(identity: UserIdentity = Depends(require_operator)):
+        if report_jobs is None:
+            raise HTTPException(status_code=404, detail="report service unavailable")
+        username = None if identity.role is Role.ADMINISTRATOR else identity.username
+        return [_report_response(item) for item in report_jobs.list(username=username)]
+
+    @app.post("/api/v1/control/reports")
+    def create_report(payload: ReportCreateRequest, identity: UserIdentity = Depends(require_operator)):
+        if report_jobs is None:
+            raise HTTPException(status_code=404, detail="report service unavailable")
+        try:
+            return _report_response(report_jobs.create(identity, serid=payload.serid, start=payload.start_at, end=payload.end_at))
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail="pembuatan report tidak dapat dimulai") from exc
+
+    def authorised_report(job_id: str, identity: UserIdentity) -> dict[str, Any]:
+        item = report_jobs.get(job_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="report job tidak ditemukan")
+        owner = item.get("username")
+        if owner != identity.username and identity.role is not Role.ADMINISTRATOR:
+            raise HTTPException(status_code=403, detail="report milik pengguna lain")
+        return item
+
+    @app.get("/api/v1/control/reports/{job_id}")
+    def report_status(job_id: str, identity: UserIdentity = Depends(require_operator)):
+        if report_jobs is None:
+            raise HTTPException(status_code=404, detail="report service unavailable")
+        return _report_response(authorised_report(job_id, identity))
+
+    @app.get("/api/v1/control/reports/{job_id}/download")
+    def download_report(job_id: str, identity: UserIdentity = Depends(require_operator)):
+        if report_jobs is None:
+            raise HTTPException(status_code=404, detail="report service unavailable")
+        # Check ownership before touching the filesystem or exposing readiness.
+        authorised_report(job_id, identity)
+        try:
+            item, path = report_jobs.artifact(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit.record("REPORT_DOWNLOAD", identity, "report", job_id)
+        return FileResponse(path, media_type="application/pdf", filename=f"radmon-report-{job_id}.pdf")
 
     @app.get("/api/v1/control/audit")
     def audit_events(identity: UserIdentity = Depends(current_user)):

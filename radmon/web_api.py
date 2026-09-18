@@ -55,6 +55,40 @@ def _measurement_is_stale(row: dict[str, Any], station: dict[str, Any]) -> bool:
     return (now - measured_at) > timedelta(minutes=max_idle_minutes)
 
 
+def _station_status(station: dict[str, Any], row: dict[str, Any] | None) -> tuple[str, float | None, Any, str | None]:
+    if row is None:
+        return "offline", None, None, "Belum ada measurement dari perangkat"
+    dose_rate = float(row.get("doserate") or 0.0)
+    measured_at = row.get("dtom")
+    if _measurement_is_stale(row, station):
+        return "offline", dose_rate, measured_at, "Measurement terakhir melewati batas idle perangkat"
+    alarm_level = float(station.get("alarmlevel") or 0.0)
+    warn_level = float(station.get("warnlevel") or 0.0)
+    if alarm_level > 0 and dose_rate >= alarm_level:
+        return "alarm", dose_rate, measured_at, None
+    if warn_level > 0 and dose_rate >= warn_level:
+        return "warning", dose_rate, measured_at, None
+    return "normal", dose_rate, measured_at, None
+
+
+def _station_response(station: dict[str, Any], row: dict[str, Any] | None, source_id: str | None) -> dict[str, Any]:
+    status, dose_rate, measured_at, offline_reason = _station_status(station, row)
+    description = str(station.get("description") or "")
+    return {
+        **station,
+        "description": description,
+        "status": status,
+        "doserate": dose_rate,
+        "dtom": measured_at,
+        "latest_timestamp": measured_at,
+        "offline_reason": offline_reason,
+        "offline_context": description if status == "offline" else None,
+        "offline_description": description if status == "offline" else None,
+        "source_id": source_id,
+        "ownership": "source" if source_id else "central",
+    }
+
+
 def attach_web_api_routes(
     app: FastAPI,
     *,
@@ -79,7 +113,7 @@ def attach_web_api_routes(
             for snapshot in snapshots:
                 station = {
                     key: snapshot.get(key)
-                    for key in ("serid", "name", "location", "warnlevel", "alarmlevel", "maxidlemin", "unit")
+                    for key in ("serid", "name", "location", "description", "warnlevel", "alarmlevel", "maxidlemin", "unit")
                 }
                 row = None if snapshot.get("dtom") is None else snapshot
                 station_rows.append((station, row))
@@ -89,28 +123,33 @@ def attach_web_api_routes(
                 for station in repository.stations()
             ]
 
+        source_map = security.station_source_ids_map()
         for station, row in station_rows:
-            status = "offline"
-            dose_rate = None
-            measured_at = None
-            if row is not None:
-                dose_rate = float(row.get("doserate") or 0.0)
-                measured_at = row.get("dtom")
-                if _measurement_is_stale(row, station):
-                    status = "offline"
-                elif dose_rate >= float(station.get("alarmlevel") or 0.0):
-                    status = "alarm"
-                elif dose_rate >= float(station.get("warnlevel") or 0.0):
-                    status = "warning"
-                else:
-                    status = "normal"
-            counts[status] += 1
-            items.append({**station, "status": status, "doserate": dose_rate, "dtom": measured_at})
+            source_ids = source_map.get(int(station["serid"]), ())
+            item = _station_response(station, row, ", ".join(source_ids) or None)
+            counts[item["status"]] += 1
+            items.append(item)
         return {"counts": counts, "stations": items, "role": identity.role.value}
 
     @app.get("/api/v1/web/stations")
     def stations(identity: UserIdentity = Depends(viewer)):
-        return repository.stations()
+        source_map = security.station_source_ids_map()
+        return [
+            _station_response(
+                station,
+                repository.latest(int(station["serid"])),
+                ", ".join(source_map.get(int(station["serid"]), ())) or None,
+            )
+            for station in repository.stations()
+        ]
+
+    @app.get("/api/v1/web/stations/{serid}")
+    def station_detail(serid: int, identity: UserIdentity = Depends(viewer)):
+        station = next((row for row in repository.stations() if int(row["serid"]) == int(serid)), None)
+        if station is None:
+            raise HTTPException(status_code=404, detail="station tidak ditemukan")
+        source_ids = security.station_source_ids_map().get(int(serid), ())
+        return _station_response(station, repository.latest(int(serid)), ", ".join(source_ids) or None)
 
     @app.get("/api/v1/web/stations/{serid}/history")
     def station_history(

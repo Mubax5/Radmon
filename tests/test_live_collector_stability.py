@@ -104,7 +104,7 @@ def test_central_overview_snapshot_reads_bounded_vrecent_with_one_connection() -
 
         def fetchall(self):
             return [
-                (5201, "IS-1", "Gd.52", 23.0, 25.0, 30, "µSv/h", fresh_at, 0.27, 0.01, 2, 0)
+                (5201, "IS-1", "Gd.52", "Configured offline context", 23.0, 25.0, 30, "µSv/h", fresh_at, 0.27, 0.01, 2, 0)
             ]
 
     class Connection:
@@ -136,6 +136,7 @@ def test_central_overview_snapshot_reads_bounded_vrecent_with_one_connection() -
     assert rows[0]["serid"] == 5201
     assert rows[0]["dtom"] == fresh_at
     assert rows[0]["doserate"] == 0.27
+    assert rows[0]["description"] == "Configured offline context"
     assert "from vrecent" in connection.c.sql
     assert "from measurement" not in connection.c.sql
     assert "max(dtom)" in connection.c.sql

@@ -8,3 +8,9 @@ logs/*.log
 .worktrees/
 runtime/
 archives/
+web/node_modules/
+web/dist/
+web/.cache/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts

@@ -445,8 +445,8 @@ export function CreateUserForm({
 
   return (
     <form className="action-form user-create-form" onSubmit={submit}>
-      <Input label="Username" value={username} onChange={(e) => setUsername(e.target.value)} disabled={pending} />
-      <Input label="Nama tampilan" value={displayName} onChange={(e) => setDisplayName(e.target.value)} disabled={pending} />
+      <label className="native-input-field"><span>Username</span><input value={username} onChange={(e) => setUsername(e.target.value)} disabled={pending} required autoComplete="username" /></label>
+      <label className="native-input-field"><span>Nama tampilan</span><input value={displayName} onChange={(e) => setDisplayName(e.target.value)} disabled={pending} required autoComplete="name" /></label>
       <NativeSelect
         id="user-role-select"
         name="role"
@@ -461,9 +461,9 @@ export function CreateUserForm({
         <option value="Operator">Operator</option>
         <option value="Administrator">Administrator</option>
       </NativeSelect>
-      <Input label="Password awal" type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={pending} />
-      <Input label="PIN pengguna" type="password" value={userPin} onChange={(e) => setUserPin(e.target.value)} disabled={pending} />
-      <Input label="PIN Administrator" type="password" value={adminPin} onChange={(e) => setAdminPin(e.target.value)} disabled={pending} />
+      <label className="native-input-field"><span>Password awal</span><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={pending} required minLength={8} autoComplete="new-password" /></label>
+      <label className="native-input-field"><span>PIN pengguna</span><input type="password" inputMode="numeric" value={userPin} onChange={(e) => setUserPin(e.target.value)} disabled={pending} required minLength={4} maxLength={8} autoComplete="new-password" /></label>
+      <label className="native-input-field"><span>PIN Administrator</span><input type="password" inputMode="numeric" value={adminPin} onChange={(e) => setAdminPin(e.target.value)} disabled={pending} required minLength={4} maxLength={8} autoComplete="current-password" /></label>
       <div className="form-actions">
         <Button type="submit" variant="primary" disabled={pending || !username || !displayName || !password || !userPin || !adminPin}>
           {pending ? "Membuat…" : "Buat pengguna"}

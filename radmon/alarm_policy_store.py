@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS alarm_policy_state (
   active_event_id TEXT,
   last_trigger_at TEXT,
   last_normal_at TEXT,
+  last_measurement_at TEXT,
   updated_at TEXT NOT NULL,
   CHECK(retrigger_locked = 0 OR trigger_count = 3)
 );
@@ -58,7 +59,10 @@ CREATE TABLE IF NOT EXISTS alarm_policy_event (
   pic TEXT,
   action TEXT,
   reason TEXT,
-  notification_sent_at TEXT
+  notification_sent_at TEXT,
+  resolved_at TEXT,
+  resolution_code TEXT,
+  resolution_reason TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_alarm_policy_one_suppressed_per_session
 ON alarm_policy_event(suppression_id)
@@ -98,6 +102,7 @@ class PolicyState:
     active_event_id: str | None = None
     last_trigger_at: datetime | None = None
     last_normal_at: datetime | None = None
+    last_measurement_at: datetime | None = None
     updated_at: datetime | None = None
 
 
@@ -140,6 +145,9 @@ class PolicyEvent:
     action: str | None
     reason: str | None
     notification_sent_at: datetime | None
+    resolved_at: datetime | None
+    resolution_code: str | None
+    resolution_reason: str | None
 
 
 class AlarmPolicyStore:
@@ -159,7 +167,8 @@ class AlarmPolicyStore:
             active_event_id=row[4],
             last_trigger_at=_dt(row[5]),
             last_normal_at=_dt(row[6]),
-            updated_at=_dt(row[7]),
+            last_measurement_at=_dt(row[7]),
+            updated_at=_dt(row[8]),
         )
 
     @staticmethod
@@ -186,7 +195,8 @@ class AlarmPolicyStore:
             surfaced_at=_dt(row[9]), measured_value=float(row[10]) if row[10] is not None else None,
             threshold=float(row[11]) if row[11] is not None else None, status=str(row[12]),
             suppression_id=row[13], responded_at=_dt(row[14]), pic=row[15], action=row[16],
-            reason=row[17], notification_sent_at=_dt(row[18]),
+            reason=row[17], notification_sent_at=_dt(row[18]), resolved_at=_dt(row[19]),
+            resolution_code=row[20], resolution_reason=row[21],
         )
 
     @staticmethod
@@ -203,9 +213,24 @@ class AlarmPolicyStore:
                 for statement in SCHEMA.split(";"):
                     if statement.strip():
                         db.execute(statement)
+                db.execute(
+                    "CREATE TABLE IF NOT EXISTS alarm_policy_schema_migration "
+                    "(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+                )
                 suppression_columns = {str(row[1]) for row in db.execute("PRAGMA table_info(alarm_suppression)")}
                 if "ended_by" not in suppression_columns:
                     db.execute("ALTER TABLE alarm_suppression ADD COLUMN ended_by TEXT")
+                state_columns = {str(row[1]) for row in db.execute("PRAGMA table_info(alarm_policy_state)")}
+                if "last_measurement_at" not in state_columns:
+                    db.execute("ALTER TABLE alarm_policy_state ADD COLUMN last_measurement_at TEXT")
+                event_columns = {str(row[1]) for row in db.execute("PRAGMA table_info(alarm_policy_event)")}
+                for name in ("resolved_at", "resolution_code", "resolution_reason"):
+                    if name not in event_columns:
+                        db.execute(f"ALTER TABLE alarm_policy_event ADD COLUMN {name} TEXT")
+                db.execute(
+                    "INSERT OR IGNORE INTO alarm_policy_schema_migration (version, applied_at) VALUES (?, ?)",
+                    (3, _iso(datetime.now())),
+                )
                 db.commit()
             except Exception:
                 db.rollback()
@@ -216,7 +241,7 @@ class AlarmPolicyStore:
     def get_state(self, serid: int) -> PolicyState:
         with self.security._connection() as db:
             row = db.execute(
-                "SELECT serid, window_started_at, trigger_count, retrigger_locked, active_event_id, last_trigger_at, last_normal_at, updated_at FROM alarm_policy_state WHERE serid = ?",
+                "SELECT serid, window_started_at, trigger_count, retrigger_locked, active_event_id, last_trigger_at, last_normal_at, last_measurement_at, updated_at FROM alarm_policy_state WHERE serid = ?",
                 (int(serid),),
             ).fetchone()
         return self._state_from_row(row, int(serid))
@@ -231,19 +256,21 @@ class AlarmPolicyStore:
             db.execute(
                 """
 INSERT INTO alarm_policy_state
-  (serid, window_started_at, trigger_count, retrigger_locked, active_event_id, last_trigger_at, last_normal_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+   (serid, window_started_at, trigger_count, retrigger_locked, active_event_id, last_trigger_at, last_normal_at, last_measurement_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(serid) DO UPDATE SET
   window_started_at=excluded.window_started_at,
   trigger_count=excluded.trigger_count,
   retrigger_locked=excluded.retrigger_locked,
-  active_event_id=excluded.active_event_id,
-  last_trigger_at=excluded.last_trigger_at,
-  last_normal_at=excluded.last_normal_at,
-  updated_at=excluded.updated_at
+   active_event_id=excluded.active_event_id,
+   last_trigger_at=excluded.last_trigger_at,
+   last_normal_at=excluded.last_normal_at,
+   last_measurement_at=excluded.last_measurement_at,
+   updated_at=excluded.updated_at
 """,
                 (int(state.serid), _iso(state.window_started_at), int(state.trigger_count), 1 if state.retrigger_locked else 0,
-                 state.active_event_id, _iso(state.last_trigger_at), _iso(state.last_normal_at), _iso(updated)),
+                  state.active_event_id, _iso(state.last_trigger_at), _iso(state.last_normal_at),
+                  _iso(state.last_measurement_at), _iso(updated)),
             )
             state.updated_at = updated
             if own:
@@ -446,7 +473,8 @@ ON CONFLICT(event_key) DO NOTHING
             row = db.execute(
                 """SELECT event_id, event_key, serid, source_id, remote_serid, remote_event_time,
                           origin, kind, trigger_index, surfaced_at, measured_value, threshold, status,
-                          suppression_id, responded_at, pic, action, reason, notification_sent_at
+                           suppression_id, responded_at, pic, action, reason, notification_sent_at,
+                           resolved_at, resolution_code, resolution_reason
                    FROM alarm_policy_event WHERE event_key=?""",
                 (str(event_key),),
             ).fetchone()
@@ -469,10 +497,37 @@ ON CONFLICT(event_key) DO NOTHING
             row = db.execute(
                 """SELECT event_id, event_key, serid, source_id, remote_serid, remote_event_time,
                           origin, kind, trigger_index, surfaced_at, measured_value, threshold, status,
-                          suppression_id, responded_at, pic, action, reason, notification_sent_at
+                           suppression_id, responded_at, pic, action, reason, notification_sent_at,
+                           resolved_at, resolution_code, resolution_reason
                    FROM alarm_policy_event WHERE event_id=?""", (str(event_id),),
             ).fetchone()
         return self._event_from_row(row)
+
+    def latest_policy_event(self, serid: int) -> PolicyEvent | None:
+        with self.security._connection() as db:
+            row = db.execute(
+                """SELECT event_id, event_key, serid, source_id, remote_serid, remote_event_time,
+                          origin, kind, trigger_index, surfaced_at, measured_value, threshold, status,
+                          suppression_id, responded_at, pic, action, reason, notification_sent_at,
+                          resolved_at, resolution_code, resolution_reason
+                   FROM alarm_policy_event WHERE serid=? ORDER BY surfaced_at DESC LIMIT 1""",
+                (int(serid),),
+            ).fetchone()
+        return self._event_from_row(row)
+
+    def source_handled_active_event_ids(self, source_id: str) -> list[str]:
+        """Return only events explicitly closed by a fresh source i_flag observation."""
+        with self.security._connection() as db:
+            rows = db.execute(
+                """SELECT DISTINCT event.event_id
+                   FROM alarm_policy_event AS event
+                   JOIN remote_alarm_state AS raw ON raw.policy_event_id=event.event_id
+                   WHERE event.status='ACTIVE' AND raw.source_id=?
+                     AND raw.is_active=0 AND raw.source_i_flag=1
+                     AND raw.event_time>=event.surfaced_at""",
+                (str(source_id),),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
 
     def list_policy_events(self, *, serid: int | None = None, active_only: bool = False,
                            notify_pending_only: bool = False, limit: int = 500) -> list[PolicyEvent]:
@@ -491,7 +546,8 @@ ON CONFLICT(event_key) DO NOTHING
             rows = db.execute(
                 f"""SELECT event_id, event_key, serid, source_id, remote_serid, remote_event_time,
                            origin, kind, trigger_index, surfaced_at, measured_value, threshold, status,
-                           suppression_id, responded_at, pic, action, reason, notification_sent_at
+                           suppression_id, responded_at, pic, action, reason, notification_sent_at,
+                           resolved_at, resolution_code, resolution_reason
                     FROM alarm_policy_event {clause}
                     ORDER BY surfaced_at DESC LIMIT ?""", tuple(params),
             ).fetchall()
@@ -1063,7 +1119,8 @@ ON CONFLICT(event_key) DO NOTHING
             rows = db.execute(
                 """SELECT event_id, event_key, serid, source_id, remote_serid, remote_event_time,
                           origin, kind, trigger_index, surfaced_at, measured_value, threshold, status,
-                          suppression_id, responded_at, pic, action, reason, notification_sent_at
+                           suppression_id, responded_at, pic, action, reason, notification_sent_at,
+                           resolved_at, resolution_code, resolution_reason
                    FROM alarm_policy_event
                    WHERE serid=? AND suppression_id=? AND kind='ALARM' AND status='ACTIVE'
                      AND (source_id IS NULL OR source_id=?)
@@ -1107,7 +1164,7 @@ class _DetectorTransaction:
         self.connection = connection
         self.serid = int(serid)
         row = connection.execute(
-            "SELECT serid, window_started_at, trigger_count, retrigger_locked, active_event_id, last_trigger_at, last_normal_at, updated_at FROM alarm_policy_state WHERE serid=?",
+            "SELECT serid, window_started_at, trigger_count, retrigger_locked, active_event_id, last_trigger_at, last_normal_at, last_measurement_at, updated_at FROM alarm_policy_state WHERE serid=?",
             (self.serid,),
         ).fetchone()
         self.state = store._state_from_row(row, self.serid)
@@ -1134,6 +1191,42 @@ class _DetectorTransaction:
         self.state.last_trigger_at = None
         self.state.last_normal_at = at
         return self.save_state(at=at)
+
+    def accept_measurement(self, measured_at: datetime) -> bool:
+        previous = self.state.last_measurement_at
+        # Some source schemas update a current row in place. Equal timestamps
+        # are therefore a valid newer observation; only time going backwards is unsafe.
+        if previous is not None and measured_at < previous:
+            return False
+        self.state.last_measurement_at = measured_at
+        return True
+
+    def resolve_active_event(self, at: datetime, status: str, reason: str) -> tuple[PolicyEvent | None, PolicyEvent | None]:
+        event_id = self.state.active_event_id
+        if not event_id:
+            return None, None
+        before = self.store.get_event(event_id)
+        if before is None or before.status != "ACTIVE":
+            self.state.active_event_id = None
+            self.save_state(at=at)
+            return before, before
+        self.connection.execute(
+            """UPDATE alarm_policy_event
+               SET status=?, resolved_at=?, resolution_code=?, resolution_reason=?
+               WHERE event_id=? AND status='ACTIVE'""",
+            (str(status), _iso(at), str(status), str(reason), str(event_id)),
+        )
+        row = self.connection.execute(
+            """SELECT event_id, event_key, serid, source_id, remote_serid, remote_event_time,
+                      origin, kind, trigger_index, surfaced_at, measured_value, threshold, status,
+                      suppression_id, responded_at, pic, action, reason, notification_sent_at,
+                      resolved_at, resolution_code, resolution_reason
+               FROM alarm_policy_event WHERE event_id=?""",
+            (str(event_id),),
+        ).fetchone()
+        self.state.active_event_id = None
+        self.save_state(at=at)
+        return before, self.store._event_from_row(row)
 
     def create_alarm_event(self, *, event_key: str, trigger_index: int, surfaced_at: datetime,
                            measured_value: float | None, threshold: float | None,
@@ -1179,7 +1272,8 @@ class _DetectorTransaction:
         row = self.connection.execute(
             """SELECT event_id, event_key, serid, source_id, remote_serid, remote_event_time,
                       origin, kind, trigger_index, surfaced_at, measured_value, threshold, status,
-                      suppression_id, responded_at, pic, action, reason, notification_sent_at
+                            suppression_id, responded_at, pic, action, reason, notification_sent_at,
+                            resolved_at, resolution_code, resolution_reason
                FROM alarm_policy_event WHERE event_id=?""", (str(event_id),),
         ).fetchone()
         item = self.store._event_from_row(row)

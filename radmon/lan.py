@@ -22,10 +22,10 @@ def _pending_alarm_rows(alarm_mirror, source_id: str, *, limit: int=500) -> list
     if alarm_mirror is None:
         return []
     with alarm_mirror.store._connection() as db:
-        rows = db.execute('\nSELECT serid, remote_serid, event_time, level, measured_value, threshold,\n       hit_count, notification_sent_at\nFROM remote_alarm_state\nWHERE source_id = ? AND policy_decision IS NULL\nORDER BY event_time ASC, serid ASC\nLIMIT ?\n', (str(source_id), max(1, int(limit)))).fetchall()
+        rows = db.execute('\nSELECT serid, remote_serid, event_time, level, measured_value, threshold,\n       hit_count, notification_sent_at, source_i_flag\nFROM remote_alarm_state\nWHERE source_id = ? AND policy_decision IS NULL\nORDER BY event_time ASC, serid ASC\nLIMIT ?\n', (str(source_id), max(1, int(limit)))).fetchall()
     result: list[dict[str, Any]] = []
     for row in rows:
-        result.append({'serid': int(row[0]), '_remote_serid': int(row[1]) if row[1] is not None else int(row[0]), 'dtoa': datetime.fromisoformat(str(row[2])), 'lvl': 2 if str(row[3]).upper() == 'ALARM' else 1, 'mvalue': row[4], 'thvalue': row[5], 'nhit': row[6], '_historical_seed': row[7] is not None})
+        result.append({'serid': int(row[0]), '_remote_serid': int(row[1]) if row[1] is not None else int(row[0]), 'dtoa': datetime.fromisoformat(str(row[2])), 'lvl': 2 if str(row[3]).upper() == 'ALARM' else 1, 'mvalue': row[4], 'thvalue': row[5], 'nhit': row[6], 'i_flag': int(row[8] or 0), '_historical_seed': row[7] is not None})
     return result
 
 def _mapped_live_rows(aggregator, source) -> list[dict[str, Any]]:
@@ -821,6 +821,10 @@ class LanAggregator:
                 item = dict(row)
                 item['_remote_serid'] = remote_serid
                 item['serid'] = central_serid
+                measured_at = item.get('dtom')
+                # MariaDB DATETIME values are normally naive local time. Keep
+                # the poll marker in the same representation for freshness checks.
+                item['_source_observed_at'] = datetime.now(measured_at.tzinfo) if isinstance(measured_at, datetime) and measured_at.tzinfo else datetime.now()
                 mapped_live.append(item)
             result.mapped_live_rows = mapped_live
             if hasattr(self.central, 'upsert_live_rows'):

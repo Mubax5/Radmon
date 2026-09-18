@@ -10,17 +10,43 @@ export type Station = {
   serid: number;
   name: string;
   location: string;
+  description?: string;
   warnlevel: number;
   alarmlevel: number;
+  maxidlemin?: number;
   unit: string;
   status?: "normal" | "warning" | "alarm" | "offline";
   doserate?: number | null;
   dtom?: string | null;
+  latest_timestamp?: string | null;
+  offline_reason?: string | null;
+  offline_context?: string | null;
+  offline_description?: string | null;
+  source_id?: string | null;
+  ownership?: "source" | "central";
 };
 
 export type WebEvent = {
   type: string;
   [key: string]: unknown;
+};
+
+export type ReportJob = {
+  job_id: string;
+  serid: number;
+  start_at: string;
+  end_at: string;
+  status: "queued" | "running" | "completed" | "failed";
+  artifact_name: string | null;
+  error: string | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
+export type ReportRequest = {
+  serid: number;
+  start_at: string;
+  end_at: string;
 };
 
 const inFlightReads = new Map<string, Promise<unknown>>();
@@ -86,6 +112,21 @@ export async function login(username: string, password: string): Promise<Session
 
 export async function logout(): Promise<void> {
   await api<{ status: string }>("/auth/logout", { method: "POST" });
+}
+
+export function listReportJobs(): Promise<ReportJob[]> {
+  return api<ReportJob[]>("/api/v1/control/reports");
+}
+
+export function requestReport(request: ReportRequest): Promise<ReportJob> {
+  return api<ReportJob>("/api/v1/control/reports", {
+    method: "POST",
+    body: JSON.stringify(request),
+  });
+}
+
+export function reportDownloadUrl(jobId: string): string {
+  return `/api/v1/control/reports/${encodeURIComponent(jobId)}/download`;
 }
 
 export function subscribeWebEvents(onEvent: (event: WebEvent) => void): () => void {

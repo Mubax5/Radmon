@@ -135,6 +135,31 @@ def test_grafana_redirects_are_rewritten_to_same_origin(tmp_path: Path) -> None:
     assert response.headers["location"] == "/d/radmon?kiosk=1"
 
 
+def test_grafana_gateway_reuses_lifespan_client_and_logs_upstream_failures(tmp_path: Path, caplog) -> None:
+    calls = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if request.url.path == "/fail":
+            raise httpx.ConnectError("connection refused", request=request)
+        return httpx.Response(200, text="ok")
+
+    app = FastAPI()
+    attach_web_routes(
+        app, settings=Settings(grafana_fallback_port=3300), web_dist=tmp_path / "missing",
+        grafana_transport=httpx.MockTransport(upstream),
+    )
+    with TestClient(app) as client:
+        assert client.get("/first").status_code == 200
+        shared_client = app.state.radmon_grafana_client
+        assert client.get("/second").status_code == 200
+        assert app.state.radmon_grafana_client is shared_client
+        assert client.get("/fail").status_code == 502
+
+    assert len(calls) == 3
+    assert any("ConnectError: connection refused" in record.message for record in caplog.records)
+
+
 def test_web_app_returns_clear_503_when_build_is_missing(tmp_path: Path) -> None:
     app = FastAPI()
     attach_web_routes(app, settings=Settings(), web_dist=tmp_path / "missing")
@@ -166,8 +191,10 @@ def test_web_control_plane_is_split_into_focused_modules() -> None:
         "web/src/layout.tsx",
         "web/src/pages/OverviewPage.tsx",
         "web/src/pages/StationsPage.tsx",
+        "web/src/pages/StationDetailPage.tsx",
         "web/src/pages/HistoryPage.tsx",
         "web/src/pages/ArchivesPage.tsx",
+        "web/src/pages/ReportsPage.tsx",
         "web/src/pages/AlarmsPage.tsx",
         "web/src/pages/UsersPage.tsx",
         "web/src/pages/SystemPage.tsx",
@@ -188,6 +215,16 @@ def test_web_control_plane_is_split_into_focused_modules() -> None:
         "SystemPage",
     ):
         assert f"function {page}" not in app
+
+
+def test_station_detail_ui_exposes_latest_sample_and_offline_context() -> None:
+    source = (ROOT / "web/src/components/StationViews.tsx").read_text(encoding="utf-8")
+    detail = (ROOT / "web/src/pages/StationDetailPage.tsx").read_text(encoding="utf-8")
+
+    assert "Measurement terakhir" in source
+    assert "offline_reason" in source
+    assert "offline_context" in source
+    assert "Deskripsi perangkat" in detail
 
 
 def test_web_uses_kumo_as_primary_component_system_without_browser_secret_storage() -> None:

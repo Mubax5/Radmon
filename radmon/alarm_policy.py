@@ -27,6 +27,29 @@ class AlarmPolicyService:
         value = row.get(key)
         return default if value is None else float(value)
 
+    @staticmethod
+    def _naive(value: datetime) -> datetime:
+        return value.replace(tzinfo=None) if value.tzinfo is not None else value
+
+    def _is_fresh_live_row(self, row: dict[str, Any], measured_at: datetime) -> bool:
+        observed_at = row.get("_source_observed_at")
+        if not isinstance(observed_at, datetime):
+            return True
+        try:
+            age = self._naive(observed_at) - self._naive(measured_at)
+            return timedelta(seconds=-5) <= age <= timedelta(minutes=max(1, int(row.get("maxidlemin") or 1)))
+        except (TypeError, ValueError, OverflowError):
+            return False
+
+    def _record_resolution(self, tx, before, after, *, source_id: str | None) -> None:
+        if before is None or after is None or before.status == after.status:
+            return
+        self.audit.record(
+            "ALARM_POLICY_SOURCE_HANDLED" if after.status == "SOURCE_HANDLED" else "ALARM_POLICY_AUTO_RESOLVED",
+            None, "alarm", after.event_id, before=asdict(before), after=asdict(after),
+            reason=after.resolution_reason, source=source_id or after.source_id, connection=tx.connection,
+        )
+
     def _snapshot(self, tx, *, underlying, measured_value=None, threshold=None, active_event_id=None):
         snapshot = self._snapshot_base(
             tx,
@@ -57,11 +80,18 @@ class AlarmPolicyService:
             state = tx.state
             suppression = tx.active_suppression
 
+            if not self._is_fresh_live_row(row, measured_at) or not tx.accept_measurement(measured_at):
+                return self._snapshot(tx, underlying="UNKNOWN", active_event_id=state.active_event_id)
+
             if suppression is not None and measured_at >= suppression.expires_at:
                 tx.end_suppression(suppression.suppression_id, measured_at, "EXPIRED")
                 suppression = None
 
             if is_normal:
+                before, resolved = tx.resolve_active_event(
+                    measured_at, "AUTO_RESOLVED_NORMAL", "fresh measurement is below warning threshold",
+                )
+                self._record_resolution(tx, before, resolved, source_id=source_id)
                 tx.reset_policy(measured_at)
                 if suppression and suppression.auto_resume_on_normal:
                     tx.end_suppression(suppression.suppression_id, measured_at, "AUTO_NORMAL")
@@ -69,34 +99,41 @@ class AlarmPolicyService:
                     tx, underlying="NORMAL", measured_value=dose_rate, threshold=alarmlevel
                 )
 
-            if suppression is not None:
-                if is_alarm:
-                    tx.create_suppressed_event(
-                        suppression,
-                        surfaced_at=measured_at,
-                        measured_value=dose_rate,
-                        threshold=alarmlevel,
-                        source_id=source_id,
-                    )
-                return self._snapshot(
-                    tx,
-                    underlying="ALARM" if is_alarm else "ALERT",
-                    measured_value=dose_rate,
-                    threshold=alarmlevel,
-                )
-
             if not is_alarm:
+                before, resolved = tx.resolve_active_event(
+                    measured_at, "AUTO_RESOLVED_WARNING", "fresh measurement is below alarm threshold",
+                )
+                self._record_resolution(tx, before, resolved, source_id=source_id)
+                if resolved is None:
+                    tx.save_state(at=measured_at)
                 return self._snapshot(
                     tx, underlying="ALERT", measured_value=dose_rate, threshold=alarmlevel
                 )
 
+            if suppression is not None:
+                tx.create_suppressed_event(
+                    suppression,
+                    surfaced_at=measured_at,
+                    measured_value=dose_rate,
+                    threshold=alarmlevel,
+                    source_id=source_id,
+                )
+                tx.save_state(at=measured_at)
+                return self._snapshot(
+                    tx, underlying="ALARM",
+                    measured_value=dose_rate,
+                    threshold=alarmlevel,
+                )
+
             if state.retrigger_locked:
+                tx.save_state(at=measured_at)
                 return self._snapshot(
                     tx, underlying="ALARM", measured_value=dose_rate, threshold=alarmlevel,
                     active_event_id=None,
                 )
 
             if state.active_event_id:
+                tx.save_state(at=measured_at)
                 return self._snapshot(
                     tx, underlying="ALARM", measured_value=dose_rate, threshold=alarmlevel
                 )
@@ -183,7 +220,32 @@ class AlarmPolicyService:
             "suppression_reason": suppression.get("reason"),
             "updated_at": live.get("updated_at") or persistent.get("last_trigger_at") or persistent.get("last_normal_at"),
         })
+        last_event = self.store.latest_policy_event(int(serid))
+        result.update({
+            "last_event_id": last_event.event_id if last_event else None,
+            "last_event_status": last_event.status if last_event else None,
+            "last_event_resolved_at": last_event.resolved_at if last_event else None,
+            "last_event_resolution_code": last_event.resolution_code if last_event else None,
+        })
         return result
+
+    def reconcile_source_handled(self, source_id: str) -> int:
+        """Close only the linked active event after a source explicitly reports i_flag=1."""
+        changed = 0
+        for event_id in self.store.source_handled_active_event_ids(source_id):
+            event = self.store.get_event(event_id)
+            if event is None:
+                continue
+            with self.store.detector_transaction(event.serid) as tx:
+                if tx.state.active_event_id != event_id:
+                    continue
+                before, resolved = tx.resolve_active_event(
+                    self.now(), "SOURCE_HANDLED", "source i_flag=1 observed after policy event was linked",
+                )
+                self._record_resolution(tx, before, resolved, source_id=source_id)
+                if resolved is not None:
+                    changed += 1
+        return changed
 
     def observe_source_alarm(self, source_id: str, row: dict[str, Any]):
         result = self._observe_source_alarm_base(source_id, row)
@@ -254,7 +316,8 @@ class AlarmPolicyService:
             policy_state = 'ALARM'
         else:
             policy_state = underlying
-        snapshot = {'serid': state.serid, 'policy_state': policy_state, 'underlying_dose_status': underlying, 'trigger_count': state.trigger_count, 'retrigger_locked': bool(state.retrigger_locked), 'active_event_id': active_event_id if active_event_id is not None else state.active_event_id, 'measured_value': measured_value, 'threshold': threshold, 'suppressed': suppression is not None, 'suppression_id': suppression.suppression_id if suppression else None, 'suppression_expires_at': suppression.expires_at if suppression else None, 'suppression_pic': suppression.pic if suppression else None, 'suppression_reason': suppression.reason if suppression else None}
+        event_id = active_event_id if active_event_id is not None else state.active_event_id
+        snapshot = {'serid': state.serid, 'policy_state': policy_state, 'underlying_dose_status': underlying, 'trigger_count': state.trigger_count, 'retrigger_locked': bool(state.retrigger_locked), 'active_event_id': event_id, 'active_event_lifecycle': 'ACTIVE' if event_id else None, 'measured_value': measured_value, 'threshold': threshold, 'suppressed': suppression is not None, 'suppression_id': suppression.suppression_id if suppression else None, 'suppression_expires_at': suppression.expires_at if suppression else None, 'suppression_pic': suppression.pic if suppression else None, 'suppression_reason': suppression.reason if suppression else None}
         if self.projector is not None:
             self.projector.project(snapshot)
         return snapshot
@@ -262,7 +325,7 @@ class AlarmPolicyService:
     def _get_policy_base(self, serid: int) -> dict[str, Any]:
         state = self.store.get_state(int(serid))
         suppression = self.store.active_suppression(int(serid))
-        return {'serid': state.serid, 'trigger_count': state.trigger_count, 'retrigger_locked': state.retrigger_locked, 'active_event_id': state.active_event_id, 'window_started_at': state.window_started_at, 'last_trigger_at': state.last_trigger_at, 'last_normal_at': state.last_normal_at, 'suppressed': suppression is not None, 'suppression': asdict(suppression) if suppression else None}
+        return {'serid': state.serid, 'trigger_count': state.trigger_count, 'retrigger_locked': state.retrigger_locked, 'active_event_id': state.active_event_id, 'window_started_at': state.window_started_at, 'last_trigger_at': state.last_trigger_at, 'last_normal_at': state.last_normal_at, 'last_measurement_at': state.last_measurement_at, 'suppressed': suppression is not None, 'suppression': asdict(suppression) if suppression else None}
 
     def _list_events_base(self, *, serid: int | None=None, active_only: bool=False, notify_pending_only: bool=False, limit: int=500) -> list[dict[str, Any]]:
         return [asdict(item) for item in self.store.list_policy_events(serid=serid, active_only=active_only, notify_pending_only=notify_pending_only, limit=limit)]
@@ -271,8 +334,10 @@ class AlarmPolicyService:
         before = {item.event_id for item in self.store.list_policy_events(limit=5000)}
         for row in live_rows:
             self.evaluate_live(row, source_id=source_id)
+        self.reconcile_source_handled(source_id)
         for row in alarm_rows:
             self.observe_source_alarm(source_id, row)
+        self.reconcile_source_handled(source_id)
         return [item for item in self.store.list_policy_events(limit=5000) if item.event_id not in before]
 
     def _observe_source_alarm_base(self, source_id: str, row: dict[str, Any]) -> dict[str, Any]:

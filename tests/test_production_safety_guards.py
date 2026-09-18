@@ -9,7 +9,7 @@ from radmon.secure_services import build_secure_services
 from radmon.security import SecurityStore
 
 
-def test_station_write_through_is_disabled_when_lan_runtime_is_disabled(tmp_path, monkeypatch):
+def test_station_source_ownership_is_enforced_when_lan_runtime_is_disabled(tmp_path, monkeypatch):
     monkeypatch.setenv("RADMON_LAN_SOURCES", "gd50@192.168.1.50")
     monkeypatch.setenv("RADMON_LAN_ENABLED", "0")
     monkeypatch.setenv("RADMON_SECURITY_DB", str(tmp_path / "security.db"))
@@ -17,17 +17,17 @@ def test_station_write_through_is_disabled_when_lan_runtime_is_disabled(tmp_path
 
     services = build_secure_services(settings)
     assert services.sources
-    assert services.device_admin.write_through is False
+    assert services.device_admin.station_source is not None
 
 
-def test_station_write_through_is_enabled_only_for_lan_runtime(tmp_path, monkeypatch):
+def test_station_source_ownership_is_enforced_when_lan_runtime_is_enabled(tmp_path, monkeypatch):
     monkeypatch.setenv("RADMON_LAN_SOURCES", "gd50@192.168.1.50")
     monkeypatch.setenv("RADMON_LAN_ENABLED", "1")
     monkeypatch.setenv("RADMON_SECURITY_DB", str(tmp_path / "security.db"))
     settings = replace(Settings(), runtime_dir=tmp_path, lan_enabled=True)
 
     services = build_secure_services(settings)
-    assert services.device_admin.write_through is True
+    assert services.device_admin.station_source is not None
 
 
 def test_reconcile_source_active_keys_clears_externally_handled_alarm(tmp_path):
