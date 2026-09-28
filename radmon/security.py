@@ -325,13 +325,44 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
                 return item
         raise ValueError("user tidak ditemukan")
 
-    def delete_user(self, username: str) -> dict[str, object]:
+    def delete_user(self, username: str, *, actor: UserIdentity, audit: Any) -> dict[str, object]:
         name = username.strip().lower()
-        # Retain the user row and its audit target for historical accountability.
-        # A deactivated account cannot authenticate and all of its sessions/leases
-        # are removed by set_user_enabled.
-        self.set_user_enabled(name, False)
-        return self.get_user(name)
+        # Serialize the enabled-admin check, row deletion, and audit snapshot
+        # across processes. The username in audit_events is a historical snapshot,
+        # not a foreign key; deleting this account therefore preserves the audit.
+        with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT username, display_name, role, enabled, created_at, updated_at "
+                "FROM users WHERE username = ?",
+                (name,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("user tidak ditemukan")
+            before: dict[str, object] = {
+                "username": str(row[0]),
+                "display_name": str(row[1]),
+                "role": str(row[2]),
+                "enabled": bool(row[3]),
+                "created_at": str(row[4]),
+                "updated_at": str(row[5]),
+            }
+            if bool(row[3]) and str(row[2]) == Role.ADMINISTRATOR.value:
+                enabled_admins = int(connection.execute(
+                    "SELECT COUNT(*) FROM users WHERE enabled = 1 AND role = ?",
+                    (Role.ADMINISTRATOR.value,),
+                ).fetchone()[0])
+                if enabled_admins <= 1:
+                    raise ValueError("administrator aktif terakhir tidak dapat dihapus")
+            cursor = connection.execute("DELETE FROM users WHERE username = ?", (name,))
+            if cursor.rowcount != 1:
+                raise ValueError("user tidak ditemukan")
+            audit.record(
+                "USER_DELETE", actor, "user", name,
+                before=before, after={"deleted": True}, connection=connection,
+            )
+        self.clear_sensitive_lease(name)
+        return before
 
     def list_users(self) -> list[dict[str, object]]:
         with self._connection() as connection:

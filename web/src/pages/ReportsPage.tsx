@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, LayerCard } from "@cloudflare/kumo";
-import { api, listReportJobs, reportDownloadUrl, requestReport, type ReportJob, type Station } from "../api";
+import { api, listReportJobs, reportDownloadUrl, reportPreviewUrl, requestReport, type ReportJob, type Station } from "../api";
 import { ErrorCard, LoadingCard, PageHeading, PageSection, formatTimestamp } from "../ui";
 
 const now = new Date();
@@ -14,8 +14,101 @@ export function ReportsPage() {
   const [endAt, setEndAt] = useState(localDateTime(now));
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
-  const load = () => void Promise.all([listReportJobs(), api<Station[]>("/api/v1/web/stations")]).then(([reportRows, stationRows]) => { setJobs(reportRows); setStations(stationRows); setSerid((current) => current || String(stationRows[0]?.serid ?? "")); setError(""); }).catch((reason) => setError(reason instanceof Error ? reason.message : "Laporan tidak tersedia"));
-  useEffect(() => { load(); const timer = window.setInterval(load, 3000); return () => window.clearInterval(timer); }, []);
-  async function create(event: React.FormEvent) { event.preventDefault(); setCreating(true); try { await requestReport({ serid: Number(serid), start_at: new Date(startAt).toISOString(), end_at: new Date(endAt).toISOString() }); load(); } catch (reason) { setError(reason instanceof Error ? reason.message : "Pembuatan laporan gagal"); } finally { setCreating(false); } }
-  return <div className="page-stack"><PageHeading title="Laporan" description="PDF dibuat di worker latar belakang dari scope stasiun dan waktu yang eksplisit." />{error ? <ErrorCard message={error} /> : null}{!jobs ? <LoadingCard /> : <><LayerCard className="action-card"><form className="action-form" onSubmit={create}><label className="native-select-field" htmlFor="report-station"><span>Stasiun</span><select id="report-station" className="native-select" value={serid} onChange={(event) => setSerid(event.target.value)} required>{stations.map((station) => <option key={station.serid} value={station.serid}>{station.name} (SERID {station.serid})</option>)}</select></label><label className="native-input-field" htmlFor="report-start"><span>Mulai</span><input id="report-start" type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} required /></label><label className="native-input-field" htmlFor="report-end"><span>Selesai</span><input id="report-end" type="datetime-local" value={endAt} onChange={(event) => setEndAt(event.target.value)} required /></label><div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !serid}>{creating ? "Meminta laporan…" : "Buat laporan"}</Button></div></form></LayerCard><PageSection title="Job laporan" description="Status diperbarui otomatis setiap 3 detik."><div className="mobile-card-list">{jobs.map((job) => <LayerCard className="user-card" key={job.job_id}><strong>SERID {job.serid} · {job.status}</strong><div className="card-meta"><span>{formatTimestamp(job.start_at)} sampai {formatTimestamp(job.end_at)}</span><span>Diminta {formatTimestamp(job.created_at)}</span>{job.error ? <span role="alert">{job.error}</span> : null}</div>{job.status === "completed" ? <a className="report-download-link" href={reportDownloadUrl(job.job_id)} download>Unduh PDF</a> : null}</LayerCard>)}{jobs.length === 0 ? <LayerCard className="empty-card">Belum ada laporan.</LayerCard> : null}</div></PageSection></>}</div>;
+  const [previewJobId, setPreviewJobId] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const previewReady = Boolean(previewJobId && jobs?.some((job) => job.job_id === previewJobId && job.status === "completed"));
+
+  const load = () => void Promise.all([listReportJobs(), api<Station[]>("/api/v1/web/stations")]).then(([reportRows, stationRows]) => {
+    setJobs(reportRows);
+    setStations(stationRows);
+    setSerid((current) => current || String(stationRows[0]?.serid ?? ""));
+    setError("");
+  }).catch((reason) => setError(reason instanceof Error ? reason.message : "Laporan tidak tersedia"));
+
+  useEffect(() => {
+    load();
+    const timer = window.setInterval(load, 3000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!previewJobId || !previewReady) {
+      setPreviewUrl(null);
+      setPreviewLoading(false);
+      setPreviewError("");
+      return;
+    }
+    let objectUrl: string | null = null;
+    const controller = new AbortController();
+    setPreviewUrl(null);
+    setPreviewLoading(true);
+    setPreviewError("");
+    fetch(reportPreviewUrl(previewJobId), { credentials: "same-origin", signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        if (!response.headers.get("content-type")?.toLowerCase().includes("application/pdf")) throw new Error("Pratinjau bukan file PDF");
+        return response.blob();
+      })
+      .then((blob) => {
+        if (controller.signal.aborted) return;
+        objectUrl = URL.createObjectURL(blob);
+        setPreviewUrl(objectUrl);
+      })
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) setPreviewError(reason instanceof Error ? reason.message : "Pratinjau PDF gagal dimuat");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setPreviewLoading(false);
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [previewJobId, previewReady]);
+
+  async function create(event: React.FormEvent) {
+    event.preventDefault();
+    setCreating(true);
+    try {
+      await requestReport({ serid: Number(serid), start_at: new Date(startAt).toISOString(), end_at: new Date(endAt).toISOString() });
+      load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Pembuatan laporan gagal");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return <div className="page-stack">
+    <PageHeading title="Laporan" description="PDF dibuat di worker latar belakang dari scope stasiun dan waktu yang eksplisit." />
+    {error ? <ErrorCard message={error} /> : null}
+    {!jobs ? <LoadingCard /> : <>
+      <LayerCard className="action-card"><form className="action-form" onSubmit={create}>
+        <label className="native-select-field" htmlFor="report-station"><span>Stasiun</span><select id="report-station" className="native-select" value={serid} onChange={(event) => setSerid(event.target.value)} required>{stations.map((station) => <option key={station.serid} value={station.serid}>{station.name} (SERID {station.serid})</option>)}</select></label>
+        <label className="native-input-field" htmlFor="report-start"><span>Mulai</span><input id="report-start" type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} required /></label>
+        <label className="native-input-field" htmlFor="report-end"><span>Selesai</span><input id="report-end" type="datetime-local" value={endAt} onChange={(event) => setEndAt(event.target.value)} required /></label>
+        <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !serid}>{creating ? "Meminta laporan…" : "Buat laporan"}</Button></div>
+      </form></LayerCard>
+      <PageSection title="Job laporan" description="Status diperbarui otomatis setiap 3 detik.">
+        <div className="mobile-card-list">
+          {jobs.map((job) => <LayerCard className="user-card" key={job.job_id}>
+            <strong>SERID {job.serid} · {job.status}</strong>
+            <div className="card-meta"><span>{formatTimestamp(job.start_at)} sampai {formatTimestamp(job.end_at)}</span><span>Diminta {formatTimestamp(job.created_at)}</span>{job.error ? <span role="alert">{job.error}</span> : null}</div>
+            {job.status === "completed" ? <div className="report-actions">
+              <Button type="button" variant="secondary" onClick={() => setPreviewJobId((current) => current === job.job_id ? null : job.job_id)}>{previewJobId === job.job_id ? "Tutup pratinjau" : "Pratinjau PDF"}</Button>
+              <a className="report-download-link" href={reportDownloadUrl(job.job_id)} download>Unduh PDF</a>
+            </div> : null}
+            {previewJobId === job.job_id && job.status === "completed" ? <section className="report-preview" aria-label={`Pratinjau laporan SERID ${job.serid}`}>
+              {previewLoading ? <p role="status">Memuat pratinjau PDF…</p> : null}
+              {previewError ? <p role="alert">Pratinjau PDF gagal dimuat: {previewError}</p> : null}
+              {previewUrl ? <iframe title={`Pratinjau laporan SERID ${job.serid}`} src={previewUrl} /> : null}
+            </section> : null}
+          </LayerCard>)}
+          {jobs.length === 0 ? <LayerCard className="empty-card">Belum ada laporan.</LayerCard> : null}
+        </div>
+      </PageSection>
+    </>}
+  </div>;
 }

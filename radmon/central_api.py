@@ -143,7 +143,14 @@ ON DUPLICATE KEY UPDATE
             connection.close()
 
     def overview_rows(self) -> list[dict[str, Any]]:
-        """Read one newest bounded monitoring sample per station."""
+        """Read one newest bounded monitoring sample per station.
+
+        Always fallback to last measurement (even years old) when recent/vrecent
+        is empty so offline stations keep dose_rate and diperbarui.
+        The fallback is via the vrecent view, whose last-known lookup uses the
+        measurement (serid, dtom) index. This query stays on vrecent and does not
+        aggregate the historical measurement table.
+        """
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
@@ -153,15 +160,9 @@ SELECT d.serid, d.name, d.location, d.description, d.warnlevel, d.alarmlevel, d.
        v.dtom, v.doserate, v.dose, v.previnterval, v.stat
 FROM device d
 LEFT JOIN (
-  SELECT current.*
-  FROM vrecent current
-  JOIN (
-    SELECT serid, MAX(dtom) AS dtom
-    FROM recent
-    WHERE dtom IS NOT NULL
-    GROUP BY serid
-  ) newest ON newest.serid = current.serid AND newest.dtom = current.dtom
-) v ON v.serid = d.serid
+  SELECT serid, MAX(dtom) AS mdtom FROM vrecent GROUP BY serid
+) newest ON newest.serid = d.serid
+LEFT JOIN vrecent v ON v.serid = newest.serid AND v.dtom = newest.mdtom
 ORDER BY d.location, d.name
 """
                 )
@@ -182,6 +183,15 @@ ORDER BY d.location, d.name
                     "SELECT serid, dtom, doserate, dose, previnterval, stat "
                     "FROM vrecent WHERE serid = ? AND dtom IS NOT NULL "
                     "ORDER BY dtom DESC LIMIT 1",
+                    (serid,),
+                )
+                row = cursor.fetchone()
+                if row is not None:
+                    keys = ("serid", "dtom", "doserate", "dose", "previnterval", "stat")
+                    return dict(row) if isinstance(row, dict) else dict(zip(keys, row))
+                # Fallback to last measurement even if very old
+                cursor.execute(
+                    "SELECT serid, dtom, doserate, dose, previnterval, stat FROM measurement WHERE serid = ? ORDER BY dtom DESC LIMIT 1",
                     (serid,),
                 )
                 row = cursor.fetchone()

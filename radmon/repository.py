@@ -331,6 +331,13 @@ LIMIT 1
                     (station.serid,),
                 )
                 rows = cursor.fetchall()
+                if not rows:
+                    # Fallback to last measurement even if very old (years)
+                    cursor.execute(
+                        "SELECT dtom, doserate FROM measurement WHERE serid = ? ORDER BY dtom DESC LIMIT 2",
+                        (station.serid,),
+                    )
+                    rows = cursor.fetchall()
             if not rows:
                 return LatestReading(station=station, measured_at=None, dose_rate=None)
             current = rows[0]

@@ -129,6 +129,10 @@ export function reportDownloadUrl(jobId: string): string {
   return `/api/v1/control/reports/${encodeURIComponent(jobId)}/download`;
 }
 
+export function reportPreviewUrl(jobId: string): string {
+  return `/api/v1/control/reports/${encodeURIComponent(jobId)}/preview`;
+}
+
 export function subscribeWebEvents(onEvent: (event: WebEvent) => void): () => void {
   const source = new EventSource("/api/v1/web/events", { withCredentials: true });
   source.onmessage = (message) => {

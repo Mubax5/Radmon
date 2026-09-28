@@ -1183,6 +1183,19 @@ ON CONFLICT(event_key) DO NOTHING
         """Claim an operator response without entering the suppression retry state machine."""
         with self.source_silence_lock(source_id, serid, event_time):
             if self.claim_source_response(source_id, serid, event_time, claimed_at=at) is None:
+                # A previously confirmed row is already satisfied for a retry
+                # of a multi-row policy event. Do not issue another remote write.
+                with self.security._connection() as db:
+                    row = db.execute(
+                        """SELECT source_response_state FROM remote_alarm_state
+                           WHERE source_id=? AND serid=? AND event_time=?""",
+                        (str(source_id), int(serid), _iso(event_time)),
+                    ).fetchone()
+                if row is not None and row[0] == "CONFIRMED":
+                    return "CONFIRMED", None
+                # DISPATCHING/RECONCILING (including uncertain outcomes) are
+                # deliberately not claimable; reconciliation must settle them
+                # before any retry can write to MariaDB.
                 return "SKIPPED", None
             try:
                 if not responder():

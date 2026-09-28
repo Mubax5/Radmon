@@ -426,7 +426,7 @@ def attach_secure_routes(
             user_manager().delete_user(identity, payload.pin, username)
         except Exception as exc:
             raise user_error(exc) from exc
-        return {"status": "deactivated", "user": security.get_user(username)}
+        return {"status": "deleted", "user": {"username": username.strip().lower(), "deleted": True}}
 
     @app.get("/api/v1/control/reports")
     def reports(identity: UserIdentity = Depends(require_operator)):
@@ -475,6 +475,25 @@ def attach_secure_routes(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         audit.record("REPORT_DOWNLOAD", identity, "report", job_id)
         return FileResponse(path, media_type="application/pdf", filename=f"radmon-report-{job_id}.pdf")
+
+    @app.get("/api/v1/control/reports/{job_id}/preview")
+    def preview_report(job_id: str, identity: UserIdentity = Depends(require_operator)):
+        if report_jobs is None:
+            raise HTTPException(status_code=404, detail="report service unavailable")
+        # Enforce the same ownership check as download before resolving the artifact.
+        authorised_report(job_id, identity)
+        try:
+            _item, path = report_jobs.artifact(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit.record("REPORT_PREVIEW", identity, "report", job_id)
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'inline; filename="radmon-report-{job_id}.pdf"'},
+        )
 
     @app.get("/api/v1/control/audit")
     def audit_events(identity: UserIdentity = Depends(current_user)):

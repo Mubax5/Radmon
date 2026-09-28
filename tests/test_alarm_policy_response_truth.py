@@ -7,7 +7,7 @@ from radmon.alarm_policy_store import AlarmPolicyStore
 from radmon.audit import AuditTrail
 from radmon.lan import _retry_source_silences
 from radmon.remote_alarm import AlarmControlService, RemoteAlarmMirror
-from radmon.security import Role, SecurityStore
+from radmon.security import Role, SecurityError, SecurityStore
 
 
 def _surfaced_source_alarm(policy, mirror, source_id, at):
@@ -84,6 +84,62 @@ def test_failed_remote_response_keeps_production_surfaced_event_active(tmp_path)
             "SELECT source_response_state FROM remote_alarm_state WHERE source_id=? AND serid=? AND event_time=?",
             ("source-a", 5201, at.isoformat()),
         ).fetchone()[0] == "FAILED"
+
+
+def test_partial_policy_response_retry_skips_confirmed_rows_and_closes_only_when_all_confirmed(tmp_path):
+    at = datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc)
+    security = SecurityStore(tmp_path / "security.db")
+    security.create_user("operator", "Operator", Role.OPERATOR, "Password123!", "1357")
+    security.create_user("viewer", "Viewer", Role.VIEWER, "Password123!", "2468")
+    operator = security.authenticate("operator", "Password123!")
+    viewer = security.authenticate("viewer", "Password123!")
+    audit = AuditTrail(security)
+    store = AlarmPolicyStore(security)
+    policy = AlarmPolicyService(store, audit, now=lambda: at)
+    mirror = RemoteAlarmMirror(security)
+    event = store.create_policy_event(
+        event_key="alarm:partial-source-response", serid=5201, kind="ALARM", origin="central_policy",
+        surfaced_at=at, status="ACTIVE", source_id="source-a",
+    )
+    source_rows = [(5201, at), (5202, at + timedelta(seconds=1))]
+    for serid, event_time in source_rows:
+        mirror.mirror("source-a", [{"serid": serid, "_remote_serid": serid - 5200, "dtoa": event_time, "lvl": 2}])
+        store.annotate_raw_alarm(
+            "source-a", serid, event_time, policy_decision="SURFACED", operator_visible=True,
+            policy_event_id=event.event_id,
+        )
+
+    class Remote:
+        def __init__(self):
+            self.calls = []
+
+        def respond_alarm(self, serid, *args, **kwargs):
+            self.calls.append(serid)
+            return serid != 2 or self.calls.count(serid) > 1
+
+    remote = Remote()
+    control = AlarmControlService(security, mirror, audit, remote_factory=lambda source: remote, now=lambda: at)
+    control.policy_store = store
+    control.policy = policy
+
+    with pytest.raises(SecurityError, match="aksi tidak diizinkan"):
+        control.respond_policy_event(viewer, "2468", event.event_id, action="Konfirmasi", pic="Budi", reason="Periksa")
+    with pytest.raises(SecurityError, match="PIN tidak valid"):
+        control.respond_policy_event(operator, "0000", event.event_id, action="Konfirmasi", pic="Budi", reason="Periksa")
+
+    with pytest.raises(RuntimeError, match="tetap aktif"):
+        control.respond_policy_event(operator, "1357", event.event_id, action="Konfirmasi", pic="Budi", reason="Periksa")
+    assert remote.calls == [1, 2]
+    assert store.get_event(event.event_id).status == "ACTIVE"
+
+    control.respond_policy_event(operator, "1357", event.event_id, action="Konfirmasi", pic="Budi", reason="Periksa")
+    assert remote.calls == [1, 2, 2]
+    assert store.get_event(event.event_id).status == "RESPONDED"
+    with security._connection() as db:
+        assert db.execute(
+            "SELECT serid, source_response_state FROM remote_alarm_state WHERE policy_event_id=? ORDER BY serid",
+            (event.event_id,),
+        ).fetchall() == [(5201, "CONFIRMED"), (5202, "CONFIRMED")]
 
 
 def test_source_linked_event_without_mirror_row_stays_active(tmp_path):

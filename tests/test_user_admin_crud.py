@@ -91,8 +91,8 @@ def test_user_mutations_revoke_target_sessions_and_sensitive_leases(tmp_path):
             assert client.post("/api/v1/control/users/operator/enabled", json={"pin": "2468", "enabled": True}).status_code == 200
 
 
-def test_final_admin_and_self_lockout_are_conflicts_and_delete_is_logical(tmp_path):
-    client, store, _audit = make_client(tmp_path)
+def test_final_admin_and_self_lockout_are_conflicts_and_delete_is_permanent(tmp_path):
+    client, store, audit = make_client(tmp_path)
 
     assert client.patch("/api/v1/control/users/admin", json={
         "pin": "2468", "display_name": "Admin", "role": "Viewer",
@@ -101,11 +101,64 @@ def test_final_admin_and_self_lockout_are_conflicts_and_delete_is_logical(tmp_pa
     assert client.request("DELETE", "/api/v1/control/users/admin", json={"pin": "2468"}).status_code == 409
 
     target_session = store.create_session("operator")
+    admin_session = store.create_session("admin2")
     response = client.request("DELETE", "/api/v1/control/users/operator", json={"pin": "2468"})
     assert response.status_code == 200
-    assert response.json()["status"] == "deactivated"
-    assert store.get_user("operator")["enabled"] is False
+    assert response.json()["status"] == "deleted"
+    assert response.json()["user"] == {"username": "operator", "deleted": True}
+    assert "operator" not in {row["username"] for row in store.list_users()}
     assert store.session_user(target_session) is None
+    assert store.session_user(admin_session) is not None
+    assert client.post("/auth/login", json={"username": "operator", "password": "Password123!"}).status_code == 401
+    event = next(event for event in audit.list_events() if event["action"] == "USER_DELETE")
+    assert event["action"] == "USER_DELETE" and event["target_id"] == "operator"
+    assert '"username": "operator"' in event["before_json"]
+    assert "password" not in str(event).lower() and "pin" not in str(event).lower()
+
+
+def test_hard_delete_rejects_wrong_pin_operator_and_self_delete(tmp_path):
+    client, _store, _audit = make_client(tmp_path)
+    assert client.request("DELETE", "/api/v1/control/users/operator", json={"pin": "0000"}).status_code == 403
+    client.post("/auth/logout")
+    assert client.post("/auth/login", json={"username": "operator", "password": "Password123!"}).status_code == 200
+    assert client.request("DELETE", "/api/v1/control/users/admin", json={"pin": "9999"}).status_code == 403
+    client.post("/auth/logout")
+    assert client.post("/auth/login", json={"username": "admin", "password": "Password123!"}).status_code == 200
+    assert client.request("DELETE", "/api/v1/control/users/admin", json={"pin": "2468"}).status_code == 409
+
+
+def test_concurrent_hard_deletes_cannot_remove_both_enabled_administrators(tmp_path):
+    import threading
+
+    from radmon.user_admin import UserAdminService
+
+    db_path = tmp_path / "race.db"
+    stores = [SecurityStore(db_path), SecurityStore(db_path)]
+    stores[0].create_user("admin-a", "Admin A", Role.ADMINISTRATOR, "Password123!", "1111")
+    stores[0].create_user("admin-b", "Admin B", Role.ADMINISTRATOR, "Password123!", "2222")
+    audits = [AuditTrail(store) for store in stores]
+    services = [UserAdminService(stores[index], audits[index]) for index in range(2)]
+    identities = [
+        UserIdentity("admin-a", "Admin A", Role.ADMINISTRATOR),
+        UserIdentity("admin-b", "Admin B", Role.ADMINISTRATOR),
+    ]
+    barrier = threading.Barrier(2)
+    outcomes = []
+
+    def remove_other(index):
+        barrier.wait()
+        try:
+            services[index].delete_user(identities[index], ("1111", "2222")[index], identities[1-index].username)
+            outcomes.append("deleted")
+        except Exception as exc:
+            outcomes.append(str(exc))
+
+    threads = [threading.Thread(target=remove_other, args=(index,)) for index in range(2)]
+    for thread in threads: thread.start()
+    for thread in threads: thread.join(timeout=10)
+    assert all(not thread.is_alive() for thread in threads)
+    assert outcomes.count("deleted") == 1
+    assert sum(user["enabled"] and user["role"] == "Administrator" for user in stores[0].list_users()) == 1
 
 
 def test_user_audit_and_responses_never_include_credentials(tmp_path):
@@ -136,5 +189,7 @@ def test_user_management_ui_uses_native_dialog_forms_and_controls():
     assert "<dialog ref={dialog}" in users
     assert "<form className=\"action-form\"" in users
     assert "<select className=\"native-select\"" in users
-    assert "Nonaktifkan pengguna" in users
+    assert "Nonaktifkan (dapat dipulihkan)" in users
+    assert "Hapus permanen…" in users
+    assert "window.confirm" in users
     assert "<input type=\"password\"" in create_form

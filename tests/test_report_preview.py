@@ -83,7 +83,7 @@ def test_reports_page_is_preview_first_and_prints_same_document():
     assert "self.preview.setHtml" in source
     assert "self.preview.document()" in source
     assert "QPrintDialog" in source
-    assert "QPrinter.PdfFormat" in source
+    assert "self.report_service.export_pdf(start, end, path)" in source
 
 
 def test_preview_reuses_one_measurement_snapshot_for_summary_and_detail():

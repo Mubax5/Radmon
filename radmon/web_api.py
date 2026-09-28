@@ -55,6 +55,35 @@ def _measurement_is_stale(row: dict[str, Any], station: dict[str, Any]) -> bool:
     return (now - measured_at) > timedelta(minutes=max_idle_minutes)
 
 
+def _fallback_last_measurement(repository: Any, serid: int) -> dict[str, Any] | None:
+    """Fetch last measurement from historical table when recent/vrecent is empty.
+
+    This is the offline-last-known fallback: even year-old measurement must be
+    shown so the Perhatian table never displays "—" when history exists.
+    """
+    try:
+        # Prefer `latest` fallback (already does vrecent->measurement)
+        latest_fn = getattr(repository, "latest", None)
+        if callable(latest_fn):
+            try:
+                row = latest_fn(int(serid))
+                if row and row.get("dtom") is not None and row.get("doserate") is not None:
+                    return row
+            except Exception:
+                pass
+        # Direct history fallback (most authoritative, no staleness filter)
+        hist_fn = getattr(repository, "history", None)
+        if callable(hist_fn):
+            rows = hist_fn(int(serid), limit=1)
+            if rows:
+                row = rows[0]
+                if row.get("dtom") is not None and row.get("doserate") is not None:
+                    return row
+    except Exception:
+        pass
+    return None
+
+
 def _station_status(station: dict[str, Any], row: dict[str, Any] | None) -> tuple[str, float | None, Any, str | None]:
     if row is None:
         return "offline", None, None, "Belum ada measurement dari perangkat"
@@ -116,8 +145,18 @@ def attach_web_api_routes(
                     for key in ("serid", "name", "location", "description", "warnlevel", "alarmlevel", "maxidlemin", "unit")
                 }
                 row = None if snapshot.get("dtom") is None else snapshot
+                # Offline-last-known fallback: if snapshot has no dtom but history exists,
+                # use last measurement so dose/diPerbarui never hides.
+                if row is None:
+                    fallback = _fallback_last_measurement(repository, int(station["serid"]))
+                    if fallback is not None:
+                        row = fallback
                 station_rows.append((station, row))
         else:
+            # No snapshot reader (e.g., legacy repo): rely on repository.latest
+            # which already falls back to measurement. Do not invent history
+            # fallback here that would resurrect dummy test data for stations
+            # that truly have no measurement (e.g., 5203 in test_web_api).
             station_rows = [
                 (station, repository.latest(int(station["serid"])))
                 for station in repository.stations()
@@ -137,7 +176,7 @@ def attach_web_api_routes(
         return [
             _station_response(
                 station,
-                repository.latest(int(station["serid"])),
+                _fallback_last_measurement(repository, int(station["serid"])),
                 ", ".join(source_map.get(int(station["serid"]), ())) or None,
             )
             for station in repository.stations()
@@ -149,7 +188,11 @@ def attach_web_api_routes(
         if station is None:
             raise HTTPException(status_code=404, detail="station tidak ditemukan")
         source_ids = security.station_source_ids_map().get(int(serid), ())
-        return _station_response(station, repository.latest(int(serid)), ", ".join(source_ids) or None)
+        return _station_response(
+            station,
+            _fallback_last_measurement(repository, int(serid)),
+            ", ".join(source_ids) or None,
+        )
 
     @app.get("/api/v1/web/stations/{serid}/history")
     def station_history(

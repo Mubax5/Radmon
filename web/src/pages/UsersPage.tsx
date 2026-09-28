@@ -99,16 +99,18 @@ function UserManagementForm({ users, onChanged }: { users: UserRecord[]; onChang
     setDisplayName(selected.display_name); setRole(selected.role); setEnabled(selected.enabled); setPassword(""); setNewPin(""); setFeedback(null);
   }, [selected?.username]);
 
-  async function mutate(action: "update" | "enabled" | "password" | "pin" | "delete") {
+  async function mutate(action: "update" | "enabled" | "password" | "pin" | "deactivate" | "delete") {
     if (!username || pending) return;
+    if (action === "delete" && !window.confirm(`HAPUS PERMANEN akun @${username}? Akun dan login-nya akan dihapus. Riwayat audit tetap disimpan. Tindakan ini tidak dapat dibatalkan.`)) return;
     setPending(true); setFeedback(null);
     try {
       if (action === "update") await api(`/api/v1/control/users/${encodeURIComponent(username)}`, { method: "PATCH", body: JSON.stringify({ pin: adminPin, display_name: displayName, role }) });
       if (action === "enabled") await api(`/api/v1/control/users/${encodeURIComponent(username)}/enabled`, { method: "POST", body: JSON.stringify({ pin: adminPin, enabled }) });
       if (action === "password") await api(`/api/v1/control/users/${encodeURIComponent(username)}/password`, { method: "POST", body: JSON.stringify({ pin: adminPin, password }) });
       if (action === "pin") await api(`/api/v1/control/users/${encodeURIComponent(username)}/pin`, { method: "POST", body: JSON.stringify({ pin: adminPin, new_pin: newPin }) });
+      if (action === "deactivate") await api(`/api/v1/control/users/${encodeURIComponent(username)}/enabled`, { method: "POST", body: JSON.stringify({ pin: adminPin, enabled: false }) });
       if (action === "delete") await api(`/api/v1/control/users/${encodeURIComponent(username)}`, { method: "DELETE", body: JSON.stringify({ pin: adminPin }) });
-      setFeedback({ kind: "ok", text: "Perubahan pengguna tersimpan." }); setAdminPin(""); setPassword(""); setNewPin(""); onChanged();
+      setFeedback({ kind: "ok", text: action === "delete" ? "Akun dihapus permanen. Riwayat audit tetap tersimpan." : action === "deactivate" ? "Akun dinonaktifkan. Akun dapat diaktifkan kembali." : "Perubahan pengguna tersimpan." }); setAdminPin(""); setPassword(""); setNewPin(""); onChanged();
     } catch (reason) { setFeedback({ kind: "error", text: reason instanceof Error ? reason.message : "Perubahan pengguna gagal" }); } finally { setPending(false); }
   }
 
@@ -122,7 +124,7 @@ function UserManagementForm({ users, onChanged }: { users: UserRecord[]; onChang
       <NativeInput label="Password baru" type="password" value={password} onChange={(event) => setPassword(event.target.value)} disabled={pending} minLength={8} autoComplete="new-password" />
       <NativeInput label="PIN pengguna baru" type="password" inputMode="numeric" value={newPin} onChange={(event) => setNewPin(event.target.value)} disabled={pending} minLength={4} maxLength={8} autoComplete="new-password" />
       <NativeInput label="PIN Administrator saat ini" type="password" inputMode="numeric" value={adminPin} onChange={(event) => setAdminPin(event.target.value)} disabled={pending} required minLength={4} maxLength={8} autoComplete="current-password" />
-      <div className="form-actions"><Button type="submit" variant="primary" disabled={pending || !adminPin}>Simpan profil/role</Button><Button type="button" variant="secondary" disabled={pending || !adminPin} onClick={() => void mutate("enabled")}>Simpan status</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !password} onClick={() => void mutate("password")}>Reset password</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !newPin} onClick={() => void mutate("pin")}>Reset PIN</Button><Button type="button" variant="secondary" disabled={pending || !adminPin} onClick={() => void mutate("delete")}>Nonaktifkan pengguna</Button></div>
+      <div className="form-actions"><Button type="submit" variant="primary" disabled={pending || !adminPin}>Simpan profil/role</Button><Button type="button" variant="secondary" disabled={pending || !adminPin} onClick={() => void mutate("enabled")}>Simpan status</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !password} onClick={() => void mutate("password")}>Reset password</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !newPin} onClick={() => void mutate("pin")}>Reset PIN</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !selected?.enabled} onClick={() => void mutate("deactivate")}>Nonaktifkan (dapat dipulihkan)</Button><Button type="button" variant="secondary" disabled={pending || !adminPin} onClick={() => void mutate("delete")}>Hapus permanen…</Button></div>
       {feedback ? <div className={feedback.kind === "ok" ? "form-success" : "form-error"} role={feedback.kind === "ok" ? "status" : "alert"}>{feedback.text}</div> : null}
     </form>
   </LayerCard>;

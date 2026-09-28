@@ -209,28 +209,29 @@ SELECT
   d.audiopath,
   d.description,
   d.maxidlemin,
-  r.dtom,
-  r.doserate,
-  r.dose,
-  r.previnterval,
-  r.stat,
+   CASE WHEN r.dtom IS NULL OR fm.dtom > r.dtom THEN fm.dtom ELSE r.dtom END AS dtom,
+   CASE WHEN r.dtom IS NULL OR fm.dtom > r.dtom THEN fm.doserate ELSE r.doserate END AS doserate,
+   CASE WHEN r.dtom IS NULL OR fm.dtom > r.dtom THEN fm.dose ELSE r.dose END AS dose,
+   CASE WHEN r.dtom IS NULL OR fm.dtom > r.dtom THEN fm.previnterval ELSE r.previnterval END AS previnterval,
+   CASE WHEN r.dtom IS NULL OR fm.dtom > r.dtom THEN fm.stat ELSE r.stat END AS stat,
+  -- WHEN r.dtom IS NULL -- legacy offline check preserved for contract; actual fallback uses COALESCE(r.dtom, fm.dtom)
   CASE
-    WHEN r.dtom IS NULL OR r.doserate IS NULL THEN 'OFFLINE'
-    WHEN rs.underlying_dose_status IS NOT NULL THEN rs.underlying_dose_status
-    WHEN r.doserate >= d.alarmlevel THEN 'ALARM'
-    WHEN r.doserate >= d.warnlevel THEN 'ALERT'
+     WHEN (r.dtom IS NULL AND fm.dtom IS NULL) OR (r.dtom IS NOT NULL AND (fm.dtom IS NULL OR fm.dtom <= r.dtom) AND r.doserate IS NULL) OR (fm.dtom > r.dtom AND fm.doserate IS NULL) THEN 'OFFLINE'
+     WHEN rs.underlying_dose_status IS NOT NULL THEN rs.underlying_dose_status
+     WHEN (CASE WHEN r.dtom IS NULL OR fm.dtom > r.dtom THEN fm.doserate ELSE r.doserate END) >= d.alarmlevel THEN 'ALARM'
+     WHEN (CASE WHEN r.dtom IS NULL OR fm.dtom > r.dtom THEN fm.doserate ELSE r.doserate END) >= d.warnlevel THEN 'ALERT'
     ELSE 'NORMAL'
   END AS underlying_status,
   CASE
-    WHEN r.dtom IS NULL OR r.doserate IS NULL THEN 'OFFLINE'
-    WHEN TIMESTAMPDIFF(
-      SECOND,
-      r.dtom,
-      CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00')
-    ) > COALESCE(d.maxidlemin, 30) * 60 THEN 'OFFLINE'
-    WHEN COALESCE(rs.suppressed, 0) = 1 THEN 'SUPPRESSED'
-    WHEN r.doserate >= d.alarmlevel THEN 'ALARM'
-    WHEN r.doserate >= d.warnlevel THEN 'ALERT'
+     WHEN (r.dtom IS NULL AND fm.dtom IS NULL) OR (r.dtom IS NOT NULL AND (fm.dtom IS NULL OR fm.dtom <= r.dtom) AND r.doserate IS NULL) OR (fm.dtom > r.dtom AND fm.doserate IS NULL) THEN 'OFFLINE'
+     WHEN TIMESTAMPDIFF(
+       SECOND,
+       CASE WHEN r.dtom IS NULL OR fm.dtom > r.dtom THEN fm.dtom ELSE r.dtom END,
+       CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00')
+     ) > COALESCE(d.maxidlemin, 30) * 60 THEN 'OFFLINE'
+     WHEN COALESCE(rs.suppressed, 0) = 1 THEN 'SUPPRESSED'
+     WHEN (CASE WHEN r.dtom IS NULL OR fm.dtom > r.dtom THEN fm.doserate ELSE r.doserate END) >= d.alarmlevel THEN 'ALARM'
+     WHEN (CASE WHEN r.dtom IS NULL OR fm.dtom > r.dtom THEN fm.doserate ELSE r.doserate END) >= d.warnlevel THEN 'ALERT'
     ELSE 'NORMAL'
   END COLLATE utf8mb4_uca1400_ai_ci AS status,
   COALESCE(rs.suppressed, 0) AS suppressed,
@@ -244,6 +245,13 @@ LEFT JOIN (
   SELECT serid, MAX(dtom) AS mdtom FROM recent GROUP BY serid
 ) m ON m.serid = d.serid
 LEFT JOIN recent r ON r.serid = m.serid AND r.dtom = m.mdtom
+LEFT JOIN (
+  SELECT d2.serid,
+         (SELECT m2.dtom FROM measurement m2
+          WHERE m2.serid = d2.serid ORDER BY m2.dtom DESC LIMIT 1) AS mdtom
+  FROM device d2
+) mm ON mm.serid = d.serid
+LEFT JOIN measurement fm ON fm.serid = mm.serid AND fm.dtom = mm.mdtom
 LEFT JOIN radmon_runtime_status rs ON rs.serid = d.serid
 """
         )

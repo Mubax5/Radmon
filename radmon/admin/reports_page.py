@@ -221,11 +221,13 @@ class ReportsPage(QWidget):
         if not self.preview_ready:
             return
         path = self._output_path("pdf")
-        printer = QPrinter(QPrinter.HighResolution)
-        printer.setOutputFormat(QPrinter.PdfFormat)
-        printer.setOutputFileName(str(path))
-        self.preview.document().print_(printer)
-        QMessageBox.information(self, "PDF exported", str(path))
+        try:
+            self.report_service.settings = self.settings
+            start, end = self.range()
+            self.report_service.export_pdf(start, end, path)
+            QMessageBox.information(self, "PDF exported", str(path))
+        except Exception as exc:
+            QMessageBox.critical(self, "Export error", str(exc))
 
     def export_csv(self) -> None:
         start, end = self.range()

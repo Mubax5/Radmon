@@ -22,7 +22,9 @@ class FakeRepository:
         return None
 
     def history(self, serid: int, limit: int = 240):
-        return [{"serid": serid, "dtom": "2026-09-13T04:00:00", "doserate": 10.0, "dose": 1.0, "previnterval": 2, "stat": 0}][:limit]
+        if serid in (5201, 5202):
+            return [{"serid": serid, "dtom": "2026-09-13T04:00:00", "doserate": 10.0, "dose": 1.0, "previnterval": 2, "stat": 0}][:limit]
+        return []
 
 
 class FakeSourceHealth:

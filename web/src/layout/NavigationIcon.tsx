@@ -3,6 +3,7 @@ import {
   Bell,
   Broadcast,
   ClockCounterClockwise,
+  FilePdf,
   GearSix,
   SquaresFour,
   UsersThree,
@@ -24,6 +25,7 @@ export function NavigationIcon({
     case "stations": return <Broadcast {...common} />;
     case "history": return <ClockCounterClockwise {...common} />;
     case "archives": return <Archive {...common} />;
+    case "reports": return <FilePdf {...common} />;
     case "alarms": return <Bell {...common} />;
     case "users": return <UsersThree {...common} />;
     case "system": return <GearSix {...common} />;

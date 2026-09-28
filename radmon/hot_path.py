@@ -161,15 +161,9 @@ SELECT d.serid, d.name, d.location, d.description, d.warnlevel, d.alarmlevel, d.
        v.dtom, v.doserate, v.dose, v.previnterval, v.stat
 FROM device d
 LEFT JOIN (
-  SELECT current.*
-  FROM vrecent current
-  JOIN (
-    SELECT serid, MAX(dtom) AS dtom
-    FROM recent
-    WHERE dtom IS NOT NULL
-    GROUP BY serid
-  ) newest ON newest.serid = current.serid AND newest.dtom = current.dtom
-) v ON v.serid = d.serid
+  SELECT serid, MAX(dtom) AS mdtom FROM vrecent GROUP BY serid
+) newest ON newest.serid = d.serid
+LEFT JOIN vrecent v ON v.serid = newest.serid AND v.dtom = newest.mdtom
 ORDER BY d.location, d.name
 """
                 )

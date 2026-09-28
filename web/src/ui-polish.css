@@ -129,6 +129,33 @@
   background: #f3f4f6;
 }
 
+.report-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-preview {
+  min-height: 240px;
+  overflow: hidden;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 8px;
+  background: #f3f4f6;
+}
+
+.report-preview iframe {
+  display: block;
+  width: 100%;
+  height: min(72vh, 900px);
+  border: 0;
+  background: #fff;
+}
+
+.report-preview > p {
+  padding: 16px;
+}
+
 .native-user-dialog {
   width: min(560px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);

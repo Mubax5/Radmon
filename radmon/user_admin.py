@@ -121,16 +121,14 @@ class UserAdminService:
             target = str(username).strip().lower()
             try:
                 self.security.require_sensitive(identity, "manage_users", pin)
-                before = self.security.get_user(target)
                 if identity.username == target:
                     raise ValueError("Administrator tidak dapat menghapus akun yang sedang dipakai")
-                self._ensure_not_final_admin(before, role=Role(str(before["role"])), enabled=False)
-                after = self.security.delete_user(target)
+                before = self.security.get_user(target)
+                deleted = self.security.delete_user(target, actor=identity, audit=self.audit)
             except Exception as exc:
-                self._record_failure("USER_DEACTIVATE", identity, target, exc)
+                self._record_failure("USER_DELETE", identity, target, exc)
                 raise
-            self.audit.record("USER_DEACTIVATE", identity, "user", target, before=before, after=after)
-            return after
+            return deleted
 
     def _ensure_not_final_admin(self, before: dict[str, object], *, role: Role, enabled: bool) -> None:
         was_enabled_admin = bool(before["enabled"]) and before["role"] == Role.ADMINISTRATOR.value

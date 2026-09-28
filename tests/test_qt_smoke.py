@@ -74,18 +74,30 @@ def test_chart_page_constructs_and_refreshes_offscreen():
     assert len(page.points) == 2
 
 
-def test_report_preview_document_can_render_pdf_without_external_viewer(tmp_path: Path):
+def test_desktop_pdf_export_uses_report_service_artifact_bytes(tmp_path: Path, monkeypatch):
     app()
-    settings = Settings().for_dummy()
+    settings = Settings(report_dir=tmp_path).for_dummy()
     page = ReportsPage(ReportService(FakeRepo(), settings), settings)
     page.start.setDateTime(QDateTime.fromString("2026-09-07 08:00:00", "yyyy-MM-dd HH:mm:ss"))
     page.end.setDateTime(QDateTime.fromString("2026-09-07 09:00:00", "yyyy-MM-dd HH:mm:ss"))
     page.build_preview()
     assert page.preview_ready
 
-    destination = tmp_path / "preview.pdf"
-    printer = QPrinter(QPrinter.HighResolution)
-    printer.setOutputFormat(QPrinter.PdfFormat)
-    printer.setOutputFileName(str(destination))
-    page.preview.document().print_(printer)
-    assert destination.read_bytes().startswith(b"%PDF")
+    from PySide6.QtWidgets import QMessageBox
+
+    generated = b"%PDF-shared-report-service-artifact"
+    calls = []
+
+    def export_pdf(start, end, destination):
+        calls.append((start, end))
+        destination.write_bytes(generated)
+        return destination
+
+    monkeypatch.setattr(page.report_service, "export_pdf", export_pdf)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: pytest.fail(str(args)))
+    page.export_pdf()
+
+    destination = next(tmp_path.glob("radmon-5202-*_to_*.pdf"))
+    assert destination.read_bytes() == generated
+    assert calls == [page.range()]

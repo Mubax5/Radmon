@@ -181,13 +181,19 @@ def test_report_control_api_validates_rbac_status_download_and_audit(tmp_path):
     assert web.post("/auth/login", json={"username": "other", "password": "Password123!"}).status_code == 200
     assert web.get(f"/api/v1/control/reports/{jobs.owner_job_id}").status_code == 403
     assert web.get(f"/api/v1/control/reports/{jobs.owner_job_id}/download").status_code == 403
+    assert web.get(f"/api/v1/control/reports/{jobs.owner_job_id}/preview").status_code == 403
     assert jobs.artifact_calls == 0
     web.post("/auth/logout")
     assert web.post("/auth/login", json={"username": "admin", "password": "Password123!"}).status_code == 200
     download = web.get(f"/api/v1/control/reports/{jobs.owner_job_id}/download")
+    preview = web.get(f"/api/v1/control/reports/{jobs.owner_job_id}/preview")
     assert download.status_code == 200
     assert download.content == b"%PDF-test"
-    assert audit.list_events()[0]["action"] == "REPORT_DOWNLOAD"
+    assert preview.status_code == 200
+    assert preview.headers["content-type"] == "application/pdf"
+    assert preview.headers["content-disposition"] == f'inline; filename="radmon-report-{jobs.owner_job_id}.pdf"'
+    assert preview.content == download.content == jobs.path.read_bytes()
+    assert {event["action"] for event in audit.list_events()} >= {"REPORT_DOWNLOAD", "REPORT_PREVIEW"}
 
 
 def test_reports_frontend_contract_uses_native_controls_and_safe_download_url():
@@ -195,11 +201,16 @@ def test_reports_frontend_contract_uses_native_controls_and_safe_download_url():
     page = (root / "web/src/pages/ReportsPage.tsx").read_text(encoding="utf-8")
     api = (root / "web/src/api.ts").read_text(encoding="utf-8")
     navigation = (root / "web/src/navigation.ts").read_text(encoding="utf-8")
+    navigation_icon = (root / "web/src/layout/NavigationIcon.tsx").read_text(encoding="utf-8")
 
     assert 'id="report-station"' in page
     assert 'type="datetime-local"' in page
     assert "reportDownloadUrl(job.job_id)" in page
+    assert "reportPreviewUrl(previewJobId)" in page
+    assert 'job.status === "completed"' in page
+    assert "<iframe" in page and "previewLoading" in page and "previewError" in page
+    assert 'FilePdf' in navigation_icon and 'case "reports"' in navigation_icon
     assert "window.location" not in page
     assert "<Dialog" not in page
-    assert "listReportJobs" in api and "requestReport" in api and "reportDownloadUrl" in api
+    assert "listReportJobs" in api and "requestReport" in api and "reportDownloadUrl" in api and "reportPreviewUrl" in api
     assert '{ id: "reports", label: "Laporan", minimum: "Operator" }' in navigation

@@ -100,7 +100,10 @@ def test_supervisor_cleans_up_when_desktop_raises(tmp_path):
     assert events == ["lock", "central-start", "grafana", "desktop", "central-stop", "unlock"]
 
 
-def test_supervisor_refuses_duplicate_instance_before_starting_central(tmp_path):
+def test_supervisor_refuses_duplicate_instance_before_starting_central(tmp_path, monkeypatch):
+    from radmon import production_app
+
+    monkeypatch.setattr(production_app, "_probe_central_health", lambda **_kwargs: False)
     events = []
     central = FakeCentral(events)
     code = run_production(
