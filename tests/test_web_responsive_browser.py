@@ -291,9 +291,10 @@ def test_login_is_centered_and_brin_logo_keeps_its_aspect_ratio(chrome_driver):
     with _serve_ui(authenticated=False) as base:
         for width, height in ((360, 800), (1366, 768)):
             _set_viewport(chrome_driver, width, height)
-            chrome_driver.get(f"{base}/app/login")
-            _wait_for(chrome_driver, ".login-card")
-            _assert_no_horizontal_overflow(chrome_driver)
+                chrome_driver.get(f"{base}/app/login")
+                _wait_for(chrome_driver, ".login-card")
+                _wait_for(chrome_driver, ".login-brand img")
+                _assert_no_horizontal_overflow(chrome_driver)
             card = chrome_driver.execute_script("return document.querySelector('.login-card').getBoundingClientRect().toJSON()")
             assert card["left"] >= 0 and card["right"] <= width + 1
             ratio_error = chrome_driver.execute_script(
