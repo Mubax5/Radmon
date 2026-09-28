@@ -7,9 +7,27 @@ from .central_api import CentralMariaDBRepository
 from .lan import LIVE_KEYS, RemoteMariaDBSource
 
 
+def _parse_dtom(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            # MariaDB DATETIME string like "2026-09-28 14:03:00" or ISO.
+            return datetime.fromisoformat(text.replace(" ", "T"))
+        except ValueError:
+            try:
+                return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return None
+    return None
+
+
 def _snapshot_needs_measurement_fallback(row: dict[str, Any]) -> bool:
-    measured_at = row.get("dtom")
-    if not isinstance(measured_at, datetime):
+    measured_at = _parse_dtom(row.get("dtom"))
+    if measured_at is None:
         return True
 
     try:
@@ -35,30 +53,71 @@ class RealtimeRemoteMariaDBSource(RemoteMariaDBSource):
     """Low-cost source read model with an indexed fallback for stale snapshots."""
 
     def live_rows(self) -> list[dict[str, Any]]:
+        # Reconnect-friendly: transient remote failures must not kill the
+        # 2-second live mirror; fall back to last measurement sample.
         connection = self._connection()
         try:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """SELECT serid, name, location, warnlevel, alarmlevel, unit, audiopath,
+                try:
+                    cursor.execute(
+                        """SELECT serid, name, location, warnlevel, alarmlevel, unit, audiopath,
        description, maxidlemin, dtom, doserate, dose, lastrate,
        minrate, maxrate, avgrate, lastdose, mindose, maxdose,
        avgdose, lastmea, lastmeasec, meacount, firstmea
 FROM vrecent
 ORDER BY serid"""
-                )
-                rows = self._dict_rows(cursor.fetchall(), LIVE_KEYS)
+                    )
+                    rows = self._dict_rows(cursor.fetchall(), LIVE_KEYS)
+                except Exception:
+                    # vrecent is a disposable view; if it fails (e.g. transient
+                    # collation or lock), fall back to per-detector latest
+                    # measurement so recent can still be refreshed.
+                    rows = []
+                    try:
+                        cursor.execute("SELECT serid, name, location, warnlevel, alarmlevel, unit, audiopath, description, maxidlemin FROM device ORDER BY serid")
+                        devices = self._dict_rows(cursor.fetchall(), ("serid", "name", "location", "warnlevel", "alarmlevel", "unit", "audiopath", "description", "maxidlemin"))
+                    except Exception:
+                        return []
+                    for dev in devices:
+                        try:
+                            cursor.execute(
+                                """SELECT serid, dtom, doserate, dose
+FROM measurement
+WHERE serid = ?
+ORDER BY dtom DESC LIMIT 1""",
+                                (int(dev["serid"]),),
+                            )
+                            latest_raw = cursor.fetchone()
+                        except Exception:
+                            continue
+                        if latest_raw is None:
+                            rows.append({**dev, "dtom": None, "doserate": None, "dose": None, "lastrate": None, "minrate": None, "maxrate": None, "avgrate": None, "lastdose": None, "mindose": None, "maxdose": None, "avgdose": None, "firstmea": None, "lastmea": None, "lastmeasec": 2, "meacount": 0})
+                            continue
+                        latest = (
+                            dict(latest_raw)
+                            if isinstance(latest_raw, dict)
+                            else dict(zip(("serid", "dtom", "doserate", "dose"), latest_raw))
+                        )
+                        latest_at = _parse_dtom(latest.get("dtom"))
+                        if latest_at is None:
+                            continue
+                        rows.append({**dev, "dtom": latest_at, "doserate": latest.get("doserate"), "dose": latest.get("dose"), "lastrate": latest.get("doserate"), "minrate": None, "maxrate": None, "avgrate": None, "lastdose": None, "mindose": None, "maxdose": None, "avgdose": None, "firstmea": None, "lastmea": latest_at, "lastmeasec": 2, "meacount": 1})
+                    return rows
 
                 for row in rows:
                     if not _snapshot_needs_measurement_fallback(row):
                         continue
-                    cursor.execute(
-                        """SELECT serid, dtom, doserate, dose
+                    try:
+                        cursor.execute(
+                            """SELECT serid, dtom, doserate, dose
 FROM measurement
 WHERE serid = ?
 ORDER BY dtom DESC LIMIT 1""",
-                        (int(row["serid"]),),
-                    )
-                    latest_raw = cursor.fetchone()
+                            (int(row["serid"]),),
+                        )
+                        latest_raw = cursor.fetchone()
+                    except Exception:
+                        continue
                     if latest_raw is None:
                         continue
                     latest = (
@@ -66,20 +125,27 @@ ORDER BY dtom DESC LIMIT 1""",
                         if isinstance(latest_raw, dict)
                         else dict(zip(("serid", "dtom", "doserate", "dose"), latest_raw))
                     )
-                    latest_at = latest.get("dtom")
-                    current_at = row.get("dtom")
-                    if not isinstance(latest_at, datetime):
+                    latest_at = _parse_dtom(latest.get("dtom"))
+                    current_at = _parse_dtom(row.get("dtom"))
+                    if latest_at is None:
                         continue
                     if isinstance(current_at, datetime) and latest_at <= current_at:
                         continue
+                    # Normalize to datetime for downstream mirror.
                     row["dtom"] = latest_at
                     row["lastmea"] = latest_at
                     if latest.get("doserate") is not None:
-                        row["doserate"] = float(latest["doserate"])
+                        try:
+                            row["doserate"] = float(latest["doserate"])
+                        except (TypeError, ValueError):
+                            continue
                     row["dose"] = latest.get("dose")
             return rows
         finally:
-            connection.close()
+            try:
+                connection.close()
+            except Exception:
+                pass
 
 
 class RealtimeCentralMariaDBRepository(CentralMariaDBRepository):

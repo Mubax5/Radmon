@@ -89,25 +89,64 @@ class LanRuntime:
             self.web_event_broker.publish(event)
 
     def _run_live_source(self, source) -> None:
+        # Per-source resilient live mirror: transient remote/central failures
+        # must not kill the 2s loop. Generic backoff + last-sample fallback
+        # keeps recent fresh while preserving authoritative measurement history.
         aggregator = self._aggregator()
+        consecutive_errors = 0
         while not self.stop_event.is_set():
-            result = aggregator.run_live_once(source)
-            if result.error:
-                state = self.services.source_health.record_failure(source, result.error)
-                LOGGER.warning(
-                    "[LIVE] source=%s host=%s state=%s error=%s",
-                    source.source_id,
-                    source.host,
-                    state["state"],
-                    result.error,
-                )
-            else:
-                state = self.services.source_health.record_success(
-                    source,
-                    live=True,
-                    alarm=True,
-                    history=False,
-                )
+            result = None
+            try:
+                result = aggregator.run_live_once(source)
+                if result.error:
+                    consecutive_errors += 1
+                    # Last-sample fallback: if live snapshot failed but the
+                    # remote measurement table is still readable (backfill
+                    # proves it), mirror the freshest measurement so recent
+                    # does not stay stale 50+ minutes while measurement is
+                    # current. This is generic per-source, not building-specific.
+                    if result.live_stations == 0:
+                        try:
+                            fallback = aggregator.run_live_fallback_once(source)
+                            if fallback and not fallback.error and fallback.live_stations:
+                                result = fallback
+                        except Exception as fb_exc:
+                            LOGGER.debug("[LIVE] source=%s fallback failed %s", source.source_id, fb_exc)
+                    try:
+                        state = self.services.source_health.record_failure(source, result.error)
+                    except Exception as health_exc:
+                        LOGGER.warning("[LIVE] source=%s health record_failed %s", source.source_id, health_exc)
+                        state = {"state": "DEGRADED"}
+                    LOGGER.warning(
+                        "[LIVE] source=%s host=%s state=%s error=%s",
+                        source.source_id,
+                        source.host,
+                        state["state"],
+                        result.error,
+                    )
+                    backoff = min(30.0, self.interval * (2 ** min(consecutive_errors, 4)))
+                    self._publish_web_event({
+                        "type": "live_update",
+                        "source_id": source.source_id,
+                        "connected": False,
+                        "alarms_new": int(result.mirrored_alarms or 0),
+                    })
+                    # Backoff but stay responsive to stop.
+                    if self.stop_event.wait(backoff):
+                        break
+                    continue
+                # Success path: reset backoff.
+                consecutive_errors = 0
+                try:
+                    state = self.services.source_health.record_success(
+                        source,
+                        live=True,
+                        alarm=True,
+                        history=False,
+                    )
+                except Exception as health_exc:
+                    LOGGER.warning("[LIVE] source=%s health record_success failed %s", source.source_id, health_exc)
+                    state = {"state": "CONNECTED"}
                 LOGGER.info(
                     "[LIVE] source=%s host=%s state=%s stations=%s alarms_new=%s",
                     source.source_id,
@@ -116,44 +155,83 @@ class LanRuntime:
                     result.live_stations,
                     result.mirrored_alarms,
                 )
-            self._publish_web_event({
-                "type": "live_update",
-                "source_id": source.source_id,
-                "connected": not bool(result.error),
-                "alarms_new": int(result.mirrored_alarms or 0),
-            })
+                self._publish_web_event({
+                    "type": "live_update",
+                    "source_id": source.source_id,
+                    "connected": True,
+                    "alarms_new": int(result.mirrored_alarms or 0),
+                })
+            except Exception as exc:
+                # Never let an unexpected exception kill the per-source live
+                # thread. This was the observed failure for gd50/gd38: health
+                # or alarm-policy threw, thread died silently, recent stayed
+                # stale while backfill kept measurement fresh.
+                consecutive_errors += 1
+                LOGGER.exception("[LIVE] source=%s host=%s unexpected error=%s", source.source_id, source.host, exc)
+                try:
+                    state = self.services.source_health.record_failure(source, str(exc))
+                except Exception:
+                    LOGGER.exception("[LIVE] source=%s health record_failure also failed", source.source_id)
+                self._publish_web_event({
+                    "type": "live_update",
+                    "source_id": source.source_id,
+                    "connected": False,
+                    "alarms_new": 0,
+                })
+                backoff = min(30.0, self.interval * (2 ** min(consecutive_errors, 4)))
+                if self.stop_event.wait(backoff):
+                    break
+                continue
             self.stop_event.wait(self.interval)
 
     def _run_backfill_source(self, source) -> None:
         aggregator = self._aggregator(self.backfill_batch_size)
         station_index = 0
+        consecutive_errors = 0
         while not self.stop_event.is_set():
-            result = aggregator.run_backfill_once(source, station_index=station_index)
-            station_index += 1
-            if result.error:
-                LOGGER.warning(
-                    "[BACKFILL] source=%s host=%s error=%s",
-                    source.source_id,
-                    source.host,
-                    result.error,
-                )
-            elif result.backfill_serid is not None:
-                if result.inserted_measurements > 0:
-                    self.services.source_health.record_history_import(source)
-                    LOGGER.info(
-                        "[BACKFILL] source=%s serid=%s inserted=%s checkpoint=%s",
+            try:
+                result = aggregator.run_backfill_once(source, station_index=station_index)
+                station_index += 1
+                if result.error:
+                    consecutive_errors += 1
+                    LOGGER.warning(
+                        "[BACKFILL] source=%s host=%s error=%s",
                         source.source_id,
-                        result.backfill_serid,
-                        result.inserted_measurements,
-                        result.checkpoint,
+                        source.host,
+                        result.error,
                     )
-                else:
-                    LOGGER.debug(
-                        "[BACKFILL] source=%s serid=%s caught_up checkpoint=%s",
-                        source.source_id,
-                        result.backfill_serid,
-                        result.checkpoint,
-                    )
+                    backoff = min(30.0, self.backfill_interval * (2 ** min(consecutive_errors, 3)))
+                    if self.stop_event.wait(backoff):
+                        break
+                    continue
+                consecutive_errors = 0
+                if result.backfill_serid is not None:
+                    if result.inserted_measurements > 0:
+                        try:
+                            self.services.source_health.record_history_import(source)
+                        except Exception as health_exc:
+                            LOGGER.warning("[BACKFILL] source=%s health history failed %s", source.source_id, health_exc)
+                        LOGGER.info(
+                            "[BACKFILL] source=%s serid=%s inserted=%s checkpoint=%s",
+                            source.source_id,
+                            result.backfill_serid,
+                            result.inserted_measurements,
+                            result.checkpoint,
+                        )
+                    else:
+                        LOGGER.debug(
+                            "[BACKFILL] source=%s serid=%s caught_up checkpoint=%s",
+                            source.source_id,
+                            result.backfill_serid,
+                            result.checkpoint,
+                        )
+            except Exception as exc:
+                consecutive_errors += 1
+                LOGGER.exception("[BACKFILL] source=%s host=%s unexpected error=%s", source.source_id, source.host, exc)
+                backoff = min(30.0, self.backfill_interval * (2 ** min(consecutive_errors, 3)))
+                if self.stop_event.wait(backoff):
+                    break
+                continue
             self.stop_event.wait(self.backfill_interval)
 
     def _run_whatsapp(self) -> None:

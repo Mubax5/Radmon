@@ -73,10 +73,35 @@ ON DUPLICATE KEY UPDATE
         )
 
     @staticmethod
+    def _parse_dtom(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                return datetime.fromisoformat(text.replace(" ", "T"))
+            except ValueError:
+                try:
+                    return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    return None
+        return None
+
+    @staticmethod
     def _rolling_row(row: dict[str, Any]) -> dict[str, Any] | None:
-        measured_at = row.get("dtom")
+        measured_at = BatchedMariaCentralStore._parse_dtom(row.get("dtom"))
         rate = row.get("doserate")
-        if not isinstance(measured_at, datetime) or rate is None:
+        if measured_at is None or rate is None:
+            return None
+        # Guard against NaN/empty string rates that would silently drop recent.
+        try:
+            doserate = float(rate)
+        except (TypeError, ValueError):
+            return None
+        # NaN check
+        if doserate != doserate:  # NaN
             return None
         try:
             interval = int(row.get("lastmeasec") or row.get("previnterval") or 2)
@@ -84,13 +109,23 @@ ON DUPLICATE KEY UPDATE
             interval = 2
         if interval < 1 or interval > 3600:
             interval = 2
+        try:
+            dose = float(row.get("dose") or 0.0)
+        except (TypeError, ValueError):
+            dose = 0.0
+        if dose != dose:
+            dose = 0.0
+        try:
+            stat = int(row.get("stat") or 0)
+        except (TypeError, ValueError):
+            stat = 0
         return {
             "serid": int(row["serid"]),
             "dtom": measured_at,
-            "doserate": float(rate),
-            "dose": float(row.get("dose") or 0.0),
+            "doserate": doserate,
+            "dose": dose,
             "previnterval": interval,
-            "stat": int(row.get("stat") or 0),
+            "stat": stat,
         }
 
     def upsert_live_rows(self, source_id: str, rows: Iterable[dict[str, Any]]) -> int:

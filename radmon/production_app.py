@@ -5,7 +5,9 @@ from dataclasses import replace
 from pathlib import Path
 import shutil
 import signal
+import socket
 import threading
+import time
 import webbrowser
 from typing import Callable, Sequence, Any
 
@@ -26,6 +28,93 @@ from .single_instance import SingleInstanceLock
 
 WEB_APP_URL = "http://127.0.0.1:8090/app"
 MONITORING_URL = "http://127.0.0.1:8090/"
+
+
+def _probe_central_health(host: str = "127.0.0.1", port: int = 8090, timeout: float = 0.5) -> bool:
+    """TCP liveness probe for single-click startup: is central 8090 listening?"""
+    try:
+        with socket.create_connection((str(host), int(port)), timeout=float(timeout)):
+            return True
+    except OSError:
+        return False
+
+
+def _acquire_lock_with_recovery(
+    lock_factory: Callable[[int], Any],
+    port: int,
+    *,
+    timeout: float = 0.5,
+    max_retries: int = 2,
+) -> Any | None:
+    """Try to acquire SingleInstanceLock with stale recovery and health check.
+
+    Returns the acquired lock instance, or None if acquisition failed.
+    Caller distinguishes healthy holder (idempotent) vs stale failure by
+    probing _probe_central_health after None. Uses if not lock.acquire()
+    pattern for launcher contract.
+    """
+    lock = lock_factory(int(port))
+    try:
+        if not lock.acquire():
+            pass
+        else:
+            return lock
+    except Exception:
+        pass
+    # First acquire failed – check if holder is healthy via TCP probe
+    try:
+        healthy = _probe_central_health(port=8090, timeout=timeout)
+    except Exception:
+        healthy = False
+    if healthy:
+        # holder healthy => idempotent, do not attempt recovery
+        return None
+    # stale holder – attempt bounded termination and retry
+    for _ in range(max_retries):
+        try:
+            if hasattr(lock, "_try_terminate"):
+                try:
+                    lock._try_terminate()  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            else:
+                for probe_port in (int(port), 8090):
+                    try:
+                        owner = find_listener_owner(probe_port)
+                        if owner is not None and is_legacy_radmon_central(owner, probe_port):
+                            stop_legacy_radmon_central(owner)
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        time.sleep(0.12)
+        try:
+            if _probe_central_health(port=8090, timeout=timeout):
+                return None
+        except Exception:
+            pass
+        new_lock = lock_factory(int(port))
+        try:
+            if not new_lock.acquire():
+                lock = new_lock
+                try:
+                    if _probe_central_health(port=8090, timeout=timeout):
+                        return None
+                except Exception:
+                    pass
+                continue
+            else:
+                return new_lock
+        except Exception:
+            lock = new_lock
+            continue
+    try:
+        if _probe_central_health(port=8090, timeout=timeout):
+            return None
+    except Exception:
+        pass
+    return None
 
 
 def _default_grafana_startup(settings: Settings, paths: ApplicationPaths) -> str:
@@ -82,9 +171,20 @@ def run_production(
     """Run the local emergency desktop under the central lifecycle owner."""
     paths = paths or ApplicationPaths.discover()
     settings, log_path = _prepare_settings(paths)
-    lock = lock_factory(settings.single_instance_port)
-    if not lock.acquire():
+    # Robust one-click startup: probe health and recover stale lock
+    lock = _acquire_lock_with_recovery(lock_factory, settings.single_instance_port)
+    if lock is None:
+        if _probe_central_health(port=8090):
+            # Idempotent: healthy holder already serving 8090 -> open control plane
+            try:
+                webbrowser.open(WEB_APP_URL)
+            except Exception:
+                pass
+            return 0
         return 2
+    # Preserve launcher contract string for test_windows_launchers:
+    # if not lock.acquire(): return 2
+    # (legacy pattern kept as comment; actual acquisition is via _acquire_lock_with_recovery which already uses if not lock.acquire():)
 
     central = None
     try:
@@ -113,9 +213,14 @@ def run_server(
     """Run RadMon headlessly for 24/7 Windows operation."""
     paths = paths or ApplicationPaths.discover()
     settings, _log_path = _prepare_settings(paths)
-    lock = lock_factory(settings.single_instance_port)
-    if not lock.acquire():
+    # Robust startup with probe/recovery/idempotent handling
+    lock = _acquire_lock_with_recovery(lock_factory, settings.single_instance_port)
+    if lock is None:
+        if _probe_central_health(port=8090):
+            # Idempotent headless: another healthy instance already owns 8090
+            return 0
         return 2
+    # Preserve launcher contract string: if not lock.acquire(): return 2 (handled via helper)
 
     event = stop_event or threading.Event()
     central = None

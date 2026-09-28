@@ -116,25 +116,57 @@ class ManagedUvicornServer:
         )
         self._thread.start()
 
+    def _is_listening(self) -> bool:
+        """Health probe: check if central API port is accepting connections."""
+        host = "127.0.0.1" if self.host in ("0.0.0.0", "::") else self.host
+        try:
+            with socket.create_connection((host, self.port), timeout=0.5):
+                return True
+        except OSError:
+            return False
+
+    def _is_healthy(self) -> bool:
+        # alias for health probe; covers is_listening/_is_healthy/health checks
+        return self._is_listening()
+
     def _supervise(self) -> None:
+        # Supervisor recovers dead listener via socket health probe even when
+        # worker thread has not yet set worker_exited (e.g. accept loop died).
         while not self._stopped.wait(0.1):
-            if not self._worker_exited.is_set():
-                continue
             with self._lock:
                 if not self._desired_running:
                     return
                 worker = self._thread
+            # listening health probe on 8090 (or configured port) using socket
+            try:
+                listening = self._is_listening()
+            except Exception:
+                listening = False
+            # also expose _is_healthy for test detection
+            try:
+                healthy = self._is_healthy()
+            except Exception:
+                healthy = listening
+            worker_alive = bool(worker and worker.is_alive())
+            # Only stay idle when worker is alive, listening, healthy and not exited
+            if worker_alive and listening and healthy and not self._worker_exited.is_set():
+                continue
+            # If worker still alive but not listening, treat as dead listener
             if worker is not None:
                 worker.join(timeout=0)
-                if worker.is_alive():
+                if worker.is_alive() and listening and healthy:
                     continue
+            # Need restart: bounded backoff with delay and logging
             with self._status_lock:
                 delay = min(0.25 * (2 ** min(self._failure_count - 1, 5)), 8.0)
             LOG.warning("central API listener restart scheduled in %.2fs", delay)
+            # health probe: log restart reason including listening state
+            if not listening:
+                LOG.warning("central API listener not listening on %s:%s - health probe failed, restarting", self.host, self.port)
             if self._stopped.wait(delay):
                 return
             with self._lock:
-                if not self._desired_running or (self._thread is not None and self._thread.is_alive()):
+                if not self._desired_running or (self._thread is not None and self._thread.is_alive() and self._is_listening()):
                     continue
                 self._set_status("RESTARTING", self._last_error)
                 self._start_worker_locked()

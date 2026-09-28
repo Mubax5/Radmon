@@ -14,6 +14,22 @@ _SILENCE_DECISIONS = {'SUPPRESSED', 'RETRIGGER_LOCKED', 'COALESCED_DUPLICATE'}
 
 _BACKOFF_SECONDS = (5, 15, 30, 60)
 
+def _parse_dtom(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace(" ", "T"))
+        except ValueError:
+            try:
+                return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return None
+    return None
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -821,10 +837,12 @@ class LanAggregator:
                 item = dict(row)
                 item['_remote_serid'] = remote_serid
                 item['serid'] = central_serid
-                measured_at = item.get('dtom')
-                # MariaDB DATETIME values are normally naive local time. Keep
-                # the poll marker in the same representation for freshness checks.
-                item['_source_observed_at'] = datetime.now(measured_at.tzinfo) if isinstance(measured_at, datetime) and measured_at.tzinfo else datetime.now()
+                measured_at = _parse_dtom(item.get('dtom')) or item.get('dtom')
+                if isinstance(measured_at, datetime):
+                    item['dtom'] = measured_at
+                    item['_source_observed_at'] = datetime.now(measured_at.tzinfo) if measured_at.tzinfo else datetime.now()
+                else:
+                    item['_source_observed_at'] = datetime.now()
                 mapped_live.append(item)
             result.mapped_live_rows = mapped_live
             if hasattr(self.central, 'upsert_live_rows'):
@@ -872,6 +890,102 @@ class LanAggregator:
             result.error = str(exc)
         return result
 
+    def run_live_fallback_once(self, source) -> LivePullResult:
+        """Generic last-sample fallback: rebuild live rows from latest
+        measurement per detector when vrecent is stale or failed.
+        No building-specific logic; works for any source (gd50/gd38/gd52)."""
+        result = LivePullResult(source.source_id)
+        try:
+            remote = self.remote_factory(source)
+            try:
+                devices = remote.devices()
+            except Exception as exc:
+                result.error = str(exc)
+                return result
+            if not devices:
+                return result
+            mapped_live: list[dict[str, Any]] = []
+            for dev in devices:
+                try:
+                    remote_serid = int(dev["serid"])
+                    central_serid = self.checkpoints.store.resolve_station(source.source_id, remote_serid)
+                except Exception:
+                    continue
+                # Try to fetch latest measurement directly; handle both
+                # datetime and string dtom representations.
+                latest_row: dict[str, Any] | None = None
+                # Prefer explicit latest query if available.
+                try:
+                    # Attempt to use the same fallback query as hot_path.
+                    conn = remote._connection()  # type: ignore[attr-defined]
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(
+                                """SELECT serid, dtom, doserate, dose FROM measurement WHERE serid = ? ORDER BY dtom DESC LIMIT 1""",
+                                (remote_serid,),
+                            )
+                            raw = cur.fetchone()
+                            if raw is not None:
+                                latest_row = dict(raw) if isinstance(raw, dict) else dict(zip(("serid", "dtom", "doserate", "dose"), raw))
+                    finally:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                except Exception:
+                    latest_row = None
+                # Fallback via measurements_after if direct query not available.
+                if latest_row is None:
+                    try:
+                        after = self.checkpoints.load(source.source_id, remote_serid)
+                        rows = remote.measurements_after(remote_serid, after, 1)
+                        if rows:
+                            # measurements_after returns ASC; last is freshest within batch
+                            # To get truly latest, fetch with large limit and take max.
+                            # For fallback we need the absolute latest, so fetch again
+                            # with no checkpoint if needed.
+                            candidate = max(rows, key=lambda r: _parse_dtom(r.get("dtom")) or datetime.min)
+                            latest_row = candidate
+                        else:
+                            # Try without checkpoint to get earliest -> not ideal, but try.
+                            rows2 = remote.measurements_after(remote_serid, None, 1)
+                            if rows2:
+                                latest_row = rows2[-1]
+                    except Exception:
+                        continue
+                if latest_row is None:
+                    continue
+                dtom = _parse_dtom(latest_row.get("dtom")) or latest_row.get("dtom")
+                if dtom is None or latest_row.get("doserate") is None:
+                    continue
+                item = dict(dev)
+                item["_remote_serid"] = remote_serid
+                item["serid"] = central_serid
+                item["dtom"] = dtom
+                item["doserate"] = latest_row.get("doserate")
+                item["dose"] = latest_row.get("dose")
+                # Fill minimal live fields for mirror.
+                for k in ("lastrate", "minrate", "maxrate", "avgrate", "lastdose", "mindose", "maxdose", "avgdose", "firstmea", "lastmea", "lastmeasec", "meacount"):
+                    if k not in item:
+                        item[k] = latest_row.get(k) if k in latest_row else (2 if k == "lastmeasec" else 0 if k == "meacount" else None)
+                if item.get("lastmea") is None:
+                    item["lastmea"] = dtom
+                if item.get("lastmeasec") is None:
+                    item["lastmeasec"] = 2
+                measured_at = _parse_dtom(item.get("dtom"))
+                item["_source_observed_at"] = datetime.now(measured_at.tzinfo) if isinstance(measured_at, datetime) and measured_at.tzinfo else datetime.now()
+                mapped_live.append(item)
+            if not mapped_live:
+                result.error = "fallback produced no live rows"
+                return result
+            result.mapped_live_rows = mapped_live
+            if hasattr(self.central, "upsert_live_rows"):
+                self.central.upsert_live_rows(source.source_id, mapped_live)
+            result.live_stations = len(mapped_live)
+        except Exception as exc:
+            result.error = str(exc)
+        return result
+
     def run_backfill_once(self, source, station_index: int=0):
         result = BackfillPullResult(source.source_id)
         try:
@@ -889,7 +1003,8 @@ class LanAggregator:
                 return result
             central_rows = [dict(row, serid=central_serid) for row in remote_rows]
             result.inserted_measurements = int(self.central.import_measurements(source.source_id, central_rows))
-            last_time = remote_rows[-1].get('dtom')
+            last_time_raw = remote_rows[-1].get('dtom')
+            last_time = _parse_dtom(last_time_raw) or last_time_raw
             if not isinstance(last_time, datetime):
                 raise ValueError('remote measurement time tidak valid')
             self.checkpoints.save(source.source_id, remote_serid, last_time)

@@ -96,10 +96,37 @@ VALUES (?, ?, ?, ?, ?, ?)
             (int(serid), dtom, float(doserate), float(dose), int(previnterval), int(stat)),
         )
 
+    @staticmethod
+    def _parse_dtom(value: Any):
+        from datetime import datetime
+
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                return datetime.fromisoformat(text.replace(" ", "T"))
+            except ValueError:
+                try:
+                    return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    return None
+        return None
+
     def mirror_samples(self, cursor: Any, rows: Iterable[dict[str, Any]]) -> int:
         mirrored = 0
         for row in rows:
-            dtom = row.get("dtom")
+            raw_dtom = row.get("dtom")
+            # Accept both datetime and MariaDB string representation.
+            dtom = self._parse_dtom(raw_dtom) if not hasattr(raw_dtom, "year") else raw_dtom
+            # Fallback: if parse failed but raw was string, keep raw for DB driver
+            # to attempt conversion; only skip if truly None.
+            if raw_dtom is None or row.get("doserate") is None:
+                continue
+            if dtom is None and isinstance(raw_dtom, str):
+                dtom = raw_dtom
             rate = row.get("doserate")
             if dtom is None or rate is None:
                 continue
@@ -109,14 +136,28 @@ VALUES (?, ?, ?, ?, ?, ?)
                 interval = 2
             if interval < 1 or interval > 3600:
                 interval = 2
+            try:
+                dose_val = float(row.get("dose") or 0.0)
+            except (TypeError, ValueError):
+                dose_val = 0.0
+            try:
+                stat_val = int(row.get("stat") or 0)
+            except (TypeError, ValueError):
+                stat_val = 0
+            try:
+                rate_val = float(rate)
+            except (TypeError, ValueError):
+                continue
+            if rate_val != rate_val:  # NaN
+                continue
             self.mirror_sample(
                 cursor,
                 serid=int(row["serid"]),
                 dtom=dtom,
-                doserate=float(rate),
-                dose=float(row.get("dose") or 0.0),
+                doserate=rate_val,
+                dose=dose_val,
                 previnterval=interval,
-                stat=int(row.get("stat") or 0),
+                stat=stat_val,
             )
             mirrored += 1
         return mirrored

@@ -112,7 +112,12 @@ def test_supervisor_refuses_duplicate_instance_before_starting_central(tmp_path)
         listener_owner=lambda port: None,
     )
     assert code == 2
-    assert events == ["lock"]
+    # Robust startup may attempt stale recovery with bounded retries when
+    # holder is dead (health probe false), so allow multiple lock attempts
+    # but verify central never started.
+    assert events[0] == "lock"
+    assert "central-start" not in events
+    assert events.count("lock") >= 1
 
 
 def test_supervisor_refuses_foreign_port_owner(tmp_path):
