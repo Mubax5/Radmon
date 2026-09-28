@@ -393,6 +393,41 @@ def test_mobile_more_sheet_and_history_deep_link_are_reachable(chrome_driver):
         _assert_no_horizontal_overflow(chrome_driver)
 
 
+def test_history_station_toolbar_order_and_compact_viewport_layout(chrome_driver):
+    from selenium.webdriver.common.by import By
+
+    with _serve_ui() as base:
+        for width, height in ((1366, 768), (390, 844)):
+            _set_viewport(chrome_driver, width, height)
+            chrome_driver.get(f"{base}/app/history?station=3801")
+            _wait_for(chrome_driver, ".history-summary")
+            _wait_for(chrome_driver, ".trend-chart svg")
+
+            geometry = chrome_driver.execute_script(
+                "const filter=document.querySelector('.history-filter');"
+                "const summary=document.querySelector('.history-summary');"
+                "const chart=document.querySelector('.trend-chart-card');"
+                "const controls=['[data-testid=history-prev]','[data-testid=history-search]',"
+                "'[data-testid=history-station-select]','[data-testid=history-next]']"
+                ".map(s=>document.querySelector(s).getBoundingClientRect());"
+                "const rowTop=Math.min(...controls.map(r=>r.top));"
+                "const rowBottom=Math.max(...controls.map(r=>r.bottom));"
+                "const r=chart.getBoundingClientRect();"
+                "return {filter:filter.getBoundingClientRect(),summary:summary.getBoundingClientRect(),"
+                "chart:r,rowHeight:rowBottom-rowTop,controlTops:controls.map(x=>x.top),"
+                "viewport:innerHeight,documentOrder:filter.compareDocumentPosition(summary)&Node.DOCUMENT_POSITION_FOLLOWING};",
+            )
+            assert geometry["documentOrder"]
+            assert geometry["rowHeight"] <= 44, geometry
+            assert max(geometry["controlTops"]) - min(geometry["controlTops"]) <= 8, geometry
+            assert geometry["filter"]["top"] < geometry["summary"]["top"] < geometry["chart"]["top"]
+            assert geometry["chart"]["top"] < height
+            visible_chart = min(geometry["chart"]["bottom"], height) - max(geometry["chart"]["top"], 0)
+            assert visible_chart / geometry["chart"]["height"] >= 0.8, geometry
+            assert chrome_driver.find_elements(By.CSS_SELECTOR, ".history-selected-meta")
+            _assert_no_horizontal_overflow(chrome_driver)
+
+
 def test_mobile_alarm_and_user_dialogs_stay_inside_viewport(chrome_driver):
     from selenium.webdriver.common.by import By
 

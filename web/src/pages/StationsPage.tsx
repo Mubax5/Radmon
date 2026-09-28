@@ -83,6 +83,9 @@ export function StationsPage() {
   }, [overview, query, status]);
 
   const selectedStation = overview?.stations.find((station) => station.serid === selected) ?? null;
+  const openAlarm = user && user.role !== "Viewer"
+    ? (station: Station) => navigate("alarms", { serid: station.serid, event: station.active_event_id ?? undefined })
+    : undefined;
   const abnormal = overview ? overview.stations.filter((station) => station.status !== "normal").length : 0;
 
   if (!overview && !error) return <LoadingCard />;
@@ -129,10 +132,12 @@ export function StationsPage() {
                 stations={filtered}
                 onOpen={(station) => navigate("station", { serid: station.serid })}
                 onHistory={(station) => navigate("history", { station: station.serid })}
+                onAlarm={openAlarm}
               />
               <StationDetail
                 station={selectedStation}
                 onHistory={(station) => navigate("history", { station: station.serid })}
+                onAlarm={openAlarm}
               />
             </div>
           </PageSection>

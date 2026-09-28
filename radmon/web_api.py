@@ -125,11 +125,33 @@ def attach_web_api_routes(
     repository: Any,
     source_health: Any | None = None,
     event_broker: Any | None = None,
+    alarm_policy: Any | None = None,
 ) -> FastAPI:
     """Authenticated read models and lightweight browser refresh events."""
 
     viewer = require_role(security, Role.VIEWER)
     admin = require_role(security, Role.ADMINISTRATOR)
+
+    def with_policy_status(item: dict[str, Any]) -> dict[str, Any]:
+        """Expose the safe current policy projection to authenticated viewers."""
+        if alarm_policy is None:
+            return item
+        try:
+            policy = alarm_policy.get_policy(int(item["serid"]))
+        except Exception:
+            return item
+        return {
+            **item,
+            "policy_state": policy.get("policy_state"),
+            "underlying_dose_status": policy.get("underlying_dose_status"),
+            "active_event_id": policy.get("active_event_id"),
+            "active_event_lifecycle": policy.get("active_event_lifecycle"),
+            "last_event_id": policy.get("last_event_id"),
+            "last_event_status": policy.get("last_event_status"),
+            "last_event_resolved_at": policy.get("last_event_resolved_at"),
+            "policy_measured_value": policy.get("measured_value"),
+            "policy_threshold": policy.get("threshold"),
+        }
 
     @app.get("/api/v1/web/overview")
     def overview(identity: UserIdentity = Depends(viewer)):
@@ -165,7 +187,7 @@ def attach_web_api_routes(
         source_map = security.station_source_ids_map()
         for station, row in station_rows:
             source_ids = source_map.get(int(station["serid"]), ())
-            item = _station_response(station, row, ", ".join(source_ids) or None)
+            item = with_policy_status(_station_response(station, row, ", ".join(source_ids) or None))
             counts[item["status"]] += 1
             items.append(item)
         return {"counts": counts, "stations": items, "role": identity.role.value}
@@ -174,11 +196,11 @@ def attach_web_api_routes(
     def stations(identity: UserIdentity = Depends(viewer)):
         source_map = security.station_source_ids_map()
         return [
-            _station_response(
+            with_policy_status(_station_response(
                 station,
                 _fallback_last_measurement(repository, int(station["serid"])),
                 ", ".join(source_map.get(int(station["serid"]), ())) or None,
-            )
+            ))
             for station in repository.stations()
         ]
 
@@ -188,11 +210,11 @@ def attach_web_api_routes(
         if station is None:
             raise HTTPException(status_code=404, detail="station tidak ditemukan")
         source_ids = security.station_source_ids_map().get(int(serid), ())
-        return _station_response(
+        return with_policy_status(_station_response(
             station,
             _fallback_last_measurement(repository, int(serid)),
             ", ".join(source_ids) or None,
-        )
+        ))
 
     @app.get("/api/v1/web/stations/{serid}/history")
     def station_history(

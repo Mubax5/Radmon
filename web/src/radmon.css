@@ -244,6 +244,23 @@ body:has([role="dialog"]) .page-stack { visibility: visible; }
   .station-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 16px; align-items: start; }
 }
 
+.alarm-status { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 12px; font-weight: 700; }
+.alarm-status-alarm { color: #b42318; }
+.alarm-status-warning { color: #9a6700; }
+.alarm-status-historical { color: #667085; }
+.alarm-status-dot { display: inline-block; flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; background: #98a2b3; }
+.alarm-status-warning .alarm-status-dot { background: #e3a008; }
+.alarm-status-alarm .alarm-status-dot,
+.alarm-notification .alarm-status-dot { background: #d92d20; }
+.alarm-status-dot.is-blinking { animation: radmon-alarm-pulse 1s ease-in-out infinite; }
+@keyframes radmon-alarm-pulse { 50% { opacity: .25; box-shadow: 0 0 0 5px rgb(217 45 32 / 16%); } }
+.alarm-action-link { border: 0; padding: 2px 4px; color: #b42318; background: transparent; font: inherit; text-decoration: underline; cursor: pointer; }
+.alarm-notification-stack { position: fixed; z-index: var(--radmon-layer-toast); inset: 16px 16px auto auto; display: grid; gap: 8px; width: min(460px, calc(100% - 32px)); }
+.alarm-notification { display: flex; align-items: center; gap: 10px; padding: 14px 16px; color: #7a271a; background: #fff1f0; border: 1px solid #fecdca; border-left: 5px solid #d92d20; border-radius: 10px; box-shadow: 0 8px 28px rgb(16 24 40 / 18%); }
+.alarm-notification .alarm-action-link { margin-left: auto; white-space: nowrap; }
+.alarm-notification-dismiss { border: 0; color: inherit; background: transparent; cursor: pointer; }
+@media (max-width: 640px) { .alarm-notification-stack { inset: 10px 10px auto; width: auto; } .alarm-notification { flex-wrap: wrap; } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;

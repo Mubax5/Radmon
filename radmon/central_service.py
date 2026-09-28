@@ -358,6 +358,7 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         repository=repository,
         source_health=services.source_health,
         event_broker=web_events,
+        alarm_policy=services.alarm_policy,
     )
     attach_web_routes(app, settings=settings)
 

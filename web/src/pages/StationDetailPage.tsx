@@ -59,7 +59,11 @@ export function StationDetailPage() {
   return <div className="page-stack">
     <PageHeading title="Detail stasiun" description="Status terakhir dan konfigurasi yang dapat diedit tanpa mengubah measurement atau identitas detector." action={<Button variant="secondary" onClick={() => navigate("stations")}>Kembali</Button>} />
     {error ? <ErrorCard message={error} /> : null}
-    <StationDetail station={station} onHistory={(item) => navigate("history", { station: item.serid })} />
+    <StationDetail
+      station={station}
+      onHistory={(item) => navigate("history", { station: item.serid })}
+      onAlarm={user && user.role !== "Viewer" ? (item) => navigate("alarms", { serid: item.serid, event: item.active_event_id ?? undefined }) : undefined}
+    />
     {station && user && user.role !== "Viewer" && station.ownership === "central" ? <LayerCard className="action-card">
       <h2>Edit konfigurasi pusat</h2><p>Identitas detector dan measurement tidak dapat diubah. Stasiun sumber LAN bersifat hanya-baca di pusat.</p>
       <form className="action-form" onSubmit={save}>

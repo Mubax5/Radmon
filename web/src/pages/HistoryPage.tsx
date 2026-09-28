@@ -4,6 +4,9 @@ import { api, type Station } from "../api";
 import { TrendChart, type TrendPoint } from "../components/TrendChart";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
 import { useWebRefresh } from "../live";
+import { useSession } from "../auth";
+import { AlarmStatus } from "../components/AlarmStatus";
+import { navigate } from "../navigation";
 import {
   ErrorCard,
   LoadingCard,
@@ -35,6 +38,7 @@ const LIMIT_ITEMS: Record<string, string> = {
 };
 
 export function HistoryPage() {
+  const { user } = useSession();
   const [stations, setStations] = useState<Station[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [rows, setRows] = useState<HistoryRow[]>([]);
@@ -263,64 +267,55 @@ export function HistoryPage() {
   };
 
   return (
-    <div className="page-stack">
+    <div className="page-stack history-page">
       <PageHeading
         title="Riwayat"
         description="Measurement terbaru, tren, dan statistik rentang untuk stasiun yang dipilih."
         action={<span className={`refresh-indicator${refreshing ? " is-visible" : ""}`}>Memperbarui…</span>}
       />
       <LayerCard className="filter-card history-filter">
-        <div className="history-carousel" role="group" aria-label="Navigasi stasiun">
-          <Button
-            variant="secondary"
-            aria-label="Stasiun sebelumnya"
-            data-testid="history-prev"
-            onClick={goPrev}
-            disabled={!canNavigate}
-            title="Stasiun sebelumnya (←)"
-          >
-            ‹
-          </Button>
-          <div className="history-station-selector">
-            <Input
-              label="Cari stasiun"
-              placeholder="Cari nama atau SERID…"
-              value={query}
-              onChange={handleSearchChange}
-              data-testid="history-search"
-              aria-label="Cari stasiun"
-            />
-            <Select
-              label="Stasiun"
-              placeholder="Pilih stasiun…"
-              items={stationItems}
-              value={selected == null ? undefined : String(selected)}
-              onValueChange={changeStation}
-              disabled={stations.length === 0}
-              data-testid="history-station-select"
-            />
-            {selectedStation ? (
-              <div className="history-selected-meta cell-subtle" aria-live="polite">
-                <span>SERID {selectedStation.serid} · {selectedStation.location}</span>
-                {selectedStation.status === "offline" ? <span>Offline — last-known {freshnessLabel(selectedStation.dtom)} · {formatTimestamp(selectedStation.dtom)}</span> : <span>{freshnessLabel(selectedStation.dtom)} · {selectedStation.doserate != null ? `${selectedStation.doserate.toFixed(3)} ${selectedStation.unit}` : "—"}</span>}
-              </div>
-            ) : null}
-            {filteredStations.length !== stations.length ? (
-              <div className="cell-subtle" aria-live="polite">{filteredStations.length} dari {stations.length} stasiun cocok</div>
-            ) : null}
+        <div className="history-toolbar">
+          <div className="history-carousel" role="group" aria-label="Navigasi stasiun">
+            <Button
+              variant="secondary"
+              aria-label="Stasiun sebelumnya"
+              data-testid="history-prev"
+              onClick={goPrev}
+              disabled={!canNavigate}
+              title="Stasiun sebelumnya (←)"
+            >
+              ‹
+            </Button>
+            <div className="history-station-selector">
+              <Input
+                label="Cari stasiun"
+                placeholder="Cari nama atau SERID…"
+                value={query}
+                onChange={handleSearchChange}
+                data-testid="history-search"
+                aria-label="Cari stasiun"
+              />
+              <Select
+                label="Stasiun"
+                placeholder="Pilih stasiun…"
+                items={stationItems}
+                value={selected == null ? undefined : String(selected)}
+                onValueChange={changeStation}
+                disabled={stations.length === 0}
+                data-testid="history-station-select"
+              />
+            </div>
+            <Button
+              variant="secondary"
+              aria-label="Stasiun berikutnya"
+              data-testid="history-next"
+              onClick={goNext}
+              disabled={!canNavigate}
+              title="Stasiun berikutnya (→)"
+            >
+              ›
+            </Button>
           </div>
-          <Button
-            variant="secondary"
-            aria-label="Stasiun berikutnya"
-            data-testid="history-next"
-            onClick={goNext}
-            disabled={!canNavigate}
-            title="Stasiun berikutnya (→)"
-          >
-            ›
-          </Button>
-        </div>
-        <div className="history-range">
           <Select
             label="Rentang"
             items={LIMIT_ITEMS}
@@ -328,6 +323,21 @@ export function HistoryPage() {
             onValueChange={handleLimitChange}
             data-testid="history-range-select"
           />
+        </div>
+        <div className="history-toolbar-meta">
+          {selectedStation ? (
+            <div className="history-selected-meta cell-subtle" aria-live="polite">
+              <span>SERID {selectedStation.serid} · {selectedStation.location}</span>
+              {selectedStation.status === "offline" ? <span>Offline — last-known {freshnessLabel(selectedStation.dtom)} · {formatTimestamp(selectedStation.dtom)}</span> : <span>{freshnessLabel(selectedStation.dtom)} · {selectedStation.doserate != null ? `${selectedStation.doserate.toFixed(3)} ${selectedStation.unit}` : "—"}</span>}
+              <AlarmStatus
+                station={selectedStation}
+                onAction={user && user.role !== "Viewer" ? (station) => navigate("alarms", { serid: station.serid, event: station.active_event_id ?? undefined }) : undefined}
+              />
+            </div>
+          ) : null}
+          {filteredStations.length !== stations.length ? (
+            <div className="cell-subtle" aria-live="polite">{filteredStations.length} dari {stations.length} stasiun cocok</div>
+          ) : null}
           <div className="history-carousel-hint cell-subtle" aria-live="polite">
             {canNavigate ? `Stasiun ${selectedIndex + 1} dari ${stations.length} — pakai ← → atau tombol untuk pindah` : null}
           </div>

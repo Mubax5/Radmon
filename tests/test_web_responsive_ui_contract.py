@@ -100,6 +100,21 @@ def test_pages_have_relevant_compact_sections():
     assert "source-health" in read("pages/SystemPage.tsx")
 
 
+def test_history_keeps_station_toolbar_before_summary_and_chart_with_compact_rules():
+    history = read("pages/HistoryPage.tsx")
+    css = read("ui-polish.css")
+    assert 'className="page-stack history-page"' in history
+    assert history.index('className="filter-card history-filter"') < history.index('className="metric-grid history-summary"')
+    assert history.index('className="metric-grid history-summary"') < history.index('className="action-card trend-chart-card"')
+    carousel = history[history.index('className="history-carousel"'):history.index('className="history-toolbar-meta"')]
+    for control in ('data-testid="history-prev"', 'data-testid="history-search"', 'data-testid="history-station-select"', 'data-testid="history-next"'):
+        assert control in carousel
+    assert 'data-testid="history-range-select"' in carousel
+    assert 'Offline — last-known' in history
+    assert '.history-carousel {' in css and 'grid-template-columns: 32px minmax(0, 1fr) 32px' in css
+    assert '.history-page .trend-chart svg {' in css and 'min-height: 0' in css
+
+
 def test_dialogs_and_mobile_navigation_reserve_viewport_space():
     css = read("radmon.css") + "\n" + read("ui-polish.css")
     assert "calc(84px + env(safe-area-inset-bottom))" in css

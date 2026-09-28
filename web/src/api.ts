@@ -24,6 +24,15 @@ export type Station = {
   offline_description?: string | null;
   source_id?: string | null;
   ownership?: "source" | "central";
+  policy_state?: string | null;
+  underlying_dose_status?: string | null;
+  active_event_id?: string | null;
+  active_event_lifecycle?: string | null;
+  last_event_id?: string | null;
+  last_event_status?: string | null;
+  last_event_resolved_at?: string | null;
+  policy_measured_value?: number | null;
+  policy_threshold?: number | null;
 };
 
 export type WebEvent = {

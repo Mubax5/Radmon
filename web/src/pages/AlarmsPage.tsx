@@ -101,6 +101,7 @@ function EventTable({ events }: { events: PolicyEvent[] }) {
 }
 
 export function AlarmsPage() {
+  const requestedEventId = new URLSearchParams(window.location.search).get("event");
   const [items, setItems] = useState<PolicyEvent[] | null>(null);
   const [suppressions, setSuppressions] = useState<Suppression[]>([]);
   const [error, setError] = useState("");
@@ -189,7 +190,7 @@ export function AlarmsPage() {
                 <Button variant="secondary" onClick={() => void loadSuppressions()}>Muat ulang suppression</Button>
               </div>
             ) : null}
-            <AlarmOperations events={items} suppressions={suppressions} onChanged={() => void load()} />
+            <AlarmOperations events={items} suppressions={suppressions} onChanged={() => void load()} initialEventId={requestedEventId} />
           </PageSection>
 
           <PageSection title="Riwayat event" description="Event alarm-policy yang tersimpan di central, dengan urutan terbaru sesuai backend.">

@@ -1,0 +1,66 @@
+import { useEffect, useState } from "react";
+import type { Station } from "../api";
+
+export type AlarmPresentation = "alarm" | "warning" | "historical" | null;
+
+const notifiedAlarmEvents = new Set<string>();
+
+export function alarmPresentation(station: Station): AlarmPresentation {
+  if (
+    station.status === "alarm" && station.policy_state === "ALARM" &&
+    station.underlying_dose_status === "ALARM" && station.active_event_id &&
+    station.active_event_lifecycle === "ACTIVE"
+  ) return "alarm";
+  if (station.status === "warning" || (
+    station.status === "alarm" && station.policy_state !== "ALARM" &&
+    (station.policy_state === "SUPPRESSED" || station.policy_state === "RETRIGGER_LOCKED")
+  )) return "warning";
+  if (station.status === "offline" && (station.active_event_id || station.last_event_id)) return "historical";
+  return null;
+}
+
+export function AlarmStatus({ station, onAction }: { station: Station; onAction?: (station: Station) => void }) {
+  const presentation = alarmPresentation(station);
+  if (!presentation) return null;
+  const isCurrentAlarm = presentation === "alarm";
+  const label = presentation === "alarm"
+    ? "ALARM aktif — perlu tindakan"
+    : presentation === "warning"
+      ? station.status === "alarm" ? `Threshold alarm — policy ${station.policy_state === "SUPPRESSED" ? "tersupresi" : "terkunci"}` : "Peringatan threshold"
+      : "Event alarm terakhir — data offline, tidak sedang berbunyi";
+  return (
+    <span className={`alarm-status alarm-status-${presentation}`}>
+      <span className={`alarm-status-dot${isCurrentAlarm ? " is-blinking" : ""}`} aria-hidden="true" />
+      <span>{label}</span>
+      {isCurrentAlarm && onAction ? (
+        <button type="button" className="alarm-action-link" onClick={() => onAction(station)}>
+          Tindak lanjuti alarm
+        </button>
+      ) : null}
+    </span>
+  );
+}
+
+export function AlarmNotification({ station, onAction }: { station: Station; onAction?: (station: Station) => void }) {
+  if (alarmPresentation(station) !== "alarm") return null;
+  return <DeduplicatedAlarmNotification station={station} onAction={onAction} />;
+}
+
+function DeduplicatedAlarmNotification({ station, onAction }: { station: Station; onAction?: (station: Station) => void }) {
+  const [visible, setVisible] = useState(false);
+  const eventId = station.active_event_id!;
+  useEffect(() => {
+    if (notifiedAlarmEvents.has(eventId)) return;
+    notifiedAlarmEvents.add(eventId);
+    setVisible(true);
+  }, [eventId]);
+  if (!visible) return null;
+  return (
+    <div className="alarm-notification" role="alert" aria-live="assertive" aria-atomic="true">
+      <span className="alarm-status-dot is-blinking" aria-hidden="true" />
+      <span><strong>Alarm threshold aktif:</strong> {station.name} ({station.doserate} {station.unit})</span>
+      {onAction ? <button type="button" className="alarm-action-link" onClick={() => onAction(station)}>Buka tindakan alarm</button> : null}
+      <button type="button" className="alarm-notification-dismiss" onClick={() => setVisible(false)} aria-label="Tutup notifikasi alarm">Tutup</button>
+    </div>
+  );
+}

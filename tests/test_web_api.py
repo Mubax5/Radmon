@@ -32,7 +32,7 @@ class FakeSourceHealth:
         return [{"source_id": "gd50", "state": "CONNECTED"}]
 
 
-def make_client(tmp_path, role: Role, *, source_owned_serid: int | None = None):
+def make_client(tmp_path, role: Role, *, source_owned_serid: int | None = None, alarm_policy=None):
     security = SecurityStore(tmp_path / f"{role.value}.db")
     username = role.value.lower()
     security.create_user(username, role.value, role, "Password123!", "2468")
@@ -40,7 +40,7 @@ def make_client(tmp_path, role: Role, *, source_owned_serid: int | None = None):
         security.resolve_station("gd52", source_owned_serid)
     token = security.create_session(username, 3600)
     app = FastAPI()
-    attach_web_api_routes(app, security=security, repository=FakeRepository(), source_health=FakeSourceHealth())
+    attach_web_api_routes(app, security=security, repository=FakeRepository(), source_health=FakeSourceHealth(), alarm_policy=alarm_policy)
     client = TestClient(app)
     client.cookies.set(SESSION_COOKIE, token)
     return client
@@ -109,3 +109,29 @@ def test_system_diagnostics_are_administrator_only(tmp_path):
     assert response.status_code == 200
     assert response.json()["sources"] == [{"source_id": "gd50", "state": "CONNECTED"}]
     assert response.json()["grafana_admin_url"] == "http://localhost:3300"
+
+
+def test_viewer_station_read_model_includes_read_only_active_policy_projection(tmp_path):
+    class Policy:
+        def get_policy(self, serid):
+            return {
+                "policy_state": "ALARM" if serid == 5202 else "NORMAL",
+                "underlying_dose_status": "ALARM" if serid == 5202 else "NORMAL",
+                "active_event_id": "alarm-event-5202" if serid == 5202 else None,
+                "active_event_lifecycle": "ACTIVE" if serid == 5202 else None,
+                "last_event_id": "historical-event-5203" if serid == 5203 else None,
+                "last_event_status": "RESOLVED" if serid == 5203 else None,
+                "last_event_resolved_at": "2026-09-13T04:01:00Z" if serid == 5203 else None,
+                "measured_value": 26.0 if serid == 5202 else None,
+                "threshold": 25.0 if serid == 5202 else None,
+            }
+
+    viewer = make_client(tmp_path, Role.VIEWER, alarm_policy=Policy())
+    items = {item["serid"]: item for item in viewer.get("/api/v1/web/overview").json()["stations"]}
+    assert items[5202]["status"] == "alarm"
+    assert items[5202]["policy_state"] == "ALARM"
+    assert items[5202]["active_event_id"] == "alarm-event-5202"
+    assert items[5203]["status"] == "offline"
+    assert items[5203]["last_event_status"] == "RESOLVED"
+    assert items[5203]["active_event_id"] is None
+    assert viewer.get("/api/v1/web/stations/5202").json()["active_event_lifecycle"] == "ACTIVE"

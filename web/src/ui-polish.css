@@ -260,6 +260,164 @@
   min-height: 44px;
 }
 
+/* History keeps station selection, summary, and trend together in the first viewport. */
+.history-page {
+  gap: 9px;
+}
+
+.history-page .page-heading {
+  gap: 4px;
+  margin-bottom: 0;
+}
+
+.history-page .page-heading h1 {
+  margin-bottom: 2px;
+}
+
+.history-page .page-heading p {
+  line-height: 1.35;
+}
+
+.history-filter {
+  padding: 8px 10px;
+}
+
+.history-filter > .history-toolbar,
+.history-filter > .history-toolbar-meta {
+  width: 100%;
+}
+
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.history-carousel {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.history-carousel > button {
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  font-size: 20px;
+}
+
+.history-station-selector {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.history-station-selector .native-input-field,
+.history-station-selector .native-select-field {
+  min-width: 0;
+  gap: 0;
+}
+
+.history-station-selector .native-input-field > span,
+.history-station-selector .native-select-field > span,
+.history-toolbar > .native-select-field > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.history-station-selector input,
+.history-station-selector [role="combobox"],
+.history-toolbar > .native-select-field [role="combobox"] {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  min-height: 36px;
+  padding-block: 6px;
+  font-size: 12px;
+}
+
+.history-toolbar > .native-select-field {
+  flex: 0 0 148px;
+}
+
+.history-toolbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding-left: 48px;
+}
+
+.history-selected-meta {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+}
+
+.history-selected-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-carousel-hint {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.history-summary .metric-card {
+  padding: 9px 12px;
+  gap: 3px;
+}
+
+.history-summary .metric-value {
+  font-size: clamp(18px, 2vw, 24px);
+  line-height: 1.2;
+}
+
+.history-page .page-section {
+  gap: 6px;
+}
+
+.history-page .page-section-title h2 {
+  margin-bottom: 0;
+  font-size: 14px;
+}
+
+.history-page .page-section-title p {
+  font-size: 11px;
+}
+
+.history-page .trend-chart-card {
+  padding: 6px 8px 4px;
+}
+
+.history-page .trend-chart svg {
+  min-height: 0;
+}
+
+.history-page .trend-chart-empty {
+  min-height: 150px;
+}
+
+.history-page .trend-chart-hint {
+  margin-top: 2px;
+  font-size: 10px;
+}
+
 .mobile-sheet-handle {
   display: none;
 }
@@ -467,6 +625,90 @@
 }
 
 @media (max-width: 767px) {
+  .history-toolbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .history-toolbar > .native-select-field {
+    justify-self: end;
+    width: 112px;
+    flex-basis: auto;
+  }
+
+  .history-carousel {
+    grid-template-columns: 32px minmax(0, 1fr) 32px;
+    gap: 4px;
+  }
+
+  .history-carousel > button {
+    width: 32px;
+    min-width: 32px;
+    height: 34px;
+    min-height: 34px;
+  }
+
+  .history-station-selector {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
+    gap: 4px;
+  }
+
+  .history-station-selector input,
+  .history-station-selector [role="combobox"],
+  .history-toolbar > .native-select-field [role="combobox"] {
+    height: 34px;
+    min-height: 34px;
+    padding-inline: 7px;
+    font-size: 11px;
+  }
+
+  .history-toolbar-meta {
+    display: block;
+    padding-left: 40px;
+  }
+
+  .history-selected-meta {
+    display: block;
+  }
+
+  .history-selected-meta > span + span {
+    margin-left: 8px;
+  }
+
+  .history-carousel-hint {
+    display: none;
+  }
+
+  .history-page {
+    gap: 8px;
+  }
+
+  .history-page .page-heading p {
+    font-size: 12px;
+  }
+
+  .history-summary {
+    gap: 6px;
+  }
+
+  .history-summary .metric-card {
+    padding: 7px 9px;
+  }
+
+  .history-summary .metric-label {
+    font-size: 9px;
+  }
+
+  .history-summary .metric-value {
+    font-size: clamp(15px, 5vw, 19px);
+  }
+
+  .history-page .trend-chart-hint {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
   body [role="dialog"]:has(.mobile-sheet-content),
   body [role="dialog"].mobile-sheet-dialog,
   body .mobile-sheet-dialog {

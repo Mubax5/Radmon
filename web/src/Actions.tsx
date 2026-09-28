@@ -92,7 +92,7 @@ function NativeSelect({
   );
 }
 
-export function AlarmOperations({ events, suppressions, onChanged }: { events: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void }) {
+export function AlarmOperations({ events, suppressions, onChanged, initialEventId }: { events: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void; initialEventId?: string | null }) {
   const active = useMemo(
     () => events.filter((event) => String(event.kind).toUpperCase() === "ALARM" && String(event.status).toUpperCase() === "ACTIVE"),
     [events],
@@ -118,6 +118,12 @@ export function AlarmOperations({ events, suppressions, onChanged }: { events: A
   const [cancelPin, setCancelPin] = useState("");
   const [pending, setPending] = useState<"respond" | "suppress" | "cancel" | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!initialEventId || !active.some((item) => item.event_id === initialEventId)) return;
+    setEventId(initialEventId);
+    setRespondOpen(true);
+  }, [active, initialEventId]);
 
   // Keep the native control bound even when a live refresh changes the active list.
   useEffect(() => {

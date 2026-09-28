@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { Badge, LayerCard } from "@cloudflare/kumo";
 import { api, type Station } from "../api";
+import { useSession } from "../auth";
+import { AlarmNotification } from "../components/AlarmStatus";
 import { useWebRefresh } from "../live";
 import { navigate } from "../navigation";
 import {
@@ -22,6 +24,7 @@ type Overview = {
 const SEVERITY: Record<string, number> = { alarm: 0, warning: 1, offline: 2, normal: 3 };
 
 export function OverviewPage() {
+  const { user } = useSession();
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState("");
   const load = () => api<Overview>("/api/v1/web/overview")
@@ -51,6 +54,9 @@ export function OverviewPage() {
     ["Alarm", data.counts.alarm || 0, "error"],
     ["Offline", data.counts.offline || 0, "secondary"],
   ] as const : [];
+  const openAlarm = user && user.role !== "Viewer"
+    ? (station: Station) => navigate("alarms", { serid: station.serid, event: station.active_event_id ?? undefined })
+    : undefined;
 
   return (
     <div className="page-stack">
@@ -61,6 +67,10 @@ export function OverviewPage() {
       {error ? <ErrorCard message={error} /> : null}
       {data ? (
         <>
+          <div className="alarm-notification-stack" aria-live="off">
+            {data.stations.filter((station) => station.status === "alarm" && station.policy_state === "ALARM" && station.active_event_id)
+              .map((station) => <AlarmNotification key={station.active_event_id} station={station} onAction={openAlarm} />)}
+          </div>
           <div className="metric-grid">
             {cards.map(([label, value, variant]) => (
               <MetricCard key={label} label={label} value={value} badge={<Badge variant={variant}>{label}</Badge>} />
@@ -76,6 +86,7 @@ export function OverviewPage() {
               <ResponsiveStationView
                 stations={derived.attention}
                 onHistory={(station) => navigate("history", { station: station.serid })}
+                onAlarm={openAlarm}
               />
             ) : (
               <LayerCard className="empty-card">Tidak ada stasiun yang saat ini memerlukan perhatian operator.</LayerCard>
@@ -101,6 +112,7 @@ export function OverviewPage() {
             <ResponsiveStationView
               stations={data.stations}
               onHistory={(station) => navigate("history", { station: station.serid })}
+              onAlarm={openAlarm}
             />
           </PageSection>
         </>
