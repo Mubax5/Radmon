@@ -407,9 +407,13 @@ def test_history_station_toolbar_order_and_compact_viewport_layout(chrome_driver
                 "const filter=document.querySelector('.history-filter');"
                 "const summary=document.querySelector('.history-summary');"
                 "const chart=document.querySelector('.trend-chart-card');"
-                "const controls=['[data-testid=history-prev]','[data-testid=history-search]',"
-                "'[data-testid=history-station-select]','[data-testid=history-next]']"
-                ".map(s=>document.querySelector(s).getBoundingClientRect());"
+                "const carousel=document.querySelector('.history-carousel');"
+                "const selector=document.querySelector('.history-station-selector');"
+                "const controls=[...carousel.querySelectorAll(':scope > button'),"
+                "selector.querySelector('input[aria-label=\"Cari stasiun\"]'),"
+                "selector.querySelector('[role=combobox]')]"
+                ".map(node=>node?.getBoundingClientRect());"
+                "if (controls.length!==4 || controls.some(r=>!r)) return {missingControls:true};"
                 "const rowTop=Math.min(...controls.map(r=>r.top));"
                 "const rowBottom=Math.max(...controls.map(r=>r.bottom));"
                 "const r=chart.getBoundingClientRect();"
@@ -417,6 +421,7 @@ def test_history_station_toolbar_order_and_compact_viewport_layout(chrome_driver
                 "chart:r,rowHeight:rowBottom-rowTop,controlTops:controls.map(x=>x.top),"
                 "viewport:innerHeight,documentOrder:filter.compareDocumentPosition(summary)&Node.DOCUMENT_POSITION_FOLLOWING};",
             )
+            assert not geometry.get("missingControls"), geometry
             assert geometry["documentOrder"]
             assert geometry["rowHeight"] <= 44, geometry
             assert max(geometry["controlTops"]) - min(geometry["controlTops"]) <= 8, geometry
