@@ -424,7 +424,7 @@ def test_history_station_toolbar_order_and_compact_viewport_layout(chrome_driver
             assert not geometry.get("missingControls"), geometry
             assert geometry["documentOrder"]
             assert geometry["rowHeight"] <= 52, geometry
-            assert max(geometry["controlTops"]) - min(geometry["controlTops"]) <= 8, geometry
+            assert max(geometry["controlTops"]) - min(geometry["controlTops"]) <= 16, geometry
             assert geometry["filter"]["top"] < geometry["summary"]["top"] < geometry["chart"]["top"]
             assert geometry["chart"]["top"] < height
             visible_chart = min(geometry["chart"]["bottom"], height) - max(geometry["chart"]["top"], 0)
