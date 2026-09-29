@@ -177,11 +177,13 @@ VALUES (?, ?, ?, ?, ?, ?)
         ):
             return 0
         cursor.execute(
-            f"""DELETE r FROM recent r
-LEFT JOIN (
-  SELECT serid, MAX(dtom) AS mdtom FROM recent GROUP BY serid
-) m ON m.serid = r.serid AND m.mdtom = r.dtom
-WHERE r.dtom < {self._cutoff_sql} AND m.mdtom IS NULL"""
+            f"""DELETE FROM recent
+WHERE dtom < {self._cutoff_sql}
+  AND EXISTS (
+    SELECT 1 FROM recent newer
+    WHERE newer.serid <=> recent.serid
+      AND newer.dtom > recent.dtom
+  )"""
         )
         deleted = int(getattr(cursor, "rowcount", 0) or 0)
         self._last_cleanup = now
@@ -276,10 +278,12 @@ WHERE dtom >= {self._cutoff_sql}
         # retention; only non-last expired rows indicate a retention leak.
         cursor.execute(
             f"""SELECT COUNT(*) FROM recent r
-LEFT JOIN (
-  SELECT serid, MAX(dtom) AS mdtom FROM recent GROUP BY serid
-) m ON m.serid = r.serid AND m.mdtom = r.dtom
-WHERE r.dtom < {self._cutoff_sql} AND m.mdtom IS NULL"""
+WHERE r.dtom < {self._cutoff_sql}
+  AND EXISTS (
+    SELECT 1 FROM recent newer
+    WHERE newer.serid <=> r.serid
+      AND newer.dtom > r.dtom
+  )"""
         )
         row = cursor.fetchone()
         expired = int(self._row_value(row, "COUNT(*)", 0) or 0)

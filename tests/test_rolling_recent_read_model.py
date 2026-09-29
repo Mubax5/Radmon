@@ -72,12 +72,67 @@ def test_cleanup_deletes_only_expired_recent_rows():
     assert "delete" in sql and "from recent" in sql
     assert "interval 3 hour" in sql
     # Offline last-known per detector must survive retention cleanup.
-    assert "max(dtom)" in sql
+    assert "newer.dtom > recent.dtom" in sql
+    assert "newer.serid <=> recent.serid" in sql
     for protected in ("measurement", "alarm", "rawdata"):
         assert f"delete from {protected}" not in sql
         assert f"truncate table {protected}" not in sql
         assert f"drop table {protected}" not in sql
     assert connection.commits == 1
+
+
+def test_rolling_validator_allows_old_latest_and_current_rows_but_rejects_old_nonlatest():
+    from radmon.recent_read_model import ROLLING_COLUMNS, RollingRecentManager
+
+    class _ValidationCursor(_RecordingCursor):
+        def __init__(self, expired_nonlatest):
+            super().__init__()
+            self.expired_nonlatest = expired_nonlatest
+
+        def fetchall(self):
+            if "information_schema.columns" in self.calls[-1][0].lower():
+                return [(column,) for column in sorted(ROLLING_COLUMNS)]
+            return []
+
+        def fetchone(self):
+            return (self.expired_nonlatest,)
+
+    # One old row with no newer sample is the intentional last-known reading;
+    # a current sample is also valid. An expired row superseded by a later row
+    # is the only retention violation.
+    cases = (
+        ("old latest row", 0, False),
+        ("old non-latest row", 1, True),
+        ("current row", 0, False),
+    )
+    for _, expired_nonlatest, should_raise in cases:
+        cursor = _ValidationCursor(expired_nonlatest)
+        manager = RollingRecentManager(Settings())
+        if should_raise:
+            import pytest
+
+            with pytest.raises(RuntimeError, match="recent masih memiliki 1 row"):
+                manager._validate_rolling(cursor)
+        else:
+            manager._validate_rolling(cursor)
+        sql = cursor.calls[-1][0].lower()
+        assert "r.dtom <" in sql
+        assert "newer.dtom > r.dtom" in sql
+        assert "newer.serid <=> r.serid" in sql
+
+
+def test_cleanup_is_targeted_to_expired_superseded_recent_rows():
+    from radmon.recent_read_model import RollingRecentManager
+
+    cursor = _RecordingCursor()
+    RollingRecentManager(Settings()).cleanup_with_cursor(cursor, force=True)
+    sql = cursor.calls[-1][0].lower()
+    assert sql.startswith("delete from recent")
+    assert "dtom <" in sql
+    assert "exists ( select 1 from recent newer" in sql
+    assert "newer.dtom > recent.dtom" in sql
+    assert "newer.serid <=> recent.serid" in sql
+    assert all(table not in sql for table in ("measurement", "alarm", "rawdata"))
 
 
 def test_mirror_sample_uses_only_rolling_sample_fields():
