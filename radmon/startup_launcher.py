@@ -146,12 +146,37 @@ class RadMonLauncher:
             command = [sys.executable, "--server"]
         else:
             command = [sys.executable, "-m", "radmon", "--server"]
-        kwargs: dict = {"cwd": str(self.paths.install_root), "stdin": subprocess.DEVNULL,
-                        "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
-                        "close_fds": True}
+        return self._spawn_managed_process(command, self.paths)
+
+    @staticmethod
+    def _spawn_managed_process(command: list[str], paths: ApplicationPaths) -> subprocess.Popen:
+        """Start a managed child independently, retaining its output in runtime logs."""
+        paths.log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = paths.log_dir / "managed-server.stdout.log"
+        stderr_path = paths.log_dir / "managed-server.stderr.log"
+        stdout_log = stdout_path.open("ab")
+        stderr_log = stderr_path.open("ab")
+        kwargs: dict = {
+            "cwd": str(paths.install_root),
+            "stdin": subprocess.DEVNULL,
+            "stdout": stdout_log,
+            "stderr": stderr_log,
+            "close_fds": True,
+        }
         if os.name == "nt":
-            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "DETACHED_PROCESS", 0)
-        return subprocess.Popen(command, **kwargs)
+            kwargs["creationflags"] = (
+                getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+            )
+        else:
+            kwargs["start_new_session"] = True
+        try:
+            return subprocess.Popen(command, **kwargs)
+        except Exception:
+            stdout_log.close()
+            stderr_log.close()
+            raise
 
     def _ensure_grafana(self) -> object:
         return PersistentGrafanaBootstrap(self.settings, project_root=self.paths.app_dir).ensure()

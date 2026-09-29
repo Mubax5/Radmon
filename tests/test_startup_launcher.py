@@ -1,4 +1,7 @@
 from pathlib import Path
+import subprocess
+import sys
+import time
 
 from radmon.config import Settings
 from radmon.paths import ApplicationPaths
@@ -145,6 +148,46 @@ def test_start_timeout_is_reported_without_repeated_launches(tmp_path):
     states = launcher.start()
     assert status(states, "Central/API") == "timeout"
     assert calls["task"] == 1 and calls["process"] == 1
+
+
+def test_launcher_returns_without_terminating_detached_managed_child(tmp_path):
+    paths = make_paths(tmp_path)
+    child = None
+    script = (
+        "import sys, time; "
+        "print('managed-child-ready', flush=True); "
+        "print('managed-child-stderr', file=sys.stderr, flush=True); "
+        "time.sleep(30)"
+    )
+
+    def start_child():
+        nonlocal child
+        child = RadMonLauncher._spawn_managed_process([sys.executable, "-c", script], paths)
+        return child
+
+    launcher, _state, _calls = make_launcher(tmp_path, timeout=0)
+    launcher.start_process = start_child
+    try:
+        states = launcher.start()
+        assert status(states, "Central/API") == "timeout"
+        assert child is not None
+        deadline = time.monotonic() + 5
+        stdout_log = paths.log_dir / "managed-server.stdout.log"
+        stderr_log = paths.log_dir / "managed-server.stderr.log"
+        while time.monotonic() < deadline and not stdout_log.exists():
+            time.sleep(0.02)
+        while time.monotonic() < deadline:
+            if stdout_log.exists() and b"managed-child-ready" in stdout_log.read_bytes():
+                break
+            time.sleep(0.02)
+
+        assert child.poll() is None
+        assert b"managed-child-ready" in stdout_log.read_bytes()
+        assert b"managed-child-stderr" in stderr_log.read_bytes()
+    finally:
+        if child is not None and child.poll() is None:
+            child.terminate()
+            child.wait(timeout=5)
 
 
 def test_new_server_owns_grafana_start_and_launcher_does_not_race_it(tmp_path):
