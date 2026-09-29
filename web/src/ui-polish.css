@@ -24,6 +24,32 @@
   transform: none !important;
 }
 
+/* Kumo's sidebar is a full-height flex column: content owns the scroll viewport
+   and Footer is a shrink-0 sibling below it. Give h-full a definite viewport
+   height so the footer cannot drift below the fold on long pages. */
+@media (min-width: 768px) {
+  .desktop-shell > .content-shell {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .desktop-shell > [data-sidebar="sidebar"],
+  .desktop-shell [data-sidebar="content-container"] {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .desktop-shell [data-sidebar="content"] {
+    min-height: 0;
+  }
+
+  .desktop-shell [data-sidebar="footer"] {
+    position: relative;
+    flex: 0 0 auto;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
 .desktop-shell [data-sidebar="menu-button"] > div {
   transform: none !important;
 }
@@ -262,7 +288,14 @@
 
 /* History keeps station selection, summary, and trend together in the first viewport. */
 .history-page {
-  gap: 9px;
+  gap: 8px;
+}
+
+@media (min-width: 768px) {
+  .history-page {
+    min-height: calc(100dvh - 88px);
+    grid-template-rows: auto auto auto minmax(300px, 1fr) auto;
+  }
 }
 
 .history-page .page-heading {
@@ -355,9 +388,11 @@
 .history-toolbar-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  flex: 0 1 260px;
+  max-width: 260px;
   min-width: 0;
-  padding-left: 48px;
+  padding-left: 0;
 }
 
 .history-selected-meta {
@@ -368,14 +403,20 @@
 }
 
 .history-selected-meta > span {
+  min-width: 0;
+  flex: 1 1 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.history-carousel-hint {
-  margin: 0;
+.history-selected-meta .alarm-status {
+  flex: 0 0 auto;
   white-space: nowrap;
+}
+
+.history-carousel-hint {
+  display: none;
 }
 
 .history-summary .metric-card {
@@ -405,7 +446,37 @@
   padding: 6px 8px 4px;
 }
 
+.history-page > .page-section:has(.trend-chart-card) {
+  display: flex;
+  flex-direction: column;
+  min-height: 300px;
+  min-width: 0;
+}
+
+.history-page .trend-chart-card,
+.history-page .trend-chart-wrap,
+.history-page .trend-chart,
+.history-page .trend-chart-plot {
+  min-height: 0;
+}
+
+.history-page .trend-chart-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.history-page .trend-chart-wrap,
+.history-page .trend-chart,
+.history-page .trend-chart-plot {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
 .history-page .trend-chart svg {
+  flex: 1 1 auto;
+  height: 100%;
   min-height: 0;
 }
 
@@ -665,7 +736,8 @@
 
   .history-toolbar-meta {
     display: block;
-    padding-left: 40px;
+    max-width: none;
+    padding-left: 36px;
   }
 
   .history-selected-meta {
@@ -682,6 +754,16 @@
 
   .history-page {
     gap: 8px;
+  }
+
+  .history-page > .page-section:has(.trend-chart-card) {
+    min-height: 0;
+  }
+
+  .history-page .trend-chart svg {
+    height: auto;
+    min-height: 246px;
+    flex: 0 0 auto;
   }
 
   .history-page .page-heading p {

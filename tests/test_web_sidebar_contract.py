@@ -51,6 +51,28 @@ def test_sidebar_collapsed_rail_hides_wide_content_without_removing_trigger():
     assert 'aria-label="Keluar"' in desktop
 
 
+def test_sidebar_footer_is_pinned_below_kumo_scroll_viewport_at_viewport_height():
+    desktop = read("layout/DesktopShell.tsx")
+    shell_css = read("radmon.css")
+    polish_css = read("ui-polish.css")
+    assert "height: 100dvh" in shell_css and "overflow: hidden" in shell_css
+    assert "<Sidebar.Content>" in desktop and "<Sidebar.Footer>" in desktop
+    assert desktop.index("<Sidebar.Content>") < desktop.index("<Sidebar.Footer>")
+    assert '[data-sidebar="content"]' in polish_css and "min-height: 0" in polish_css
+    assert '[data-sidebar="footer"]' in polish_css
+    footer_rules = polish_css.split('[data-sidebar="footer"]', 1)[1].split("}", 1)[0]
+    assert "flex: 0 0 auto" in footer_rules
+    assert "safe-area-inset-bottom" in footer_rules
+    # Kumo 2.13.2 renders Footer as a sibling after its flex:1 peek zone, while
+    # Content contains the independently scrolling ScrollArea viewport.
+    kumo = (ROOT / "web/node_modules/@cloudflare/kumo/dist/chunks/sidebar-icky50wdc2b1biw8.js").read_text(encoding="utf-8")
+    assert '"data-sidebar": "content-container"' in kumo
+    assert '"data-sidebar": "peek-zone"' in kumo
+    assert '"data-sidebar": "viewport"' in kumo
+    assert '"data-sidebar": "footer"' in kumo
+    assert '"flex min-h-0 flex-1 flex-col"' in kumo
+
+
 def test_alarm_routes_require_operator_and_admin_routes_require_administrator():
     navigation = read("navigation.ts")
     assert '{ id: "alarms", label: "Alarm", minimum: "Operator" }' in navigation

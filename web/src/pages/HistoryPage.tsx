@@ -323,23 +323,23 @@ export function HistoryPage() {
             onValueChange={handleLimitChange}
             data-testid="history-range-select"
           />
-        </div>
-        <div className="history-toolbar-meta">
-          {selectedStation ? (
-            <div className="history-selected-meta cell-subtle" aria-live="polite">
-              <span>SERID {selectedStation.serid} · {selectedStation.location}</span>
-              {selectedStation.status === "offline" ? <span>Offline — last-known {freshnessLabel(selectedStation.dtom)} · {formatTimestamp(selectedStation.dtom)}</span> : <span>{freshnessLabel(selectedStation.dtom)} · {selectedStation.doserate != null ? `${selectedStation.doserate.toFixed(3)} ${selectedStation.unit}` : "—"}</span>}
-              <AlarmStatus
-                station={selectedStation}
-                onAction={user && user.role !== "Viewer" ? (station) => navigate("alarms", { serid: station.serid, event: station.active_event_id ?? undefined }) : undefined}
-              />
+          <div className="history-toolbar-meta">
+            {selectedStation ? (
+              <div className="history-selected-meta cell-subtle" aria-live="polite">
+                <span>SERID {selectedStation.serid} · {selectedStation.location}</span>
+                {selectedStation.status === "offline" ? <span>Offline — last-known {freshnessLabel(selectedStation.dtom)} · {formatTimestamp(selectedStation.dtom)}</span> : <span>{freshnessLabel(selectedStation.dtom)} · {selectedStation.doserate != null ? `${selectedStation.doserate.toFixed(3)} ${selectedStation.unit}` : "—"}</span>}
+                <AlarmStatus
+                  station={selectedStation}
+                  onAction={user && user.role !== "Viewer" ? (station) => navigate("alarms", { serid: station.serid, event: station.active_event_id ?? undefined }) : undefined}
+                />
+              </div>
+            ) : null}
+            {filteredStations.length !== stations.length ? (
+              <div className="cell-subtle" aria-live="polite">{filteredStations.length} dari {stations.length} stasiun cocok</div>
+            ) : null}
+            <div className="history-carousel-hint cell-subtle" aria-live="polite">
+              {canNavigate ? `Stasiun ${selectedIndex + 1} dari ${stations.length} — pakai ← → atau tombol untuk pindah` : null}
             </div>
-          ) : null}
-          {filteredStations.length !== stations.length ? (
-            <div className="cell-subtle" aria-live="polite">{filteredStations.length} dari {stations.length} stasiun cocok</div>
-          ) : null}
-          <div className="history-carousel-hint cell-subtle" aria-live="polite">
-            {canNavigate ? `Stasiun ${selectedIndex + 1} dari ${stations.length} — pakai ← → atau tombol untuk pindah` : null}
           </div>
         </div>
       </LayerCard>

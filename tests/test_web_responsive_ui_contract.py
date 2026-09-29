@@ -115,6 +115,23 @@ def test_history_keeps_station_toolbar_before_summary_and_chart_with_compact_rul
     assert '.history-page .trend-chart svg {' in css and 'min-height: 0' in css
 
 
+def test_history_controls_share_one_row_and_chart_uses_remaining_page_height():
+    history = read("pages/HistoryPage.tsx")
+    css = read("ui-polish.css")
+    toolbar_start = history.index('<div className="history-toolbar">')
+    toolbar_end = history.index("</div>", history.index('className="history-toolbar-meta"'))
+    toolbar = history[toolbar_start:toolbar_end]
+    assert toolbar.index('data-testid="history-prev"') < toolbar.index('data-testid="history-search"')
+    assert toolbar.index('data-testid="history-search"') < toolbar.index('data-testid="history-station-select"')
+    assert toolbar.index('data-testid="history-station-select"') < toolbar.index('data-testid="history-next"')
+    assert toolbar.index('data-testid="history-next"') < toolbar.index('data-testid="history-range-select"')
+    assert toolbar.index('data-testid="history-range-select"') < toolbar.index('className="history-toolbar-meta"')
+    assert "grid-template-rows: auto auto auto minmax(300px, 1fr) auto" in css
+    assert "min-height: calc(100dvh - 88px)" in css
+    assert ".history-page .trend-chart-plot" in css
+    assert "height: 100%" in css and "overflow: auto" not in css[css.index(".history-page > .page-section:has(.trend-chart-card)"):css.index(".mobile-sheet-handle")]
+
+
 def test_dialogs_and_mobile_navigation_reserve_viewport_space():
     css = read("radmon.css") + "\n" + read("ui-polish.css")
     assert "calc(84px + env(safe-area-inset-bottom))" in css

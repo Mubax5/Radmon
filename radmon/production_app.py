@@ -24,6 +24,7 @@ from .process_ownership import (
     stop_legacy_radmon_central,
 )
 from .single_instance import SingleInstanceLock
+from .startup_launcher import run_start
 
 
 WEB_APP_URL = "http://127.0.0.1:8090/app"
@@ -46,7 +47,7 @@ def _acquire_lock_with_recovery(
     timeout: float = 0.5,
     max_retries: int = 2,
 ) -> Any | None:
-    """Try to acquire SingleInstanceLock with stale recovery and health check.
+    """Try to acquire SingleInstanceLock with bounded stale-lock retries.
 
     Returns the acquired lock instance, or None if acquisition failed.
     Caller distinguishes healthy holder (idempotent) vs stale failure by
@@ -69,7 +70,7 @@ def _acquire_lock_with_recovery(
     if healthy:
         # holder healthy => idempotent, do not attempt recovery
         return None
-    # stale holder – attempt bounded termination and retry
+    # No healthy central service: retry boundedly without terminating a listener.
     for _ in range(max_retries):
         try:
             if hasattr(lock, "_try_terminate"):
@@ -276,12 +277,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--open-web",
         action="store_true",
-        help="open the authenticated RadMon control plane in the default browser",
+        help="recover missing components, then open the authenticated control plane",
     )
     parser.add_argument(
         "--open-monitoring",
         action="store_true",
-        help="open the anonymous full-screen monitoring landing page",
+        help="recover missing components, then open the monitoring landing page",
+    )
+    parser.add_argument(
+        "--start",
+        action="store_true",
+        help="recover missing RadMon services safely, then open the admin web UI",
     )
     parser.add_argument(
         "--smoke-test",
@@ -292,12 +298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     paths = ApplicationPaths.discover()
     if args.smoke_test:
         return _smoke_test(paths)
-    if args.open_web:
-        webbrowser.open(WEB_APP_URL)
-        return 0
-    if args.open_monitoring:
-        webbrowser.open(MONITORING_URL)
-        return 0
+    if args.start or args.open_web or args.open_monitoring:
+        return run_start("monitoring" if args.open_monitoring else "admin")
     if args.server:
         return run_server(paths)
     return run_production(paths)

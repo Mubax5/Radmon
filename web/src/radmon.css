@@ -212,7 +212,7 @@ body:has([role="dialog"]) .page-stack { visibility: visible; }
 .trend-chart-empty { min-height: 160px; display: grid; place-items: center; color: #6b7280; font-size: 13px; }
 
 @media (min-width: 768px) {
-  .desktop-shell { min-height: 100dvh; display: flex; }
+  .desktop-shell { height: 100dvh; min-height: 100dvh; display: flex; overflow: hidden; }
   .mobile-shell { display: none; }
   .content-shell { padding: 24px 22px 48px; }
   .page-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 20px; }

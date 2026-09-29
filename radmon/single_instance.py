@@ -16,8 +16,8 @@ class SingleInstanceLock:
     - Uses 127.0.0.1:{port} bind as primary mutex (OS releases on crash).
     - Persists crash-safe lock_file at runtime/instance.lock (or custom path)
       so a stale file from a killed process can be detected and overwritten.
-    - Stale recovery: if bind fails but central health probe (8090) shows
-      holder is dead, attempt to terminate stale holder and retry bind.
+    - Stale recovery: a crashed owner releases the TCP bind automatically;
+      health checks distinguish an active central service from a collision.
     """
 
     def __init__(
@@ -68,62 +68,14 @@ class SingleInstanceLock:
         return self._is_holder_healthy()
 
     def _try_terminate(self) -> bool:
-        """Attempt to terminate a stale holder that still owns the lock port or 8090."""
-        try:
-            from .process_ownership import find_listener_owner, is_legacy_radmon_central, stop_legacy_radmon_central
+        """Do not kill a listener to recover a lock.
 
-            for probe_port in (self.port, self.health_port):
-                try:
-                    owner = find_listener_owner(probe_port)
-                except Exception:
-                    owner = None
-                if owner is None:
-                    continue
-                # Legacy radmon central gets a controlled stop
-                try:
-                    if is_legacy_radmon_central(owner, probe_port):
-                        stop_legacy_radmon_central(owner)
-                        time.sleep(0.2)
-                        return True
-                except Exception:
-                    pass
-                # Generic stale process termination
-                try:
-                    import psutil  # type: ignore
-
-                    try:
-                        proc = psutil.Process(int(owner.pid))
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=1.5)
-                        except Exception:
-                            pass
-                        if not proc.is_running():
-                            return True
-                        # force kill
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                        return True
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-                try:
-                    import subprocess
-
-                    subprocess.run(
-                        ["taskkill", "/PID", str(owner.pid), "/F"],
-                        capture_output=True,
-                        timeout=3,
-                    )
-                    return True
-                except Exception:
-                    continue
-            return False
-        except Exception:
-            return False
+        A crashed process releases its TCP bind automatically, so a stale lock
+        file needs no process termination. If a listener remains but is not
+        healthy, report the collision to the caller rather than risking data
+        loss by terminating an owner whose identity/state is uncertain.
+        """
+        return False
 
     def _write_lock_file(self) -> None:
         try:

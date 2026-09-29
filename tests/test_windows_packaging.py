@@ -59,7 +59,8 @@ def test_installer_registers_resilient_server_and_exposes_only_brin_web_gateway(
 
     assert "PrivilegesRequired=admin" in installer
     assert "install_server.ps1" in installer
-    assert "--open-web" in installer
+    assert 'Parameters: "--start"' in installer
+    assert 'Parameters: "--open-monitoring"' in installer
     assert "RadMon Server" in installer
     assert "/End /TN" in installer and "/Delete /F /TN" in installer
     assert "New-ScheduledTaskTrigger -AtStartup" in helper

@@ -42,14 +42,14 @@ Source: "packaging\install_updater.ps1"; DestDir: "{tmp}"; Flags: ignoreversion 
 Source: "packaging\stop_server.ps1"; Flags: dontcopy
 
 [Icons]
-Name: "{autoprograms}\RadMon"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--open-web"; WorkingDir: "{app}"
-Name: "{autodesktop}\RadMon"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--open-web"; WorkingDir: "{app}"
+Name: "{autoprograms}\RadMon"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--start"; WorkingDir: "{app}"
+Name: "{autodesktop}\RadMon"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--start"; WorkingDir: "{app}"
 Name: "{autoprograms}\RadMon Monitoring"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--open-monitoring"; WorkingDir: "{app}"
 
 [Run]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{tmp}\install_server.ps1"" -ExePath ""{app}\app\{#AppExeName}"""; StatusMsg: "Registering RadMon 24/7 server..."; Flags: runhidden waituntilterminated
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{tmp}\install_updater.ps1"" -ScriptPath ""{app}\updater\radmon_update.ps1"" -InstallRoot ""{app}"""; StatusMsg: "Registering RadMon automatic updater..."; Flags: runhidden waituntilterminated
-Filename: "{app}\app\{#AppExeName}"; Parameters: "--open-web"; Description: "Buka RadMon Control Plane"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\app\{#AppExeName}"; Parameters: "--start"; Description: "Mulai / pulihkan RadMon dan buka Control Plane"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/End /TN ""RadMon Updater"""; Flags: runhidden; RunOnceId: "StopRadMonUpdater"
