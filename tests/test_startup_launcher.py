@@ -111,6 +111,35 @@ def test_missing_task_uses_managed_server_fallback(tmp_path):
     assert calls["task"] == 1 and calls["process"] == 1
 
 
+def test_accepted_task_that_stays_unhealthy_falls_back_once_to_managed_server(tmp_path):
+    launcher, _state, calls = make_launcher(
+        tmp_path, task=True,
+        on_process=lambda current: current.update(central=True, grafana=True),
+    )
+    states = launcher.start()
+    assert status(states, "Central/API") == "dimulai"
+    assert "fallback" in next(item.detail for item in states if item.name == "Central/API")
+    assert calls == {"task": 1, "process": 1, "ensure": 0}
+
+
+def test_late_task_health_is_reused_without_duplicate_managed_start(tmp_path):
+    launcher, _state, calls = make_launcher(tmp_path, task=True, timeout=0)
+    central_probes = 0
+
+    def late_health(url):
+        nonlocal central_probes
+        if "/health" in url and "api/health" not in url:
+            central_probes += 1
+            return central_probes >= 3
+        return False
+
+    launcher.http_probe = late_health
+    states = launcher.start()
+    assert status(states, "Central/API") == "dimulai"
+    assert "Scheduled Task" in next(item.detail for item in states if item.name == "Central/API")
+    assert calls == {"task": 1, "process": 0, "ensure": 0}
+
+
 def test_start_timeout_is_reported_without_repeated_launches(tmp_path):
     launcher, _state, calls = make_launcher(tmp_path, timeout=0)
     states = launcher.start()

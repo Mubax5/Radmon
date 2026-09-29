@@ -102,6 +102,45 @@ class RadMonLauncher:
         launched = subprocess.run(["schtasks.exe", "/Run", "/TN", "RadMon Server"], **kwargs)
         return launched.returncode == 0
 
+    def _scheduled_task_result(self) -> str:
+        """Return the task's last result when Task Scheduler permits inspection."""
+        if os.name != "nt":
+            return "unavailable"
+        kwargs = {"capture_output": True, "text": True, "timeout": 5, "check": False}
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        try:
+            result = subprocess.run(
+                ["schtasks.exe", "/Query", "/TN", "RadMon Server", "/V", "/FO", "LIST"],
+                **kwargs,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return "unavailable"
+        if result.returncode != 0:
+            return "unavailable"
+        for line in (result.stdout or "").splitlines():
+            label, separator, value = line.partition(":")
+            if separator and label.strip().casefold() in {"last run result", "last run result:"}:
+                return value.strip() or "unknown"
+        return "unknown"
+
+    def _lock_holder(self) -> str:
+        """Describe a runtime lock holder without treating the file as authority."""
+        lock_file = self.paths.runtime_dir / "instance.lock"
+        try:
+            pid = int(lock_file.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return "no readable lock"
+        if pid <= 0:
+            return "invalid lock PID"
+        try:
+            os.kill(pid, 0)
+        except PermissionError:
+            return f"lock PID {pid} present; managed start will use single-instance recovery"
+        except OSError:
+            return f"stale lock PID {pid}"
+        return f"lock PID {pid} present; managed start will use single-instance recovery"
+
     def _start_managed_server(self) -> object:
         if getattr(sys, "frozen", False):
             command = [sys.executable, "--server"]
@@ -137,28 +176,59 @@ class RadMonLauncher:
             states.append(ComponentState("Central/API", "sudah berjalan"))
         else:
             started_by = "Scheduled Task"
+            task_started = False
             try:
                 task_started = self.run_task()
             except Exception:
-                task_started = False
-            if not task_started:
-                started_by = "proses RadMon terkelola"
+                task_error = "trigger raised an exception"
+            else:
+                task_error = ""
+
+            deadline = time.monotonic() + self.timeout
+
+            def wait_until_deadline(wait_deadline: float) -> bool:
+                while True:
+                    if self.http_probe(self.central_url):
+                        return True
+                    remaining = wait_deadline - time.monotonic()
+                    if remaining <= 0:
+                        return False
+                    self.sleeper(min(self.poll_interval, remaining))
+
+            # Leave half the bounded recovery window for managed startup when the
+            # task trigger is accepted but its process never becomes healthy.
+            task_deadline = time.monotonic() + max(0.0, self.timeout / 2)
+            central_ok = wait_until_deadline(min(task_deadline, deadline)) if task_started else False
+            task_result = ""
+            if not central_ok and task_started:
+                task_result = self._scheduled_task_result()
+
+            if not central_ok:
+                # Re-probe immediately before fallback. A scheduled task may have
+                # started late; if so, reuse it instead of launching another.
+                central_ok = self.http_probe(self.central_url)
+            if not central_ok:
+                started_by = "proses RadMon terkelola (fallback)"
+                lock_detail = self._lock_holder()
                 try:
                     self.start_process()
                 except Exception as exc:
-                    states.append(ComponentState("Central/API", "gagal memulai", str(exc)))
+                    task_detail = f"Scheduled Task failed (last result: {task_result or 'not started'}{'; ' + task_error if task_error else ''})"
+                    states.append(ComponentState("Central/API", "gagal memulai", f"{task_detail}; fallback failed: {exc}; {lock_detail}"))
                     central_ok = False
                 else:
-                    central_ok = self._wait_for(lambda: self.http_probe(self.central_url))
+                    central_ok = wait_until_deadline(deadline)
                     if not central_ok:
-                        states.append(ComponentState("Central/API", "timeout", f"{started_by}; {self.timeout:g} detik"))
-            else:
-                central_ok = self._wait_for(lambda: self.http_probe(self.central_url))
-                if not central_ok:
-                    states.append(ComponentState("Central/API", "timeout", f"{started_by}; {self.timeout:g} detik"))
+                        task_detail = f"Scheduled Task {'trigger accepted' if task_started else 'unavailable'} (last result: {task_result or 'unavailable'})"
+                        states.append(ComponentState("Central/API", "timeout", f"{task_detail}; {started_by} did not become healthy within {self.timeout:g} seconds; {lock_detail}"))
+            elif task_started:
+                started_by = "Scheduled Task"
             if central_ok:
                 started_central = True
-                states.append(ComponentState("Central/API", "dimulai", started_by))
+                detail = started_by
+                if task_started and started_by != "Scheduled Task":
+                    detail += f" after Scheduled Task did not become healthy (last result: {task_result or 'unavailable'})"
+                states.append(ComponentState("Central/API", "dimulai", detail))
 
         grafana = self._grafana_url()
         if grafana:
