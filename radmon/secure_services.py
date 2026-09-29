@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import sqlite3
+import sys
+import tempfile
 from typing import Any
 
 from .alarm_policy import AlarmPolicyService
@@ -36,9 +39,79 @@ class SecureServices:
     runtime_status_projector: RuntimeStatusProjector | None = None
 
 
+def _copy_sqlite_database(source: Path, target: Path) -> None:
+    """Copy a live SQLite store (including WAL contents) without changing source."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=f"{target.name}.", suffix=".migration", dir=target.parent)
+    import os
+
+    os.close(fd)
+    temporary = Path(temporary_name)
+    try:
+        origin = sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
+        try:
+            copy = sqlite3.connect(temporary)
+            try:
+                origin.backup(copy)
+                result = copy.execute("PRAGMA integrity_check").fetchone()
+                if not result or result[0] != "ok":
+                    raise RuntimeError(f"SQLite integrity check failed while migrating {source}: {result}")
+            finally:
+                copy.close()
+        finally:
+            origin.close()
+        check = sqlite3.connect(temporary)
+        try:
+            result = check.execute("PRAGMA integrity_check").fetchone()
+            if not result or result[0] != "ok":
+                raise RuntimeError(f"SQLite integrity check failed for migration copy of {source}: {result}")
+        finally:
+            check.close()
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def security_db_path(settings) -> Path:
-    raw = os.getenv("RADMON_SECURITY_DB", "").strip()
-    return Path(raw) if raw else Path(settings.runtime_dir) / "radmon-security.db"
+    """Resolve the security store once from installation-root settings.
+
+    Older builds interpreted a relative RADMON_SECURITY_DB against process cwd.
+    Check only the known install/app cwd variants; retain every source and refuse
+    to pick between multiple stores rather than silently splitting identities.
+    """
+    configured_value = getattr(settings, "security_db", None)
+    if configured_value is None:
+        configured_value = os.getenv("RADMON_SECURITY_DB", "").strip()
+    if configured_value:
+        configured = Path(configured_value).expanduser()
+        if not configured.is_absolute():
+            configured = Path(settings.runtime_dir).parent / configured
+    else:
+        configured = Path(settings.runtime_dir) / "radmon-security.db"
+    configured = configured.resolve()
+    candidates = {
+        (Path.cwd() / "runtime" / configured.name).resolve(),
+        (Path(sys.executable).resolve().parent / "runtime" / configured.name).resolve(),
+    }
+    application_dir = getattr(settings, "application_dir", None)
+    if application_dir:
+        candidates.add((Path(application_dir) / "runtime" / configured.name).resolve())
+    candidates.discard(configured)
+    existing = sorted(path for path in candidates if path.is_file())
+    if configured.is_file() and existing:
+        raise RuntimeError(
+            f"Multiple RadMon security databases exist ({configured} and {', '.join(map(str, existing))}). "
+            "Stop RadMon and consolidate/identify the authoritative database before starting; no data was changed."
+        )
+    if len(existing) > 1:
+        raise RuntimeError(
+            f"Multiple legacy RadMon security databases exist ({', '.join(map(str, existing))}). "
+            "Stop RadMon and identify the authoritative database before starting; no data was changed."
+        )
+    if existing:
+        _copy_sqlite_database(existing[0], configured)
+    configured.parent.mkdir(parents=True, exist_ok=True)
+    return configured
 
 
 def build_secure_services(settings) -> SecureServices:

@@ -6,14 +6,18 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_pyinstaller_build_contract_exists():
     spec = (ROOT / "RadMon.spec").read_text(encoding="utf-8")
     entry = (ROOT / "packaging/radmon_entry.py").read_text(encoding="utf-8")
+    admin_entry = (ROOT / "packaging/radmon_admin_entry.py").read_text(encoding="utf-8")
     build_requirements = (ROOT / "requirements-build.txt").read_text(encoding="utf-8").lower()
 
     assert "radmon_entry.py" in spec
     assert "name='RadMon'" in spec or 'name="RadMon"' in spec
+    assert "name='RadMon Admin'" in spec or 'name="RadMon Admin"' in spec
+    assert "packaging/radmon_admin_entry.py" in spec
     assert "console=False" in spec
     assert "radmon/admin/icons" in spec.replace("\\", "/")
     assert '("web/dist", "web")' in spec
     assert "from radmon.production_app import main" in entry
+    assert "from radmon.admin_entry import main" in admin_entry
     assert "pyinstaller" in build_requirements
 
 
@@ -61,10 +65,14 @@ def test_installer_registers_resilient_server_and_exposes_only_brin_web_gateway(
     assert "install_server.ps1" in installer
     assert 'Parameters: "--start"' in installer
     assert 'Parameters: "--open-monitoring"' in installer
+    assert 'Name: "{autoprograms}\\RadMon Admin"; Filename: "{app}\\app\\{#AdminExeName}"' in installer
+    assert 'Name: "{autodesktop}\\RadMon Admin"; Filename: "{app}\\app\\{#AdminExeName}"' in installer
+    assert '#define AdminExeName "RadMon Admin.exe"' in installer
     assert "RadMon Server" in installer
     assert "/End /TN" in installer and "/Delete /F /TN" in installer
     assert "New-ScheduledTaskTrigger -AtStartup" in helper
-    assert 'New-ScheduledTaskAction -Execute $ExePath -Argument "--server"' in helper
+    assert 'New-ScheduledTaskAction -Execute $ExePath -Argument "--server" -WorkingDirectory $workingDirectory' in helper
+    assert '$workingDirectory = Split-Path -Parent $ExePath' in helper
     assert 'New-ScheduledTaskPrincipal -UserId "SYSTEM"' in helper
     assert "-RestartCount 999" in helper
     assert "-RestartInterval" in helper

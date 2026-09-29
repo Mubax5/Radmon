@@ -51,6 +51,8 @@ class Settings:
     grafana_password: str = "admin"
     grafana_bin: str = ""
     report_dir: Path = Path("!REPORT!")
+    security_db: Path | None = None
+    application_dir: Path | None = None
     runtime_dir: Path = Path("runtime")
     log_dir: Path = Path("logs")
     single_instance_port: int = 47652
@@ -117,6 +119,7 @@ class Settings:
             grafana_password=get("RADMON_GRAFANA_PASSWORD", "admin"),
             grafana_bin=get("RADMON_GRAFANA_BIN", "").strip(),
             report_dir=Path(get("RADMON_REPORT_DIR", "!REPORT!")),
+            security_db=Path(get("RADMON_SECURITY_DB", "runtime/radmon-security.db")),
             runtime_dir=Path(get("RADMON_RUNTIME_DIR", "runtime")),
             log_dir=Path(get("RADMON_LOG_DIR", "logs")),
             single_instance_port=int(get("RADMON_SINGLE_INSTANCE_PORT", "47652")),
@@ -142,6 +145,11 @@ class Settings:
             archive_dir=resolved(self.archive_dir, paths.archive_dir),
             report_dir=resolved(self.report_dir, paths.report_dir),
             log_dir=resolved(self.log_dir, paths.log_dir),
+            security_db=(
+                (self.security_db if self.security_db.is_absolute() else paths.install_root / self.security_db).resolve()
+                if self.security_db is not None else (paths.runtime_dir / "radmon-security.db").resolve()
+            ),
+            application_dir=paths.app_dir.resolve(),
         )
 
     def detector_bindings(self) -> list[tuple[int, str]]:

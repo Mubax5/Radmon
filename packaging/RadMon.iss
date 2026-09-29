@@ -1,5 +1,6 @@
 #define AppName "RadMon"
 #define AppExeName "RadMon.exe"
+#define AdminExeName "RadMon Admin.exe"
 
 [Setup]
 AppId={{8D9CB0BD-9C4B-4ABF-92B6-89A30B1D936A}
@@ -45,6 +46,8 @@ Source: "packaging\stop_server.ps1"; Flags: dontcopy
 Name: "{autoprograms}\RadMon"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--start"; WorkingDir: "{app}"
 Name: "{autodesktop}\RadMon"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--start"; WorkingDir: "{app}"
 Name: "{autoprograms}\RadMon Monitoring"; Filename: "{app}\app\{#AppExeName}"; Parameters: "--open-monitoring"; WorkingDir: "{app}"
+Name: "{autoprograms}\RadMon Admin"; Filename: "{app}\app\{#AdminExeName}"; WorkingDir: "{app}\app"
+Name: "{autodesktop}\RadMon Admin"; Filename: "{app}\app\{#AdminExeName}"; WorkingDir: "{app}\app"
 
 [Run]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{tmp}\install_server.ps1"" -ExePath ""{app}\app\{#AppExeName}"""; StatusMsg: "Registering RadMon 24/7 server..."; Flags: runhidden waituntilterminated

@@ -23,6 +23,8 @@ def run_admin_ui(
     services: Any,
     archive_catalog: ArchiveCatalog,
     log_path: Path,
+    *,
+    manage_grafana: bool = True,
 ) -> int:
     """Run the LAN Admin desktop using central-owned security/domain services."""
     app = QApplication.instance() or QApplication(sys.argv)
@@ -87,6 +89,7 @@ def run_admin_ui(
         source="lan",
         archive_catalog=archive_catalog,
         runtime=None,
+        manage_grafana=manage_grafana,
     )
     install_window_security(window)
     app.aboutToQuit.connect(lambda: set_context(None))

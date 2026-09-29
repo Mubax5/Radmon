@@ -147,6 +147,7 @@ class MainWindow(QMainWindow):
         source: str,
         archive_catalog=None,
         runtime=None,
+        manage_grafana: bool = True,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -158,8 +159,11 @@ class MainWindow(QMainWindow):
         self.runtime = runtime
         self.archive_catalog = archive_catalog
         self.preferences = DesktopPreferences.load(settings)
-        self._grafana_bootstrap = GrafanaBootstrap(settings)
-        self._grafana_ready_url: str | None = None
+        self._manage_grafana = bool(manage_grafana)
+        self._grafana_bootstrap = GrafanaBootstrap(settings) if self._manage_grafana else None
+        self._grafana_ready_url: str | None = (
+            f"{str(settings.grafana_url).rstrip('/')}/" if not self._manage_grafana else None
+        )
         self._grafana_error: str | None = None
         self._grafana_thread: threading.Thread | None = None
         self._monitoring_open_pending = False
@@ -673,6 +677,8 @@ class MainWindow(QMainWindow):
         AboutDialog(self).exec()
 
     def _start_grafana_bootstrap(self) -> None:
+        if not self._manage_grafana:
+            return
         if self._grafana_thread is not None and self._grafana_thread.is_alive():
             return
         self._grafana_error = None
@@ -685,6 +691,8 @@ class MainWindow(QMainWindow):
 
     def _prepare_grafana(self) -> None:
         try:
+            if self._grafana_bootstrap is None:
+                return
             self._grafana_ready_url = self._grafana_bootstrap.ensure()
             self._grafana_error = None
         except Exception as exc:

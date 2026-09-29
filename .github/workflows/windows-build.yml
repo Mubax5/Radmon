@@ -53,6 +53,9 @@ jobs:
           if (-not (Test-Path "dist\RadMon\RadMon.exe")) {
             throw "PyInstaller did not create dist\RadMon\RadMon.exe"
           }
+          if (-not (Test-Path "dist\RadMon\RadMon Admin.exe")) {
+            throw "PyInstaller did not create dist\RadMon\RadMon Admin.exe"
+          }
           if (-not (Test-Path "dist\RadMon\web\index.html")) {
             throw "PyInstaller did not bundle the RadMon web frontend"
           }
@@ -304,8 +307,17 @@ jobs:
               Get-NetTCPConnection -State Listen -LocalPort 8090 -ErrorAction SilentlyContinue |
                 ForEach-Object { "pid=$($_.OwningProcess); local=$($_.LocalAddress):$($_.LocalPort)" }
             ) -join ", "
-            throw "RadMon control plane did not become ready after upgrade within 45 seconds. Last health result: $lastHealthError. Task: $taskSummary. RadMon PIDs: $processIds. Port 8090 listeners: $listeners"
-          }
+             throw "RadMon control plane did not become ready after upgrade within 45 seconds. Last health result: $lastHealthError. Task: $taskSummary. RadMon PIDs: $processIds. Port 8090 listeners: $listeners"
+           }
+
+           $adminExe = Join-Path $installRoot "app\RadMon Admin.exe"
+           if (-not (Test-Path $adminExe)) {
+             throw "Installer did not create $adminExe"
+           }
+           $adminSmoke = Start-Process -FilePath $adminExe -ArgumentList "--smoke-test" -Wait -PassThru
+           if ($adminSmoke.ExitCode -ne 0) {
+             throw "Installed RadMon Admin.exe smoke test failed with exit code $($adminSmoke.ExitCode)"
+           }
 
       - name: Write installer checksum
         shell: pwsh

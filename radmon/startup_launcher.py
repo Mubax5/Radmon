@@ -152,12 +152,13 @@ class RadMonLauncher:
     def _spawn_managed_process(command: list[str], paths: ApplicationPaths) -> subprocess.Popen:
         """Start a managed child independently, retaining its output in runtime logs."""
         paths.log_dir.mkdir(parents=True, exist_ok=True)
+        paths.app_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = paths.log_dir / "managed-server.stdout.log"
         stderr_path = paths.log_dir / "managed-server.stderr.log"
         stdout_log = stdout_path.open("ab")
         stderr_log = stderr_path.open("ab")
         kwargs: dict = {
-            "cwd": str(paths.install_root),
+            "cwd": str(paths.app_dir),
             "stdin": subprocess.DEVNULL,
             "stdout": stdout_log,
             "stderr": stderr_log,

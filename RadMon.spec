@@ -29,6 +29,21 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+admin_a = Analysis(
+    ["packaging/radmon_admin_entry.py"],
+    pathex=["."],
+    binaries=[],
+    datas=datas,
+    hiddenimports=hiddenimports,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=["pytest"],
+    noarchive=False,
+    optimize=0,
+)
+admin_pyz = PYZ(admin_a.pure)
+
 exe = EXE(
     pyz,
     a.scripts,
@@ -48,10 +63,32 @@ exe = EXE(
     contents_directory='.',
 )
 
+admin_exe = EXE(
+    admin_pyz,
+    admin_a.scripts,
+    [],
+    exclude_binaries=True,
+    name='RadMon Admin',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=False,
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    contents_directory='.',
+)
+
 coll = COLLECT(
     exe,
+    admin_exe,
     a.binaries,
     a.datas,
+    admin_a.binaries,
+    admin_a.datas,
     strip=False,
     upx=False,
     upx_exclude=[],

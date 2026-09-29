@@ -6,7 +6,8 @@ param(
 $ErrorActionPreference = "Stop"
 $taskName = "RadMon Server"
 
-$action = New-ScheduledTaskAction -Execute $ExePath -Argument "--server"
+$workingDirectory = Split-Path -Parent $ExePath
+$action = New-ScheduledTaskAction -Execute $ExePath -Argument "--server" -WorkingDirectory $workingDirectory
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 $settings = New-ScheduledTaskSettingsSet `
