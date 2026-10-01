@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from ..secure_context import get_context
 from ..security import Role
+from ..formatting import format_dose_value
 from .alarm_response_dialog import AlarmResponseDialog
 from .auth_dialogs import PinDialog
 from .icons import app_icon
@@ -99,7 +100,7 @@ class AlarmPage(QWidget):
         if value is None:
             return ""
         if isinstance(value, float):
-            return f"{value:.4f}"
+            return format_dose_value(value)
         return str(value)
 
     def _range(self) -> tuple[datetime, datetime]:

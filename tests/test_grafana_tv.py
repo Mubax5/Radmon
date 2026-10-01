@@ -13,6 +13,7 @@ from radmon.grafana_tv import (
     PLAYLIST_UID,
     build_dashboard_payloads,
     build_playlist_payload,
+    _format_dose_sql,
     operation_page_stations,
     playlist_url,
 )
@@ -52,9 +53,9 @@ def test_every_generated_dashboard_has_shared_header_and_fits_without_scroll():
         assert "Instalasi Pengelolaan Limbah Radioaktif" in payload
 
 
-def test_page_one_live_values_times_and_sparklines_use_rolling_vrecent():
+def test_page_one_station_lamps_use_central_status_and_lightweight_recent_trends():
     page1 = build_dashboard_payloads()[0]
-    dose = [panel for panel in page1["panels"] if panel.get("title", "").startswith("[")]
+    dose = [panel for panel in page1["panels"] if panel.get("description") == "central-status-lamp"]
     spark = [panel for panel in page1["panels"] if panel.get("description") == "latest-dose-sparkline"]
     timestamp = [panel for panel in page1["panels"] if panel.get("description") == "latest-measurement-time"]
     assert len(dose) == len(spark) == len(timestamp) == 15
@@ -65,7 +66,14 @@ def test_page_one_live_values_times_and_sparklines_use_rolling_vrecent():
         assert "FROM measurement" not in sql
         assert "dtom IS NOT NULL" not in sql
         assert "ORDER BY dtom DESC" in sql
-        assert panel["fieldConfig"]["defaults"]["unit"] == "suffix: µSv/h"
+        assert "CASE status" in sql
+        mappings = panel["fieldConfig"]["defaults"]["mappings"][0]["options"]
+        assert mappings["0"] == {"color": "gray", "text": "OFFLINE"}
+        assert mappings["1"] == {"color": "green", "text": "NORMAL"}
+        assert mappings["2"] == {"color": "yellow", "text": "LOW / WARNING"}
+        assert mappings["3"] == {"color": "red", "text": "HIGH / ALARM"}
+        assert [step["value"] for step in panel["fieldConfig"]["defaults"]["thresholds"]["steps"]] == [None, 1, 2, 3, 4]
+        assert panel["options"]["colorMode"] == "background"
     for panel in spark:
         assert panel["type"] == "timeseries"
         sql = panel["targets"][0]["rawSql"]
@@ -127,6 +135,13 @@ def test_integer_summary_stats_have_no_trailing_decimal_places():
                 seen.add(panel["title"])
                 assert panel["fieldConfig"]["defaults"]["decimals"] == 0
     assert seen == wanted
+
+
+def test_grafana_dose_sql_only_trims_zeroes_after_a_decimal_point():
+    sql = _format_dose_sql("doserate")
+    assert "CASE WHEN CAST(doserate AS CHAR) LIKE '%.%'" in sql
+    assert "TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(doserate AS CHAR)))" in sql
+    assert "ELSE CAST(doserate AS CHAR) END" in sql
 
 
 def test_operations_live_status_uses_vrecent_and_alarm_table_uses_legacy_schema():

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QLabel, QTableWidg
 
 from radmon.secure_context import get_context
 from radmon.status import classify_status
+from radmon.formatting import format_dose_value
 
 
 class RecentPage(QWidget):
@@ -131,11 +132,11 @@ class RecentPage(QWidget):
             values = [
                 station_item,
                 QTableWidgetItem(self._text_time(measured_at)),
-                QTableWidgetItem("" if dose_rate is None else f"{dose_rate:.2f}"),
-                QTableWidgetItem("" if average is None else f"{average:.2f}"),
-                QTableWidgetItem("" if stored_dose is None else f"{stored_dose:.7f}"),
-                QTableWidgetItem(f"{warnlevel:g}"),
-                QTableWidgetItem(f"{alarmlevel:g}"),
+                QTableWidgetItem("" if dose_rate is None else format_dose_value(dose_rate)),
+                QTableWidgetItem("" if average is None else format_dose_value(average)),
+                QTableWidgetItem("" if stored_dose is None else format_dose_value(stored_dose)),
+                QTableWidgetItem(format_dose_value(warnlevel)),
+                QTableWidgetItem(format_dose_value(alarmlevel)),
                 QTableWidgetItem("●"),
             ]
             for column, item in enumerate(values):
@@ -153,7 +154,7 @@ class RecentPage(QWidget):
                         f"PIC={snapshot.get('suppression_pic') or '-'} · "
                         f"Reason={snapshot.get('suppression_reason') or '-'} · "
                         f"Until={self._text_time(snapshot.get('suppression_expires_at')) or '-'} · "
-                        f"Dose={'' if dose_rate is None else f'{dose_rate:.2f} µSv/h'}"
+                        f"Dose={'' if dose_rate is None else f'{format_dose_value(dose_rate)} µSv/h'}"
                     )
                 elif snapshot and snapshot.get("retrigger_locked"):
                     tooltip = f"RETRIGGER LOCKED · underlying={snapshot.get('underlying_dose_status') or status.value}"

@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from .chart_metrics import status_breakdown, threshold_progress
 from .chart_state import ChartViewport
+from ..formatting import format_dose_value
 
 
 VISUAL_TREND = "Trend"
@@ -187,7 +188,7 @@ class ThresholdProgressWidget(QWidget):
             percent = float(metrics[f"{prefix}_percent"])
             bar = self.bars[prefix]
             bar.setValue(int(round(percent * 10)))
-            bar.setFormat(f"{title}: {value:.4f} µSv/h   ·   {percent:.1f}% of alarm")
+            bar.setFormat(f"{title}: {format_dose_value(value)} µSv/h   ·   {percent:.1f}% of alarm")
             color = self._color(value, warnlevel, alarmlevel)
             bar.setStyleSheet(
                 "QProgressBar { border: 1px solid #bdbdbd; border-radius: 4px; "
@@ -484,8 +485,8 @@ class ChartPage(QWidget):
         self.cross_x.setPos(x)
         self.cross_y.setPos(rate)
         self.hover.setPos(x, rate)
-        dose_text = f"\nApprox. Dose: {dose:.6f} µSv" if self.show_dose.isChecked() else ""
+        dose_text = f"\nApprox. Dose: {format_dose_value(dose)} µSv" if self.show_dose.isChecked() else ""
         self.hover.setText(
             f"{datetime.fromtimestamp(x):%Y-%m-%d %H:%M:%S}\n"
-            f"Dose rate: {rate:.4f} µSv/h{dose_text}"
+            f"Dose rate: {format_dose_value(rate)} µSv/h{dose_text}"
         )

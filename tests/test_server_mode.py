@@ -75,3 +75,31 @@ def test_headless_server_owns_central_until_stop_event(tmp_path: Path) -> None:
     assert central.started is True and central.stopped is True
     assert len(grafana_calls) == 1
     assert locks[-1].released is True
+
+
+def test_headless_server_remains_available_when_grafana_auth_plugin_is_unsupported(tmp_path: Path) -> None:
+    event = threading.Event()
+    event.set()
+    locks = []
+
+    def lock_factory(port: int):
+        lock = FakeLock(port)
+        locks.append(lock)
+        return lock
+
+    def fail_grafana(settings, app_paths):
+        raise RuntimeError("unsupported MySQL authentication plugin")
+
+    result = run_server(
+        paths(tmp_path),
+        central_factory=FakeCentral,
+        lock_factory=lock_factory,
+        grafana_startup=fail_grafana,
+        listener_owner=lambda port: None,
+        stop_event=event,
+    )
+
+    central = FakeCentral.instances[-1]
+    assert result == 0
+    assert central.started is True and central.stopped is True
+    assert locks[-1].released is True

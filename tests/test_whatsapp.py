@@ -42,8 +42,9 @@ def test_dispatcher_sends_once_and_marks_notification(tmp_path):
     assert len(sender.messages) == 1
     assert "gd52" in sender.messages[0]
     assert "5201" in sender.messages[0]
-    assert "26.10" in sender.messages[0]
-    assert "25.00" in sender.messages[0]
+    assert "26.1" in sender.messages[0]
+    assert "25 µSv/h" in sender.messages[0]
+    assert "HIGH THRESHOLD" in sender.messages[0]
 
 
 def test_failed_send_is_not_marked_and_retries_next_run(tmp_path):

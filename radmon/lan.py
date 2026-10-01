@@ -8,6 +8,7 @@ from typing import Any, Callable, Iterable
 
 from .repository import upsert_recent
 from .security import SecurityStore
+from .formatting import format_dose_value
 
 
 _SILENCE_DECISIONS = {'SUPPRESSED', 'RETRIGGER_LOCKED', 'COALESCED_DUPLICATE'}
@@ -640,8 +641,8 @@ ON DUPLICATE KEY UPDATE
             measured = row.get("mvalue")
             threshold = row.get("thvalue")
             hit = int(row.get("nhit") or 0)
-            measured_text = "-" if measured is None else f"{float(measured):.3f} µSv/h"
-            threshold_text = "-" if threshold is None else f"{float(threshold):.3f} µSv/h"
+            measured_text = "-" if measured is None else f"{format_dose_value(measured)} µSv/h"
+            threshold_text = "-" if threshold is None else f"{format_dose_value(threshold)} µSv/h"
             msg = f"[{source_id}] {level}: dose rate {measured_text}; threshold {threshold_text}; hit {hit}"
         else:
             level = str(row.get("type") or "ALERT").upper()

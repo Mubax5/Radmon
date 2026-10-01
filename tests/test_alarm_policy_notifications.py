@@ -51,6 +51,23 @@ def test_active_alarm_notifies_once_across_dispatcher_restart(tmp_path):
     assert "#2" in sender.messages[0]
 
 
+def test_low_threshold_creates_actionable_active_event_and_notifies_without_rounding(tmp_path):
+    now, store, policy, sender, dispatcher = fixture(tmp_path)
+    snapshot = policy.evaluate_live({
+        "serid": 5201, "dtom": now, "doserate": 1.340,
+        "warnlevel": 1.23, "alarmlevel": 2.0,
+    }, source_id="gd52")
+
+    event = store.get_event(snapshot["active_event_id"])
+    assert event is not None and event.kind == "ALARM" and event.status == "ACTIVE"
+    assert event.reason == "LOW_THRESHOLD"
+    assert event.threshold == 1.23
+    assert dispatcher.run_once() == 1
+    assert "LOW THRESHOLD" in sender.messages[0]
+    assert "1.34 µSv/h" in sender.messages[0]
+    assert "1.23 µSv/h" in sender.messages[0]
+
+
 def test_restore_gate_blocks_notification_until_first_live_cycle(tmp_path):
     now, store, policy, sender, dispatcher = fixture(tmp_path)
     store.create_policy_event(

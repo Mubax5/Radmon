@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Dialog, Input, LayerCard } from "@cloudflare/kumo";
 import { api, type Role } from "./api";
+import { formatDoseValue } from "./format";
 
 type AlarmEvent = {
   event_id: string;
@@ -10,6 +11,7 @@ type AlarmEvent = {
   measured_value?: number | null;
   threshold?: number | null;
   surfaced_at?: string;
+  reason?: string | null;
 };
 
 export type Suppression = {
@@ -98,7 +100,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
     [events],
   );
   const eventItems = useMemo(
-    () => Object.fromEntries(active.map((item) => [item.event_id, `SERID ${item.serid} · ${item.measured_value ?? "—"}`])),
+    () => Object.fromEntries(active.map((item) => [item.event_id, `SERID ${item.serid} · ${item.reason === "LOW_THRESHOLD" ? "LOW" : "HIGH"} · ${formatDoseValue(item.measured_value)}`])),
     [active],
   );
   const [respondOpen, setRespondOpen] = useState(false);

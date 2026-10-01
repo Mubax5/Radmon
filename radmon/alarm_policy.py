@@ -74,8 +74,8 @@ class AlarmPolicyService:
         dose_rate = self._float(row, "doserate")
         warnlevel = self._float(row, "warnlevel")
         alarmlevel = self._float(row, "alarmlevel")
-        is_normal = dose_rate < warnlevel
-        is_alarm = dose_rate >= alarmlevel
+        underlying = "NORMAL" if dose_rate < warnlevel else "ALERT" if dose_rate < alarmlevel else "ALARM"
+        threshold = warnlevel if underlying == "ALERT" else alarmlevel
 
         with self.store.detector_transaction(serid) as tx:
             state = tx.state
@@ -88,7 +88,7 @@ class AlarmPolicyService:
                 tx.end_suppression(suppression.suppression_id, measured_at, "EXPIRED")
                 suppression = None
 
-            if is_normal:
+            if underlying == "NORMAL":
                 before, resolved = tx.resolve_active_event(
                     measured_at, "AUTO_RESOLVED_NORMAL", "fresh measurement is below warning threshold",
                 )
@@ -100,43 +100,32 @@ class AlarmPolicyService:
                     tx, underlying="NORMAL", measured_value=dose_rate, threshold=alarmlevel
                 )
 
-            if not is_alarm:
-                before, resolved = tx.resolve_active_event(
-                    measured_at, "AUTO_RESOLVED_WARNING", "fresh measurement is below alarm threshold",
-                )
-                self._record_resolution(tx, before, resolved, source_id=source_id)
-                if resolved is None:
-                    tx.save_state(at=measured_at)
-                return self._snapshot(
-                    tx, underlying="ALERT", measured_value=dose_rate, threshold=alarmlevel
-                )
-
             if suppression is not None:
                 tx.create_suppressed_event(
                     suppression,
                     surfaced_at=measured_at,
                     measured_value=dose_rate,
-                    threshold=alarmlevel,
+                    threshold=threshold,
                     source_id=source_id,
                 )
                 tx.save_state(at=measured_at)
                 return self._snapshot(
-                    tx, underlying="ALARM",
+                    tx, underlying=underlying,
                     measured_value=dose_rate,
-                    threshold=alarmlevel,
+                    threshold=threshold,
                 )
 
             if state.retrigger_locked:
                 tx.save_state(at=measured_at)
                 return self._snapshot(
-                    tx, underlying="ALARM", measured_value=dose_rate, threshold=alarmlevel,
+                    tx, underlying=underlying, measured_value=dose_rate, threshold=threshold,
                     active_event_id=None,
                 )
 
             if state.active_event_id:
                 tx.save_state(at=measured_at)
                 return self._snapshot(
-                    tx, underlying="ALARM", measured_value=dose_rate, threshold=alarmlevel
+                    tx, underlying=underlying, measured_value=dose_rate, threshold=threshold
                 )
 
             if state.window_started_at is None or measured_at - state.window_started_at > timedelta(minutes=5):
@@ -149,8 +138,9 @@ class AlarmPolicyService:
                 trigger_index=next_index,
                 surfaced_at=measured_at,
                 measured_value=dose_rate,
-                threshold=alarmlevel,
+                threshold=threshold,
                 source_id=source_id,
+                reason="LOW_THRESHOLD" if underlying == "ALERT" else "HIGH_THRESHOLD",
             )
             state.trigger_count = next_index
             state.active_event_id = event.event_id
@@ -159,7 +149,7 @@ class AlarmPolicyService:
                 state.retrigger_locked = True
             tx.save_state(state, at=measured_at)
             return self._snapshot(
-                tx, underlying="ALARM", measured_value=dose_rate, threshold=alarmlevel,
+                tx, underlying=underlying, measured_value=dose_rate, threshold=threshold,
                 active_event_id=event.event_id,
             )
 
@@ -201,7 +191,7 @@ class AlarmPolicyService:
 
         if persistent.get("suppressed"):
             policy_state = "SUPPRESSED"
-        elif persistent.get("retrigger_locked") and underlying == "ALARM":
+        elif persistent.get("retrigger_locked") and underlying in {"ALERT", "ALARM"}:
             policy_state = "RETRIGGER_LOCKED"
         elif persistent.get("active_event_id"):
             policy_state = "ALARM"
@@ -213,6 +203,7 @@ class AlarmPolicyService:
         result.update({
             "policy_state": policy_state,
             "underlying_dose_status": underlying,
+            "active_event_lifecycle": "ACTIVE" if persistent.get("active_event_id") else None,
             "measured_value": live.get("measured_value"),
             "threshold": live.get("threshold"),
             "suppression_id": suppression.get("suppression_id"),
@@ -349,7 +340,7 @@ class AlarmPolicyService:
         suppression = tx.active_suppression
         if suppression is not None:
             policy_state = 'SUPPRESSED'
-        elif state.retrigger_locked and state.active_event_id is None and (underlying == 'ALARM'):
+        elif state.retrigger_locked and state.active_event_id is None and underlying in {'ALERT', 'ALARM'}:
             policy_state = 'RETRIGGER_LOCKED'
         elif underlying == 'ALARM' and (active_event_id or state.active_event_id):
             policy_state = 'ALARM'

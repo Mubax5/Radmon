@@ -80,6 +80,27 @@ def test_supervisor_stops_central_when_desktop_exits(tmp_path):
     assert events == ["lock", "central-start", "grafana", "desktop", "central-stop", "unlock"]
 
 
+def test_supervisor_keeps_control_plane_running_when_grafana_bootstrap_is_degraded(tmp_path):
+    events = []
+    central = FakeCentral(events)
+
+    def fail_grafana(*args, **kwargs):
+        events.append("grafana")
+        raise RuntimeError("unsupported MySQL authentication plugin")
+
+    code = run_production(
+        paths=_paths(tmp_path),
+        central_factory=lambda *a, **k: central,
+        desktop_runner=lambda *a, **k: events.append("desktop") or 0,
+        lock_factory=lambda port: FakeLock(events),
+        grafana_startup=fail_grafana,
+        listener_owner=lambda port: None,
+    )
+
+    assert code == 0
+    assert events == ["lock", "central-start", "grafana", "desktop", "central-stop", "unlock"]
+
+
 def test_supervisor_cleans_up_when_desktop_raises(tmp_path):
     events = []
     central = FakeCentral(events)

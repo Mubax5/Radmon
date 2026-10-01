@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from .models import Measurement, StationConfig
+from .formatting import format_dose_value
 from .status import classify_status
 
 
@@ -32,14 +33,14 @@ class AlarmService:
             self.repository.record_alarm(
                 self.station.serid,
                 state,
-                f"Dose rate {measurement.dose_rate:.3f} {self.station.unit}; threshold {threshold:g} {self.station.unit}",
+                f"Dose rate {format_dose_value(measurement.dose_rate)} {self.station.unit}; threshold {format_dose_value(threshold)} {self.station.unit}",
                 at=measurement.measured_at,
             )
         elif state == "NORMAL" and active_type in {"ALERT", "ALARM"}:
             self.repository.record_alarm(
                 self.station.serid,
                 "RECOVERY",
-                f"Dose rate kembali normal: {measurement.dose_rate:.3f} {self.station.unit}",
+                f"Dose rate kembali normal: {format_dose_value(measurement.dose_rate)} {self.station.unit}",
                 at=measurement.measured_at,
             )
         return state

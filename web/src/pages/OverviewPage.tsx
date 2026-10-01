@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Badge, LayerCard } from "@cloudflare/kumo";
 import { api, type Station } from "../api";
 import { useSession } from "../auth";
-import { AlarmNotification } from "../components/AlarmStatus";
+import { AlarmNotification, hasActiveThresholdEvent } from "../components/AlarmStatus";
 import { useWebRefresh } from "../live";
 import { navigate } from "../navigation";
 import {
@@ -68,7 +68,7 @@ export function OverviewPage() {
       {data ? (
         <>
           <div className="alarm-notification-stack" aria-live="off">
-            {data.stations.filter((station) => station.status === "alarm" && station.policy_state === "ALARM" && station.active_event_id)
+            {data.stations.filter(hasActiveThresholdEvent)
               .map((station) => <AlarmNotification key={station.active_event_id} station={station} onAction={openAlarm} />)}
           </div>
           <div className="metric-grid">

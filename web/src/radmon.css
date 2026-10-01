@@ -252,6 +252,8 @@ body:has([role="dialog"]) .page-stack { visibility: visible; }
 .alarm-status-warning .alarm-status-dot { background: #e3a008; }
 .alarm-status-alarm .alarm-status-dot,
 .alarm-notification .alarm-status-dot { background: #d92d20; }
+.alarm-notification.is-warning .alarm-status-dot { background: #e3a008; }
+.alarm-notification.is-warning { color: #7a5a00; background: #fff8db; border-color: #f5d76e; border-left-color: #e3a008; }
 .alarm-status-dot.is-blinking { animation: radmon-alarm-pulse 1s ease-in-out infinite; }
 @keyframes radmon-alarm-pulse { 50% { opacity: .25; box-shadow: 0 0 0 5px rgb(217 45 32 / 16%); } }
 .alarm-action-link { border: 0; padding: 2px 4px; color: #b42318; background: transparent; font: inherit; text-decoration: underline; cursor: pointer; }

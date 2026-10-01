@@ -1392,11 +1392,11 @@ class _DetectorTransaction:
 
     def create_alarm_event(self, *, event_key: str, trigger_index: int, surfaced_at: datetime,
                            measured_value: float | None, threshold: float | None,
-                           source_id: str | None = None) -> PolicyEvent:
+                           source_id: str | None = None, reason: str | None = None) -> PolicyEvent:
         return self.store.create_policy_event(
             event_key=event_key, serid=self.serid, kind="ALARM", origin="central_policy",
             surfaced_at=surfaced_at, measured_value=measured_value, threshold=threshold,
-            status="ACTIVE", trigger_index=trigger_index, source_id=source_id,
+            status="ACTIVE", trigger_index=trigger_index, source_id=source_id, reason=reason,
             connection=self.connection,
         )
 

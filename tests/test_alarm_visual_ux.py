@@ -20,6 +20,9 @@ def test_current_alarm_requires_fresh_alarm_and_active_policy_event():
     assert 'station.policy_state === "SUPPRESSED" || station.policy_state === "RETRIGGER_LOCKED"' in component
     assert 'station.status === "offline" && (station.active_event_id || station.last_event_id)' in component
     assert "tidak sedang berbunyi" in component
+    assert 'station.status === "warning" || station.status === "alarm"' in component
+    assert '"LOW threshold aktif — perlu tindakan"' in component
+    assert "{isActive && onAction ? (" in component
 
 
 def test_alarm_notification_is_accessible_and_deduplicated_by_event_id():
@@ -28,6 +31,10 @@ def test_alarm_notification_is_accessible_and_deduplicated_by_event_id():
     assert "const notifiedAlarmEvents = new Set<string>()" in component
     assert "notifiedAlarmEvents.has(eventId)" in component
     assert "notifiedAlarmEvents.add(eventId)" in component
+    assert "if (!hasActiveThresholdEvent(station)) return null" in component
+    assert 'station.status === "alarm" ? "HIGH threshold aktif:" : "LOW threshold aktif:"' in component
+    overview = source("web/src/pages/OverviewPage.tsx")
+    assert "data.stations.filter(hasActiveThresholdEvent)" in overview
 
 
 def test_action_navigation_is_operator_gated_and_deep_links_to_response_modal():

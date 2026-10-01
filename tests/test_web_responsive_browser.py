@@ -206,18 +206,30 @@ def _serve_ui(*, authenticated: bool = True):
 def chrome_driver():
     pytest.importorskip("selenium")
     from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
 
     chrome = shutil.which("google-chrome") or shutil.which("google-chrome-stable") or shutil.which("chromium")
-    if not chrome:
-        pytest.skip("Chrome/Chromium is not available on this runner")
-    options = Options()
-    options.binary_location = chrome
+    edge = shutil.which("msedge") or next((str(path) for path in (
+        Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+        Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+    ) if path.is_file()), None)
+    if chrome:
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        options = Options()
+        options.binary_location = chrome
+    elif edge:
+        from selenium.webdriver.edge.options import Options
+        options = Options()
+        options.binary_location = edge
+    else:
+        pytest.skip("Chrome/Chromium or Microsoft Edge is not available on this runner")
     for argument in ("--headless=new", "--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu", "--window-size=1366,900"):
         options.add_argument(argument)
-    chromedriver = shutil.which("chromedriver")
-    driver = webdriver.Chrome(service=Service(chromedriver) if chromedriver else Service(), options=options)
+    if chrome:
+        chromedriver = shutil.which("chromedriver")
+        driver = webdriver.Chrome(service=Service(chromedriver) if chromedriver else Service(), options=options)
+    else:
+        driver = webdriver.Edge(options=options)
     driver.set_page_load_timeout(20)
     yield driver
     driver.quit()
@@ -410,28 +422,121 @@ def test_history_station_toolbar_order_and_compact_viewport_layout(chrome_driver
                 "const chart=document.querySelector('.trend-chart-card');"
                 "const carousel=document.querySelector('.history-carousel');"
                 "const selector=document.querySelector('.history-station-selector');"
-                "const controls=[...carousel.querySelectorAll(':scope > button'),"
-                "selector.querySelector('input[aria-label=\"Cari stasiun\"]'),"
-                "selector.querySelector('[role=combobox]')]"
+                "const meta=document.querySelector('.history-toolbar-meta');"
+                "const cards=[...document.querySelectorAll('.history-summary .metric-card')];"
+                "const buttons=[...carousel.querySelectorAll(':scope > button')];"
+                "const combo=selector.querySelector('[role=combobox]');"
+                "const controls=[...buttons,combo]"
                 ".map(node=>node?.getBoundingClientRect());"
-                "if (controls.length!==4 || controls.some(r=>!r)) return {missingControls:true};"
+                "if (controls.length!==3 || controls.some(r=>!r)) return {missingControls:true};"
                 "const rowTop=Math.min(...controls.map(r=>r.top));"
                 "const rowBottom=Math.max(...controls.map(r=>r.bottom));"
+                "const arrows=buttons.map(button=>{const b=button.getBoundingClientRect();const icon=button.querySelector('svg')?.getBoundingClientRect();"
+                "return {width:b.width,height:b.height,centerX:icon&&(icon.left+icon.width/2)-(b.left+b.width/2),centerY:icon&&(icon.top+icon.height/2)-(b.top+b.height/2),bottom:b.bottom};});"
+                "const toolbar=document.querySelector('.history-toolbar');"
+                "const rangeNode=[...toolbar.children].find(node=>!node.matches('.history-carousel,.history-toolbar-meta'));"
+                "const range=rangeNode?.getBoundingClientRect();"
+                "const cardRects=cards.map(card=>card.getBoundingClientRect());"
                 "const r=chart.getBoundingClientRect();"
-                "return {filter:filter.getBoundingClientRect(),summary:summary.getBoundingClientRect(),"
+                "return {filter:filter.getBoundingClientRect(),summary:summary.getBoundingClientRect(),meta:meta.getBoundingClientRect(),"
                 "chart:r,rowHeight:rowBottom-rowTop,controlTops:controls.map(x=>x.top),"
+                "comboHeight:controls[2].height,comboBottom:controls[2].bottom,arrows,"
+                "range:range&&{top:range.top,bottom:range.bottom},cards:cardRects.map(x=>({left:x.left,right:x.right,top:x.top,bottom:x.bottom})),"
                 "viewport:innerHeight,documentOrder:filter.compareDocumentPosition(summary)&Node.DOCUMENT_POSITION_FOLLOWING};",
             )
             assert not geometry.get("missingControls"), geometry
             assert geometry["documentOrder"]
-            assert geometry["rowHeight"] <= 52, geometry
+            assert geometry["rowHeight"] <= (72 if width >= 768 else 52), geometry
             assert max(geometry["controlTops"]) - min(geometry["controlTops"]) <= 16, geometry
+            assert geometry["comboHeight"] == 40, geometry
+            assert len(geometry["arrows"]) == 2, geometry
+            for arrow in geometry["arrows"]:
+                assert arrow["width"] == arrow["height"] == 40, geometry
+                assert abs(arrow["centerX"]) <= 1 and abs(arrow["centerY"]) <= 1, geometry
+                assert abs(arrow["bottom"] - geometry["comboBottom"]) <= 1, geometry
             assert geometry["filter"]["top"] < geometry["summary"]["top"] < geometry["chart"]["top"]
+            assert geometry["meta"]["top"] >= geometry["range"]["bottom"] - 1, geometry
+            assert len(geometry["cards"]) == 4, geometry
+            card_tops = {round(card["top"]) for card in geometry["cards"]}
+            card_bottoms = {round(card["bottom"]) for card in geometry["cards"]}
+            if width >= 768:
+                assert len(card_tops) == len(card_bottoms) == 1, geometry
+            else:
+                assert len(card_tops) == len(card_bottoms) == 2, geometry
             assert geometry["chart"]["top"] < height
             visible_chart = min(geometry["chart"]["bottom"], height) - max(geometry["chart"]["top"], 0)
             assert visible_chart / geometry["chart"]["height"] >= 0.8, geometry
             assert chrome_driver.find_elements(By.CSS_SELECTOR, ".history-selected-meta")
             _assert_no_horizontal_overflow(chrome_driver)
+
+
+def test_history_station_combobox_searches_by_name_and_serid_and_supports_keyboard_and_click(chrome_driver):
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.support.ui import WebDriverWait
+
+    with _serve_ui() as base:
+        _set_viewport(chrome_driver, 390, 844)
+        chrome_driver.get(f"{base}/app/history?station=3801")
+        _wait_for(chrome_driver, '[data-testid="history-station-combobox"]')
+        station = chrome_driver.find_element(By.CSS_SELECTOR, '[data-testid="history-station-combobox"]')
+        assert station.get_attribute("role") == "combobox"
+        assert station.get_attribute("aria-label") == "Stasiun"
+        assert station.get_attribute("aria-autocomplete") == "list"
+        assert "Kolam Reaktor" in station.get_attribute("value")
+
+        station.click()
+        listbox = chrome_driver.find_element(By.ID, "history-station-listbox")
+        assert listbox.find_elements(By.CSS_SELECTOR, '[role="option"]')
+        assert listbox.find_elements(By.CSS_SELECTOR, '[role="option"][aria-selected="true"]')
+        geometry = chrome_driver.execute_script(
+            "const input=document.querySelector('[data-testid=history-station-combobox]');"
+            "const list=document.querySelector('#history-station-listbox');"
+            "const ancestor=document.querySelector('.history-filter');"
+            "ancestor.style.overflow='hidden';ancestor.style.contain='paint';"
+            "const a=input.getBoundingClientRect(),b=list.getBoundingClientRect();"
+            "return {inBody:list.parentElement===document.body,insideAncestor:ancestor.contains(list),"
+            "position:getComputedStyle(list).position,left:b.left,top:b.top,right:b.right,bottom:b.bottom,"
+            "inputLeft:a.left,inputBottom:a.bottom,viewportWidth:innerWidth,viewportHeight:innerHeight};",
+        )
+        assert geometry["inBody"] and not geometry["insideAncestor"], geometry
+        assert geometry["position"] == "fixed", geometry
+        assert abs(geometry["left"] - geometry["inputLeft"]) <= 1, geometry
+        assert abs(geometry["top"] - (geometry["inputBottom"] + 4)) <= 1, geometry
+        assert geometry["left"] >= 0 and geometry["right"] <= geometry["viewportWidth"], geometry
+        assert geometry["top"] >= 0 and geometry["bottom"] <= geometry["viewportHeight"], geometry
+
+        chrome_driver.execute_script("window.scrollTo(0, 120)")
+        WebDriverWait(chrome_driver, 5).until(lambda browser: browser.execute_script(
+            "const a=document.querySelector('[data-testid=history-station-combobox]').getBoundingClientRect();"
+            "const b=document.querySelector('#history-station-listbox').getBoundingClientRect();"
+            "return Math.abs(b.left-a.left)<2 && Math.abs(b.top-(a.bottom+4))<2;"
+        ))
+
+        station.send_keys("5201")
+        WebDriverWait(chrome_driver, 5).until(
+            lambda browser: len(browser.find_elements(By.CSS_SELECTOR, '#history-station-listbox [role="option"]')) == 1
+        )
+        option = chrome_driver.find_element(By.CSS_SELECTOR, '#history-station-listbox [role="option"]')
+        assert "SERID 5201" in _element_text(option)
+        assert station.get_attribute("aria-activedescendant") == option.get_attribute("id")
+        station.send_keys(Keys.ENTER)
+        WebDriverWait(chrome_driver, 8).until(lambda browser: "serid=5201" in browser.current_url)
+        assert "Server 52" in station.get_attribute("value")
+        assert "Offline — last-known" in chrome_driver.find_element(By.CSS_SELECTOR, ".history-selected-meta").text
+
+        station.click()
+        station.send_keys(Keys.CONTROL, "a")
+        station.send_keys("Detector 07")
+        WebDriverWait(chrome_driver, 5).until(
+            lambda browser: len(browser.find_elements(By.CSS_SELECTOR, '#history-station-listbox [role="option"]')) == 1
+        )
+        option = chrome_driver.find_element(By.CSS_SELECTOR, '#history-station-listbox [role="option"]')
+        assert "Detector 07" in _element_text(option)
+        option.click()
+        WebDriverWait(chrome_driver, 8).until(lambda browser: "serid=6007" in browser.current_url)
+        assert station.get_attribute("value").startswith("Detector 07")
+        _assert_no_horizontal_overflow(chrome_driver)
 
 
 def test_mobile_alarm_and_user_dialogs_stay_inside_viewport(chrome_driver):
@@ -469,7 +574,10 @@ def test_native_dialog_selects_and_filter_portals_stay_above_navigation(chrome_d
 
     def open_and_assert(selector: str):
         trigger = chrome_driver.find_element(By.CSS_SELECTOR, selector)
-        chrome_driver.execute_script("arguments[0].click()", trigger)
+        if trigger.tag_name.lower() == "input":
+            trigger.click()
+        else:
+            chrome_driver.execute_script("arguments[0].click()", trigger)
         _wait_for(chrome_driver, "[role=listbox]")
         result = _wait_for_portal_layout(chrome_driver)
         assert result["z"] >= 100

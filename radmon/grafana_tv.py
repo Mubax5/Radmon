@@ -183,6 +183,12 @@ FROM ({latest}) v
 """.strip()
 
 
+def _format_dose_sql(expression: str) -> str:
+    cast = f"CAST({expression} AS CHAR)"
+    trimmed = f"TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM {cast}))"
+    return f"CASE WHEN {cast} LIKE '%.%' THEN {trimmed} ELSE {cast} END"
+
+
 def _latest_scalar_stat(
     panel_id: int,
     title: str,
@@ -194,18 +200,20 @@ def _latest_scalar_stat(
     *,
     unit: str = "none",
     color: str = "green",
-    decimals: int = 2,
+    decimals: int | None = None,
     value_size: int = 30,
 ) -> dict[str, Any]:
     panel = _panel(panel_id, "stat", title, x, y, w, h)
     panel["targets"] = [_target(sql)]
-    panel["fieldConfig"] = {
-        "defaults": {
+    defaults = {
             "unit": unit,
-            "decimals": decimals,
             "color": {"mode": "fixed", "fixedColor": color},
             "thresholds": {"mode": "absolute", "steps": [{"color": color, "value": None}]},
-        },
+        }
+    if decimals is not None:
+        defaults["decimals"] = decimals
+    panel["fieldConfig"] = {
+        "defaults": defaults,
         "overrides": [],
     }
     panel["options"] = {
@@ -223,17 +231,24 @@ def _latest_scalar_stat(
 
 def _dose_stat(panel_id, station, x, y, w, h=2):
     panel = _panel(panel_id, "stat", f"[{station.serid}] {station.room} ({station.location})", x, y, w, h)
-    # vrecent always exposes one row per known detector (NULL doserate when
-    # offline), so this returns an offline row instead of Grafana No Data.
+    panel["description"] = "central-status-lamp"
+    # vrecent always exposes one row per known detector, including offline ones.
     panel["targets"] = [_target(f"""
-SELECT doserate AS value
+SELECT CASE status
+  WHEN 'OFFLINE' THEN 0
+  WHEN 'NORMAL' THEN 1
+  WHEN 'ALERT' THEN 2
+  WHEN 'ALARM' THEN 3
+  WHEN 'SUPPRESSED' THEN 4
+  ELSE 0
+END AS value
 FROM vrecent
 WHERE serid = {station.serid}
 ORDER BY dtom DESC
 LIMIT 1
 """)]
-    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "color": {"mode": "fixed", "fixedColor": "green"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": None}]}}, "overrides": []}
-    panel["options"] = {"colorMode": "value", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False}, "text": {"valueSize": 28}, "textMode": "value", "wideLayout": True}
+    panel["fieldConfig"] = {"defaults": {"unit": "none", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "gray", "value": None}, {"color": "green", "value": 1}, {"color": "yellow", "value": 2}, {"color": "red", "value": 3}, {"color": "yellow", "value": 4}]}, "mappings": [{"type": "value", "options": {"0": {"color": "gray", "text": "OFFLINE"}, "1": {"color": "green", "text": "NORMAL"}, "2": {"color": "yellow", "text": "LOW / WARNING"}, "3": {"color": "red", "text": "HIGH / ALARM"}, "4": {"color": "yellow", "text": "SUPPRESSED"}}}]}, "overrides": []}
+    panel["options"] = {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False}, "text": {"valueSize": 28}, "textMode": "value", "wideLayout": True}
     return panel
 
 
@@ -284,7 +299,7 @@ LIMIT 1)
 ORDER BY time ASC
 """, format_="time_series", ref_id="B"),
     ]
-    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "color": {"mode": "fixed", "fixedColor": "green"}, "custom": {"axisPlacement": "hidden", "drawStyle": "line", "fillOpacity": 18, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
+    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "color": {"mode": "fixed", "fixedColor": "green"}, "custom": {"axisPlacement": "hidden", "drawStyle": "line", "fillOpacity": 18, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
     panel["options"] = {"legend": {"displayMode": "hidden", "placement": "bottom", "showLegend": False}, "tooltip": {"mode": "single", "sort": "none"}}
     return panel
 
@@ -316,7 +331,7 @@ SELECT
   s.serid AS `ID`,
   s.name AS `Ruangan`,
   s.location AS `Lokasi`,
-  ROUND(s.doserate, 3) AS `Dose Rate`,
+  {_format_dose_sql('s.doserate')} AS `Dose Rate`,
   DATE_FORMAT(s.dtom, '%Y-%m-%d %H:%i:%s') AS `Waktu`,
   s.status AS `Status`,
   s.underlying_status AS `Underlying`,
@@ -328,7 +343,7 @@ SELECT
 FROM ({relation}) s
 ORDER BY FIELD(s.status, 'OFFLINE' {STATUS_COLLATION}, 'SUPPRESSED' {STATUS_COLLATION}, 'ALARM' {STATUS_COLLATION}, 'ALERT' {STATUS_COLLATION}, 'NORMAL' {STATUS_COLLATION}), s.serid
 """)]
-    table["fieldConfig"] = {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": [{"matcher": {"id": "byName", "options": "Dose Rate"}, "properties": [{"id": "unit", "value": "suffix: µSv/h"}, {"id": "decimals", "value": 3}]}, {"matcher": {"id": "byName", "options": "Status"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"NORMAL": {"color": "green", "text": "NORMAL"}, "ALERT": {"color": "orange", "text": "ALERT"}, "ALARM": {"color": "red", "text": "ALARM"}, "OFFLINE": {"color": "purple", "text": "OFFLINE"}, "SUPPRESSED": {"color": "blue", "text": "SUPPRESSED"}}}]}, {"id": "custom.cellOptions", "value": {"type": "color-background"}}]}]}
+    table["fieldConfig"] = {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": [{"matcher": {"id": "byName", "options": "Dose Rate"}, "properties": [{"id": "unit", "value": "suffix: µSv/h"}]}, {"matcher": {"id": "byName", "options": "Status"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"NORMAL": {"color": "green", "text": "NORMAL"}, "ALERT": {"color": "yellow", "text": "LOW / WARNING"}, "ALARM": {"color": "red", "text": "HIGH / ALARM"}, "OFFLINE": {"color": "gray", "text": "OFFLINE"}, "SUPPRESSED": {"color": "yellow", "text": "SUPPRESSED"}}}]}, {"id": "custom.cellOptions", "value": {"type": "color-background"}}]}]}
     table["options"] = {"cellHeight": "sm", "enablePagination": False, "showHeader": True}
     return table
 
@@ -391,7 +406,7 @@ ORDER BY time ASC, metric ASC
 LIMIT 30
 """, format_="time_series", ref_id="B"),
     ]
-    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 3, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
+    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
     panel["options"] = {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": True, "calcs": []}, "tooltip": {"mode": "multi", "sort": "desc"}}
     return panel
 
@@ -430,15 +445,15 @@ def build_page_two() -> dict[str, Any]:
         panel_id += 1
     latest = _latest_relation()
     summaries = [
-        ("Dose Rate Tertinggi Saat Ini", f"SELECT MAX(m.doserate) AS value FROM ({latest}) m", 0, "red", 2),
-        ("Rata-rata Saat Ini", f"SELECT AVG(m.doserate) AS value FROM ({latest}) m", 6, "blue", 2),
-        ("Detector Online", f"SELECT SUM(CASE WHEN s.status <> 'OFFLINE' {STATUS_COLLATION} THEN 1 ELSE 0 END) AS value FROM ({_status_relation()}) s", 12, "green", 0),
-        ("Detector Offline", f"SELECT SUM(CASE WHEN s.status = 'OFFLINE' {STATUS_COLLATION} THEN 1 ELSE 0 END) AS value FROM ({_status_relation()}) s", 18, "purple", 0),
+        ("Dose Rate Tertinggi Saat Ini", f"SELECT MAX(m.doserate) AS value FROM ({latest}) m", 0, "red", "suffix: µSv/h", None),
+        ("Rata-rata Saat Ini", f"SELECT AVG(m.doserate) AS value FROM ({latest}) m", 6, "blue", "suffix: µSv/h", None),
+        ("Detector Online", f"SELECT SUM(CASE WHEN s.status <> 'OFFLINE' {STATUS_COLLATION} THEN 1 ELSE 0 END) AS value FROM ({_status_relation()}) s", 12, "green", "none", 0),
+        ("Detector Offline", f"SELECT SUM(CASE WHEN s.status = 'OFFLINE' {STATUS_COLLATION} THEN 1 ELSE 0 END) AS value FROM ({_status_relation()}) s", 18, "purple", "none", 0),
     ]
-    for title, sql, x, color, decimals in summaries:
+    for title, sql, x, color, unit, decimals in summaries:
         dashboard["panels"].append(_latest_scalar_stat(
             panel_id, title, sql, x, 14, 6, 4,
-            unit="suffix: µSv/h" if decimals else "none",
+            unit=unit,
             color=color, decimals=decimals, value_size=42,
         ))
         panel_id += 1
@@ -474,7 +489,7 @@ ORDER BY FIELD(s.status, 'ALARM' {STATUS_COLLATION}, 'ALERT' {STATUS_COLLATION},
     )
     stats = [
         (12, "NORMAL", "green", 0),
-        (13, "ALERT", "orange", 6),
+        (13, "ALERT", "yellow", 6),
         (14, "ALARM", "red", 12),
         (15, "OFFLINE", "purple", 18),
     ]
@@ -494,8 +509,8 @@ SELECT
   d.name AS `Ruangan`,
   d.location AS `Lokasi`,
   CASE WHEN a.lvl >= 2 THEN 'ALARM' ELSE 'ALERT' END AS `Status`,
-  ROUND(a.mvalue, 3) AS `Dose Rate`,
-  ROUND(a.thvalue, 3) AS `Threshold`,
+  {_format_dose_sql('a.mvalue')} AS `Dose Rate`,
+  {_format_dose_sql('a.thvalue')} AS `Threshold`,
   a.nhit AS `Hit Count`,
   a.i_op AS `Action Time`,
   COALESCE(a.pic, '') AS `PIC`,

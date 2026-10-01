@@ -107,12 +107,56 @@ def test_history_keeps_station_toolbar_before_summary_and_chart_with_compact_rul
     assert history.index('className="filter-card history-filter"') < history.index('className="metric-grid history-summary"')
     assert history.index('className="metric-grid history-summary"') < history.index('className="action-card trend-chart-card"')
     carousel = history[history.index('className="history-carousel"'):history.index('className="history-toolbar-meta"')]
-    for control in ('data-testid="history-prev"', 'data-testid="history-search"', 'data-testid="history-station-select"', 'data-testid="history-next"'):
+    for control in ('data-testid="history-prev"', 'data-testid="history-station-combobox"', 'data-testid="history-next"'):
         assert control in carousel
+    assert 'data-testid="history-search"' not in history
+    assert 'data-testid="history-station-select"' not in history
     assert 'data-testid="history-range-select"' in carousel
     assert 'Offline — last-known' in history
-    assert '.history-carousel {' in css and 'grid-template-columns: 32px minmax(0, 1fr) 32px' in css
+    assert '.history-carousel {' in css and 'grid-template-columns: 40px minmax(0, 1fr) 40px' in css
+    assert 'grid-template-columns: minmax(0, 1fr) auto' in css
+    assert 'column-gap: 12px' in css and 'row-gap: 8px' in css
+    assert 'justify-content: flex-end' in css and 'overflow-wrap: anywhere' in css
+    assert 'min-height: 68px' in css and 'padding: 12px 14px' in css
+    assert '@media (max-width: 767px)' in css and 'grid-template-columns: minmax(0, 1fr);' in css
     assert '.history-page .trend-chart svg {' in css and 'min-height: 0' in css
+
+
+def test_history_uses_one_accessible_local_searchable_station_combobox_and_centered_arrows():
+    history = read("pages/HistoryPage.tsx")
+    css = read("ui-polish.css")
+    assert history.count('data-testid="history-station-combobox"') == 1
+    assert '<input' in history and 'type="text"' in history
+    assert 'role="combobox"' in history
+    assert 'aria-autocomplete="list"' in history
+    assert 'aria-haspopup="listbox"' in history
+    assert 'aria-activedescendant=' in history
+    assert 'role="listbox"' in history and 'role="option"' in history
+    assert '`${station.name} ${station.serid}`' in history
+    assert 'onKeyDown={handleStationKeyDown}' in history
+    assert 'event.key === "ArrowDown"' in history
+    assert 'event.key === "ArrowUp"' in history
+    assert 'event.key === "Enter"' in history
+    assert 'event.key === "Escape"' in history
+    assert 'history-station-listbox' in history
+    assert 'stationLabel(selectedStation)' in history
+    assert 'onClick={() => selectStation(station)}' in history
+    assert 'createPortal(' in history and 'document.body' in history
+    assert 'position: "fixed"' in history
+    assert 'import { CaretLeft, CaretRight } from "@phosphor-icons/react"' in history
+    assert '<CaretLeft aria-hidden="true"' in history
+    assert '<CaretRight aria-hidden="true"' in history
+    assert '‹' not in history and '›' not in history
+    assert '.history-station-listbox {' in css
+    assert 'position: fixed' in css[css.index('.history-station-listbox {'):css.index('.history-toolbar > .native-select-field {')]
+    assert 'z-index: 2147483647' in css[css.index('.history-station-listbox {'):css.index('.history-toolbar > .native-select-field {')]
+    assert 'width: 40px' in css[css.index('.history-carousel > button {'):css.index('.history-station-selector {')]
+    assert 'height: 40px' in css[css.index('.history-carousel > button {'):css.index('.history-station-selector {')]
+    assert 'display: grid' in css[css.index('.history-carousel > button {'):css.index('.history-station-selector {')]
+    assert 'place-items: center' in css[css.index('.history-carousel > button {'):css.index('.history-station-selector {')]
+    mobile = css[css.index('@media (max-width: 767px)'):css.index('@media (min-width: 768px)', css.index('@media (max-width: 767px)'))]
+    assert 'grid-template-columns: 40px minmax(0, 1fr) 40px' in mobile
+    assert 'height: 40px' in mobile
 
 
 def test_history_controls_share_one_row_and_chart_uses_remaining_page_height():
@@ -121,9 +165,8 @@ def test_history_controls_share_one_row_and_chart_uses_remaining_page_height():
     toolbar_start = history.index('<div className="history-toolbar">')
     toolbar_end = history.index("</div>", history.index('className="history-toolbar-meta"'))
     toolbar = history[toolbar_start:toolbar_end]
-    assert toolbar.index('data-testid="history-prev"') < toolbar.index('data-testid="history-search"')
-    assert toolbar.index('data-testid="history-search"') < toolbar.index('data-testid="history-station-select"')
-    assert toolbar.index('data-testid="history-station-select"') < toolbar.index('data-testid="history-next"')
+    assert toolbar.index('data-testid="history-prev"') < toolbar.index('data-testid="history-station-combobox"')
+    assert toolbar.index('data-testid="history-station-combobox"') < toolbar.index('data-testid="history-next"')
     assert toolbar.index('data-testid="history-next"') < toolbar.index('data-testid="history-range-select"')
     assert toolbar.index('data-testid="history-range-select"') < toolbar.index('className="history-toolbar-meta"')
     assert "grid-template-rows: auto auto auto minmax(300px, 1fr) auto" in css

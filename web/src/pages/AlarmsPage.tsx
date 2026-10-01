@@ -3,6 +3,7 @@ import { Badge, Button, LayerCard, Table } from "@cloudflare/kumo";
 import { api } from "../api";
 import { AlarmOperations, type Suppression } from "../Actions";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
+import { formatDoseValue } from "../format";
 import { useWebRefresh } from "../live";
 import {
   ErrorCard,
@@ -34,11 +35,17 @@ function lifecycle(event: PolicyEvent): string {
 }
 
 function eventVariant(event: PolicyEvent): "success" | "warning" | "error" | "secondary" {
-  if (event.kind === "ALARM" && event.status === "ACTIVE") return "error";
+  if (event.kind === "ALARM" && event.status === "ACTIVE") return event.reason === "LOW_THRESHOLD" ? "warning" : "error";
   if (event.kind === "RETRIGGER_LOCKED") return "warning";
   if (event.kind === "SUPPRESSED") return "warning";
   if (event.status === "RESOLVED" || event.status === "NORMAL") return "success";
   return "secondary";
+}
+
+function eventLabel(event: PolicyEvent): string {
+  if (event.kind === "ALARM" && event.reason === "LOW_THRESHOLD") return "LOW / WARNING";
+  if (event.kind === "ALARM" && event.reason === "HIGH_THRESHOLD") return "HIGH / ALARM";
+  return event.kind;
 }
 
 function EventCards({ events }: { events: PolicyEvent[] }) {
@@ -50,13 +57,13 @@ function EventCards({ events }: { events: PolicyEvent[] }) {
           <div className="alarm-card-header">
             <div>
               <h3>SERID {event.serid}</h3>
-              <div className="cell-subtle">{event.kind}</div>
+              <div className="cell-subtle">{eventLabel(event)}</div>
             </div>
             <Badge variant={eventVariant(event)}>{event.status || event.kind}</Badge>
           </div>
           <div className="card-meta">
-            <span>Measurement: {event.measured_value ?? "—"}</span>
-            <span>Threshold: {event.threshold ?? "—"}</span>
+            <span>Measurement: {formatDoseValue(event.measured_value)}</span>
+            <span>Threshold: {formatDoseValue(event.threshold)}</span>
             <span>Muncul: {formatTimestamp(event.surfaced_at)}</span>
             {lifecycle(event) !== "—" ? <span>Lifecycle: {lifecycle(event)}</span> : null}
           </div>
@@ -86,10 +93,10 @@ function EventTable({ events }: { events: PolicyEvent[] }) {
           {events.map((event) => (
             <Table.Row key={event.event_id}>
               <Table.Cell><strong>SERID {event.serid}</strong></Table.Cell>
-              <Table.Cell>{event.kind}</Table.Cell>
+              <Table.Cell>{eventLabel(event)}</Table.Cell>
               <Table.Cell><Badge variant={eventVariant(event)}>{event.status || event.kind}</Badge></Table.Cell>
-              <Table.Cell>{event.measured_value ?? "—"}</Table.Cell>
-              <Table.Cell>{event.threshold ?? "—"}</Table.Cell>
+              <Table.Cell>{formatDoseValue(event.measured_value)}</Table.Cell>
+              <Table.Cell>{formatDoseValue(event.threshold)}</Table.Cell>
               <Table.Cell>{formatTimestamp(event.surfaced_at)}</Table.Cell>
               <Table.Cell>{lifecycle(event)}</Table.Cell>
             </Table.Row>

@@ -321,93 +321,181 @@
 }
 
 .history-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  column-gap: 12px;
+  row-gap: 8px;
   min-width: 0;
 }
 
 .history-carousel {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) 36px;
-  align-items: center;
-  gap: 6px;
-  flex: 1 1 auto;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: end;
+  gap: 10px;
+  grid-column: 1;
   min-width: 0;
 }
 
 .history-carousel > button {
-  width: 36px;
-  min-width: 36px;
-  height: 36px;
-  min-height: 36px;
+  width: 40px;
+  flex: 0 0 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
   padding: 0;
-  font-size: 20px;
+  display: grid;
+  place-items: center;
+  line-height: 0;
+  align-self: end;
+  margin: 0;
 }
 
 .history-station-selector {
+  position: relative;
+  min-width: 0;
+}
+
+.history-station-combobox {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  align-items: center;
-  gap: 6px;
+  gap: 4px;
   min-width: 0;
 }
 
-.history-station-selector .native-input-field,
-.history-station-selector .native-select-field {
-  min-width: 0;
-  gap: 0;
-}
-
-.history-station-selector .native-input-field > span,
-.history-station-selector .native-select-field > span,
+.history-station-combobox > label,
 .history-toolbar > .native-select-field > span {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
+  display: block;
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  clip: auto;
+  color: #4b5563;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: normal;
 }
 
-.history-station-selector input,
-.history-station-selector [role="combobox"],
+.history-station-combobox [role="combobox"],
 .history-toolbar > .native-select-field [role="combobox"] {
   width: 100%;
   min-width: 0;
-  height: 36px;
-  min-height: 36px;
-  padding-block: 6px;
-  font-size: 12px;
+  height: 40px;
+  min-height: 40px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.history-station-combobox [role="combobox"] {
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  color: #111827;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+}
+
+.history-station-combobox [role="combobox"]:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+.history-station-combobox [role="combobox"]:disabled {
+  cursor: not-allowed;
+  opacity: .65;
+}
+
+.history-station-listbox {
+  position: fixed;
+  z-index: 2147483647;
+  max-height: 320px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(17 24 39 / 18%);
+}
+
+.history-station-listbox [role="option"] {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-bottom: 1px solid #eef0f2;
+  background: #fff;
+  color: #111827;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.history-station-listbox [role="option"]:last-child {
+  border-bottom: 0;
+}
+
+.history-station-listbox [role="option"] > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.history-station-listbox [role="option"] > span:last-child {
+  flex: 0 0 auto;
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.history-station-listbox [role="option"].is-active,
+.history-station-listbox [role="option"]:hover {
+  background: #f3f4f6;
+}
+
+.history-station-listbox .history-station-empty {
+  color: #6b7280;
+  cursor: default;
 }
 
 .history-toolbar > .native-select-field {
-  flex: 0 0 148px;
+  grid-column: 2;
+  width: 164px;
+  min-width: 164px;
 }
 
 .history-toolbar-meta {
   display: flex;
+  grid-column: 1 / -1;
   align-items: center;
-  gap: 8px;
-  flex: 0 1 260px;
-  max-width: 260px;
+  justify-content: flex-end;
+  gap: 10px;
+  width: 100%;
+  max-width: none;
   min-width: 0;
-  padding-left: 0;
+  padding: 2px 2px 0;
 }
 
 .history-selected-meta {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px 12px;
   min-width: 0;
+  max-width: 100%;
   margin: 0;
 }
 
 .history-selected-meta > span {
   min-width: 0;
-  flex: 1 1 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .history-selected-meta .alarm-status {
@@ -420,13 +508,16 @@
 }
 
 .history-summary .metric-card {
-  padding: 9px 12px;
-  gap: 3px;
+  min-height: 68px;
+  padding: 12px 14px;
+  align-content: center;
+  gap: 5px;
 }
 
 .history-summary .metric-value {
   font-size: clamp(18px, 2vw, 24px);
   line-height: 1.2;
+  font-variant-numeric: tabular-nums;
 }
 
 .history-page .page-section {
@@ -699,53 +790,54 @@
   .history-toolbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
+    row-gap: 8px;
   }
 
   .history-toolbar > .native-select-field {
+    grid-column: 1;
     justify-self: end;
     width: 112px;
-    flex-basis: auto;
+    min-width: 0;
   }
 
   .history-carousel {
-    grid-template-columns: 32px minmax(0, 1fr) 32px;
-    gap: 4px;
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    grid-column: 1;
+    align-items: end;
+    gap: 8px;
   }
 
   .history-carousel > button {
-    width: 32px;
-    min-width: 32px;
-    height: 34px;
-    min-height: 34px;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
   }
 
-  .history-station-selector {
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr);
-    gap: 4px;
-  }
-
-  .history-station-selector input,
-  .history-station-selector [role="combobox"],
+  .history-station-combobox [role="combobox"],
   .history-toolbar > .native-select-field [role="combobox"] {
-    height: 34px;
-    min-height: 34px;
-    padding-inline: 7px;
-    font-size: 11px;
+    height: 40px;
+    min-height: 40px;
+    padding-inline: 8px;
+    font-size: 12px;
   }
 
   .history-toolbar-meta {
     display: block;
+    grid-column: 1;
     max-width: none;
-    padding-left: 36px;
+    padding: 0 2px;
   }
 
   .history-selected-meta {
     display: block;
+    text-align: left;
   }
 
   .history-selected-meta > span + span {
-    margin-left: 8px;
+    display: block;
+    margin: 3px 0 0;
+    text-align: left;
   }
 
   .history-carousel-hint {
@@ -775,7 +867,8 @@
   }
 
   .history-summary .metric-card {
-    padding: 7px 9px;
+    min-height: 60px;
+    padding: 8px 10px;
   }
 
   .history-summary .metric-label {

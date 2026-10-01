@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import logging
 import os
 import socket
 
@@ -39,41 +40,92 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
             f"{base_url.rstrip('/')}/api/datasources/uid/{DATASOURCE_UID}/health"
         )
         try:
-            response = self._request_json(endpoint)
+            response = self._request_json(endpoint, method="POST")
         except Exception as exc:
             return False, str(exc)
         status = str(response.get("status") or "").strip().casefold()
+        details = response.get("details") if isinstance(response, dict) else None
+        verbose_message = details.get("verboseMessage") if isinstance(details, dict) else None
         detail = str(
-            response.get("message")
+            verbose_message
+            or response.get("message")
             or response.get("error")
             or response.get("status")
             or "unknown datasource health response"
         ).strip()
         return status in {"ok", "success"}, detail
 
-    def _ensure_datasource_connection(self, base_url: str) -> None:
-        """Verify Grafana can actually query MariaDB and recreate stale datasource state once."""
+    def _ensure_datasource_connection(self, base_url: str) -> bool:
+        """Verify Grafana's datasource, repairing only its configured secret if needed."""
         base = base_url.rstrip("/")
         datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
         healthy, detail = self._datasource_health(base)
         if healthy:
-            return
+            return True
 
-        # A persisted Grafana SQLite datasource can keep stale/invalid secure state
-        # across upgrades. Recreate the datasource with the same stable UID and the
-        # current RadMon DB settings, leaving dashboards and playlists untouched.
-        self._request_json(datasource_endpoint, method="DELETE")
-        self._request_json(
-            f"{base}/api/datasources",
-            method="POST",
-            payload=self._datasource_payload(),
+        if "authentication plugin is not supported" in detail.casefold():
+            logging.getLogger(__name__).error(
+                "Grafana datasource is degraded: its MariaDB account advertises an unsupported authentication plugin"
+            )
+            return False
+
+        # Grafana intentionally redacts secure fields from datasource GET responses.
+        # Keep its saved UID and all non-secret settings, and refresh only the
+        # password held in the active RadMon DB configuration. Never delete or
+        # recreate persistent datasource state as a health-repair shortcut.
+        try:
+            current = self._request_json(datasource_endpoint)
+        except Exception as exc:
+            detail = str(exc)
+            for secret in (self.settings.db_password, self.settings.grafana_password):
+                if secret:
+                    detail = detail.replace(secret, "<redacted>")
+            logging.getLogger(__name__).error(
+                "Grafana datasource is degraded and its settings could not be safely read: %s",
+                detail,
+            )
+            return False
+        if not isinstance(current, dict) or current.get("uid") != DATASOURCE_UID:
+            logging.getLogger(__name__).error(
+                "Grafana datasource is degraded and its settings could not be safely read; persistent state was left untouched"
+            )
+            return False
+        preserved_fields = (
+            "id",
+            "orgId",
+            "uid",
+            "name",
+            "type",
+            "access",
+            "url",
+            "database",
+            "user",
+            "basicAuth",
+            "basicAuthUser",
+            "withCredentials",
+            "isDefault",
+            "jsonData",
         )
+        payload = {
+            key: deepcopy(current[key])
+            for key in preserved_fields
+            if key in current
+        }
+        payload["secureJsonData"] = {"password": self.settings.db_password}
+        self._request_json(datasource_endpoint, method="PUT", payload=payload)
+
         repaired, repaired_detail = self._datasource_health(base)
         if not repaired:
-            raise RuntimeError(
-                "Grafana datasource MariaDB tetap tidak sehat setelah repair: "
-                f"{repaired_detail or detail}"
+            safe_detail = repaired_detail or detail
+            for secret in (self.settings.db_password, self.settings.grafana_password):
+                if secret:
+                    safe_detail = safe_detail.replace(secret, "<redacted>")
+            logging.getLogger(__name__).error(
+                "Grafana datasource remains degraded after password-only repair: %s",
+                safe_detail,
             )
+            return False
+        return True
 
     @staticmethod
     def _refresh_managed_dashboard_queries(
@@ -124,6 +176,50 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                 panel["datasource"] = deepcopy(factory_datasource)
                 changed = True
 
+            # Page-one status lamps are managed presentation: apply the central
+            # status mappings/colors while leaving every panel's saved grid
+            # position, title, and operator-created panels untouched.
+            if factory_panel.get("description") == "central-status-lamp":
+                for key in ("fieldConfig", "options"):
+                    factory_value = factory_panel.get(key)
+                    if factory_value is not None and panel.get(key) != factory_value:
+                        panel[key] = deepcopy(factory_value)
+                        changed = True
+
+            # Remove stale fixed precision from managed dose panels. Grafana's
+            # automatic formatter keeps significant digits without padding or
+            # rounding them; keep all other saved field formatting intact.
+            factory_config = factory_panel.get("fieldConfig") or {}
+            saved_config = panel.get("fieldConfig")
+            if isinstance(factory_config, dict) and isinstance(saved_config, dict):
+                factory_defaults = factory_config.get("defaults") or {}
+                saved_defaults = saved_config.get("defaults")
+                managed_dose_unit = isinstance(factory_defaults, dict) and "µSv/h" in str(factory_defaults.get("unit") or "")
+                if managed_dose_unit and isinstance(saved_defaults, dict) and "decimals" not in factory_defaults and "decimals" in saved_defaults:
+                    saved_defaults.pop("decimals", None)
+                    changed = True
+
+                factory_overrides = factory_config.get("overrides") or []
+                saved_overrides = saved_config.get("overrides") or []
+                dose_overrides = {
+                    (item.get("matcher", {}).get("id"), item.get("matcher", {}).get("options"))
+                    for item in factory_overrides
+                    if isinstance(item, dict)
+                    and item.get("matcher", {}).get("id") == "byName"
+                    and item.get("matcher", {}).get("options") in {"Dose Rate", "Threshold"}
+                }
+                for override in saved_overrides:
+                    if not isinstance(override, dict):
+                        continue
+                    matcher = override.get("matcher") or {}
+                    if (matcher.get("id"), matcher.get("options")) not in dose_overrides:
+                        continue
+                    properties = override.get("properties") or []
+                    retained = [item for item in properties if item.get("id") != "decimals"]
+                    if len(retained) != len(properties):
+                        override["properties"] = retained
+                        changed = True
+
             # Migrate the installed factory label, but leave an operator's
             # deliberate panel rename intact.
             if is_page_two and factory_panel.get("description") == "building-dose-trend":
@@ -136,30 +232,9 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
 
         return migrated, changed
 
-    def _provision_via_api(self, base_url: str) -> bool:
+    def _provision_dashboards_via_api(self, base_url: str) -> None:
+        """Provision dashboard contracts through Grafana's API without touching datasource state."""
         base = base_url.rstrip("/")
-        datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
-        datasource_payload = self._datasource_payload()
-        try:
-            self._request_json(datasource_endpoint)
-        except Exception:
-            self._request_json(
-                f"{base}/api/datasources",
-                method="POST",
-                payload=datasource_payload,
-            )
-        else:
-            # Dashboard state is persistent and operator-owned, but datasource
-            # connection settings must follow the current RadMon config. This
-            # also repairs credentials after an installer upgrade or .env edit.
-            self._request_json(
-                datasource_endpoint,
-                method="PUT",
-                payload=datasource_payload,
-            )
-
-        self._ensure_datasource_connection(base)
-
         for factory_dashboard in self._dashboard_payloads():
             uid = str(factory_dashboard.get("uid") or "")
             dashboard_endpoint = f"{base}/api/dashboards/uid/{uid}"
@@ -201,6 +276,22 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                                 "message": "RadMon monitoring query contract migration",
                             },
                         )
+
+    def _provision_via_api(self, base_url: str) -> bool:
+        base = base_url.rstrip("/")
+        datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
+        datasource_payload = self._datasource_payload()
+        try:
+            self._request_json(datasource_endpoint)
+        except Exception:
+            self._request_json(
+                f"{base}/api/datasources",
+                method="POST",
+                payload=datasource_payload,
+            )
+
+        self._ensure_datasource_connection(base)
+        self._provision_dashboards_via_api(base)
 
         playlist_endpoint = (
             f"{base}/apis/playlist.grafana.app/v1/namespaces/default/playlists/{PLAYLIST_UID}"

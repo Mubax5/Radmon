@@ -8,6 +8,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QLabel, QToolBar, QMessageBox, QDialog
 
 from .audit import AuditTrail
+from .formatting import format_dose_value
 from .security import Role, SecurityStore, UserIdentity
 
 
@@ -49,8 +50,8 @@ def get_context() -> SecurityContext | None:
 def _format_active_alarm(item: dict[str, Any]) -> str:
     measured = item.get("measured_value")
     threshold = item.get("threshold")
-    measured_text = "-" if measured is None else f"{float(measured):.3f} µSv/h"
-    threshold_text = "-" if threshold is None else f"{float(threshold):.3f} µSv/h"
+    measured_text = "-" if measured is None else f"{format_dose_value(measured)} µSv/h"
+    threshold_text = "-" if threshold is None else f"{format_dose_value(threshold)} µSv/h"
     index = item.get("trigger_index")
     trigger = f" #{index}" if index else ""
     return (

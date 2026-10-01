@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ..formatting import format_dose_value
+
 
 class SuppressionDialog(QDialog):
     PRESETS = {"5 menit": 5, "15 menit": 15, "30 menit": 30, "60 menit": 60}
@@ -35,7 +37,7 @@ class SuppressionDialog(QDialog):
 
         self.detector = QLineEdit(f"{station_name} · SERID {self.serid}")
         self.detector.setReadOnly(True)
-        self.dose = QLineEdit("-" if dose_rate is None else f"{float(dose_rate):.4f}")
+        self.dose = QLineEdit(format_dose_value(dose_rate))
         self.dose.setReadOnly(True)
         self.status = QLineEdit(str(underlying_status or "-").upper())
         self.status.setReadOnly(True)

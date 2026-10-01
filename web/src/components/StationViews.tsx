@@ -2,6 +2,7 @@ import { Badge, Button, LayerCard, Table } from "@cloudflare/kumo";
 import type { Station } from "../api";
 import { ResponsiveDataView } from "./ResponsiveDataView";
 import { AlarmStatus } from "./AlarmStatus";
+import { formatDoseValue } from "../format";
 
 function statusVariant(status?: string): "success" | "warning" | "error" | "secondary" {
   if (status === "normal") return "success";
@@ -74,7 +75,7 @@ export function StationTable({
                 <AlarmStatus station={station} onAction={onAlarm} />
               </Table.Cell>
               <Table.Cell>
-                {station.doserate == null ? "—" : `${station.doserate.toFixed(3)} ${station.unit}`}
+                {station.doserate == null ? "—" : `${formatDoseValue(station.doserate)} ${station.unit}`}
               </Table.Cell>
               <Table.Cell>
                 {formatTimestamp(station.dtom)}
@@ -122,7 +123,7 @@ export function StationCards({
             <AlarmStatus station={station} onAction={onAlarm} />
           </div>
            <div className="card-meta">
-            <span>Dose rate: <strong>{station.doserate == null ? "—" : `${station.doserate.toFixed(3)} ${station.unit}`}</strong></span>
+            <span>Dose rate: <strong>{station.doserate == null ? "—" : `${formatDoseValue(station.doserate)} ${station.unit}`}</strong></span>
             <span>Diperbarui: {formatTimestamp(station.dtom)}</span>
             <span>{freshnessLabel(station.dtom)}</span>
             {station.status === "offline" && station.offline_reason ? <span>Alasan offline: {station.offline_reason}</span> : null}
@@ -167,10 +168,10 @@ export function StationDetail({ station, onHistory, onAlarm }: { station: Statio
         <AlarmStatus station={station} onAction={onAlarm} />
       </div>
       <div className="station-detail-grid">
-        <div className="station-detail-item"><span>Dose rate</span><strong>{station.doserate == null ? "—" : `${station.doserate.toFixed(3)} ${station.unit}`}</strong></div>
+        <div className="station-detail-item"><span>Dose rate</span><strong>{station.doserate == null ? "—" : `${formatDoseValue(station.doserate)} ${station.unit}`}</strong></div>
         <div className="station-detail-item"><span>Kesegaran data</span><strong>{freshnessLabel(station.dtom)}</strong></div>
-        <div className="station-detail-item"><span>Peringatan</span><strong>{station.warnlevel} {station.unit}</strong></div>
-        <div className="station-detail-item"><span>Alarm</span><strong>{station.alarmlevel} {station.unit}</strong></div>
+        <div className="station-detail-item"><span>Peringatan</span><strong>{formatDoseValue(station.warnlevel)} {station.unit}</strong></div>
+        <div className="station-detail-item"><span>Alarm</span><strong>{formatDoseValue(station.alarmlevel)} {station.unit}</strong></div>
       </div>
       <div className="card-meta">
         <span>Deskripsi: {station.description || "—"}</span>

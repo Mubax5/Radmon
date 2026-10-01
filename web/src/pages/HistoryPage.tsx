@@ -1,5 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Input, LayerCard, Select, Table } from "@cloudflare/kumo";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties } from "react";
+import { createPortal } from "react-dom";
+import { Button, LayerCard, Select, Table } from "@cloudflare/kumo";
+import { CaretLeft, CaretRight } from "@phosphor-icons/react";
 import { api, type Station } from "../api";
 import { TrendChart, type TrendPoint } from "../components/TrendChart";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
@@ -7,6 +10,7 @@ import { useWebRefresh } from "../live";
 import { useSession } from "../auth";
 import { AlarmStatus } from "../components/AlarmStatus";
 import { navigate } from "../navigation";
+import { formatDoseValue } from "../format";
 import {
   ErrorCard,
   LoadingCard,
@@ -45,8 +49,12 @@ export function HistoryPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState<string | null>(null);
+  const [stationMenuOpen, setStationMenuOpen] = useState(false);
+  const [activeStationIndex, setActiveStationIndex] = useState(0);
+  const [stationMenuStyle, setStationMenuStyle] = useState<CSSProperties>({});
   const [limit, setLimit] = useState(240);
+  const stationInputRef = useRef<HTMLInputElement>(null);
   const rowsRef = useRef<HistoryRow[]>(rows);
   const requestIdRef = useRef(0);
   rowsRef.current = rows;
@@ -62,19 +70,62 @@ export function HistoryPage() {
 
   const selectedStation = selectedIndex >= 0 ? stations[selectedIndex] : null;
 
+  useLayoutEffect(() => {
+    if (!stationMenuOpen) return;
+    const input = stationInputRef.current;
+    if (!input) return;
+
+    const positionMenu = () => {
+      const rect = input.getBoundingClientRect();
+      const margin = 8;
+      const gap = 4;
+      const viewportWidth = document.documentElement.clientWidth;
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      const left = Math.max(margin, Math.min(rect.left, viewportWidth - margin));
+      const width = Math.max(0, Math.min(rect.width, viewportWidth - left - margin));
+      const below = Math.max(0, viewportHeight - rect.bottom - margin - gap);
+      const above = Math.max(0, rect.top - margin - gap);
+      const placeAbove = below < 180 && above > below;
+      const maxHeight = Math.max(48, Math.min(320, placeAbove ? above : below));
+      setStationMenuStyle({
+        position: "fixed",
+        zIndex: 2147483647,
+        left,
+        top: placeAbove ? Math.max(margin, rect.top - gap - maxHeight) : rect.bottom + gap,
+        width,
+        maxHeight,
+      });
+    };
+
+    positionMenu();
+    window.addEventListener("resize", positionMenu);
+    window.addEventListener("scroll", positionMenu, true);
+    const viewport = window.visualViewport;
+    viewport?.addEventListener("resize", positionMenu);
+    viewport?.addEventListener("scroll", positionMenu);
+    return () => {
+      window.removeEventListener("resize", positionMenu);
+      window.removeEventListener("scroll", positionMenu, true);
+      viewport?.removeEventListener("resize", positionMenu);
+      viewport?.removeEventListener("scroll", positionMenu);
+    };
+  }, [stationMenuOpen]);
+
   const filteredStations = useMemo(() => {
-    const needle = query.trim().toLowerCase();
+    const needle = (query ?? "").trim().toLowerCase();
     if (!needle) return stations;
     return stations.filter((station) => {
-      const hay = `${station.name} ${station.location} ${station.serid}`.toLowerCase();
+      const hay = `${station.name} ${station.serid}`.toLowerCase();
       return hay.includes(needle);
     });
   }, [stations, query]);
 
-  const stationItems = useMemo(
-    () => Object.fromEntries(filteredStations.map((station) => [String(station.serid), `${station.name} — ${station.location} (SERID ${station.serid})`])),
-    [filteredStations],
-  );
+  useEffect(() => {
+    if (!stationMenuOpen) return;
+    const activeOption = filteredStations[activeStationIndex];
+    if (!activeOption) return;
+    document.getElementById(`history-station-option-${activeOption.serid}`)?.scrollIntoView({ block: "nearest" });
+  }, [activeStationIndex, filteredStations, stationMenuOpen]);
 
   // For carousel, full list order is stations as returned (location, name). Keep wrap navigation.
   const hasStations = stations.length > 0;
@@ -254,11 +305,46 @@ export function HistoryPage() {
   }, [rows]);
 
   const unit = selectedStation?.unit ?? "uSv/h";
-  const fmt = (value: number | null) => value == null ? "—" : `${value.toFixed(3)} ${unit}`;
+  const fmt = (value: number | null) => value == null ? "—" : `${formatDoseValue(value)} ${unit}`;
   const chronological = [...rows].sort((a, b) => Date.parse(String(b.dtom ?? "")) - Date.parse(String(a.dtom ?? "")));
 
-  // searchable combobox helpers
-  const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => setQuery(event.target.value);
+  // Searchable station combobox; the listbox is portaled to the document layer so
+  // modal, navigation, and scroll-container overflow cannot clip the options.
+  const stationLabel = (station: Station) => `${station.name} — ${station.location} (SERID ${station.serid})`;
+  const visibleStationValue = stationMenuOpen && query !== null
+    ? query
+    : selectedStation ? stationLabel(selectedStation) : "";
+  const selectStation = (station: Station) => {
+    changeStation(station.serid);
+    setQuery(null);
+    setStationMenuOpen(false);
+    setActiveStationIndex(Math.max(0, stations.findIndex((item) => item.serid === station.serid)));
+  };
+  const handleStationKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setStationMenuOpen(true);
+      setActiveStationIndex((index) => filteredStations.length ? (index + 1) % filteredStations.length : 0);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setStationMenuOpen(true);
+      setActiveStationIndex((index) => filteredStations.length ? (index - 1 + filteredStations.length) % filteredStations.length : 0);
+    } else if (event.key === "Enter" && stationMenuOpen && filteredStations.length) {
+      event.preventDefault();
+      const station = filteredStations[Math.min(activeStationIndex, filteredStations.length - 1)];
+      if (station) selectStation(station);
+    } else if (event.key === "Escape" && stationMenuOpen) {
+      event.preventDefault();
+      setStationMenuOpen(false);
+      setQuery(null);
+      setActiveStationIndex(Math.max(0, selectedIndex));
+    }
+  };
+  const handleStationSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setQuery(event.target.value);
+    setActiveStationIndex(0);
+    setStationMenuOpen(true);
+  };
   const handleLimitChange = (value: string | number | null | undefined) => {
     const next = Number(value ?? 240);
     const bounded = Number.isFinite(next) ? Math.max(1, Math.min(2000, Math.trunc(next))) : 240;
@@ -284,26 +370,40 @@ export function HistoryPage() {
               disabled={!canNavigate}
               title="Stasiun sebelumnya (←)"
             >
-              ‹
+              <CaretLeft aria-hidden="true" size={18} weight="bold" />
             </Button>
             <div className="history-station-selector">
-              <Input
-                label="Cari stasiun"
-                placeholder="Cari nama atau SERID…"
-                value={query}
-                onChange={handleSearchChange}
-                data-testid="history-search"
-                aria-label="Cari stasiun"
-              />
-              <Select
-                label="Stasiun"
-                placeholder="Pilih stasiun…"
-                items={stationItems}
-                value={selected == null ? undefined : String(selected)}
-                onValueChange={changeStation}
-                disabled={stations.length === 0}
-                data-testid="history-station-select"
-              />
+              <div className="history-station-combobox">
+                <label htmlFor="history-station-input">Stasiun</label>
+                <input
+                  ref={stationInputRef}
+                  id="history-station-input"
+                  type="text"
+                  role="combobox"
+                  aria-label="Stasiun"
+                  aria-autocomplete="list"
+                  aria-haspopup="listbox"
+                  aria-expanded={stationMenuOpen}
+                  aria-controls="history-station-listbox"
+                  aria-activedescendant={stationMenuOpen && filteredStations[activeStationIndex] ? `history-station-option-${filteredStations[activeStationIndex].serid}` : undefined}
+                  placeholder="Cari nama atau SERID…"
+                  value={visibleStationValue}
+                  disabled={!stations.length}
+                  data-testid="history-station-combobox"
+                  onFocus={(event) => {
+                    setQuery(null);
+                    setActiveStationIndex(Math.max(0, selectedIndex));
+                    setStationMenuOpen(true);
+                    event.currentTarget.select();
+                  }}
+                  onChange={handleStationSearchChange}
+                  onKeyDown={handleStationKeyDown}
+                  onBlur={() => {
+                    setStationMenuOpen(false);
+                    setQuery(null);
+                  }}
+                />
+              </div>
             </div>
             <Button
               variant="secondary"
@@ -313,7 +413,7 @@ export function HistoryPage() {
               disabled={!canNavigate}
               title="Stasiun berikutnya (→)"
             >
-              ›
+              <CaretRight aria-hidden="true" size={18} weight="bold" />
             </Button>
           </div>
           <Select
@@ -327,7 +427,7 @@ export function HistoryPage() {
             {selectedStation ? (
               <div className="history-selected-meta cell-subtle" aria-live="polite">
                 <span>SERID {selectedStation.serid} · {selectedStation.location}</span>
-                {selectedStation.status === "offline" ? <span>Offline — last-known {freshnessLabel(selectedStation.dtom)} · {formatTimestamp(selectedStation.dtom)}</span> : <span>{freshnessLabel(selectedStation.dtom)} · {selectedStation.doserate != null ? `${selectedStation.doserate.toFixed(3)} ${selectedStation.unit}` : "—"}</span>}
+                {selectedStation.status === "offline" ? <span>Offline — last-known {freshnessLabel(selectedStation.dtom)} · {formatTimestamp(selectedStation.dtom)}</span> : <span>{freshnessLabel(selectedStation.dtom)} · {selectedStation.doserate != null ? `${formatDoseValue(selectedStation.doserate)} ${selectedStation.unit}` : "—"}</span>}
                 <AlarmStatus
                   station={selectedStation}
                   onAction={user && user.role !== "Viewer" ? (station) => navigate("alarms", { serid: station.serid, event: station.active_event_id ?? undefined }) : undefined}
@@ -343,6 +443,32 @@ export function HistoryPage() {
           </div>
         </div>
       </LayerCard>
+      {stationMenuOpen ? createPortal(
+        <div
+          id="history-station-listbox"
+          className="history-station-listbox"
+          role="listbox"
+          aria-label="Hasil stasiun"
+          style={stationMenuStyle}
+        >
+          {filteredStations.length ? filteredStations.map((station, index) => (
+            <div
+              id={`history-station-option-${station.serid}`}
+              key={station.serid}
+              role="option"
+              aria-selected={station.serid === selected}
+              className={index === activeStationIndex ? "is-active" : ""}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActiveStationIndex(index)}
+              onClick={() => selectStation(station)}
+            >
+              <span>{station.name} — {station.location}</span>
+              <span>SERID {station.serid}</span>
+            </div>
+          )) : <div className="history-station-empty" role="option" aria-disabled="true">Tidak ada stasiun yang cocok</div>}
+        </div>,
+        document.body,
+      ) : null}
       {error ? <ErrorCard message={error} /> : null}
       {loading && rows.length === 0 ? <LoadingCard /> : (
         <>
@@ -381,8 +507,8 @@ export function HistoryPage() {
                       {chronological.map((row, index) => (
                         <Table.Row key={`${row.dtom}-${index}`}>
                           <Table.Cell>{formatTimestamp(String(row.dtom ?? ""))}</Table.Cell>
-                          <Table.Cell>{String(row.doserate ?? "—")}</Table.Cell>
-                          <Table.Cell>{String(row.dose ?? "—")}</Table.Cell>
+                          <Table.Cell>{formatDoseValue(row.doserate)}</Table.Cell>
+                          <Table.Cell>{formatDoseValue(row.dose)}</Table.Cell>
                           <Table.Cell>{String(row.stat ?? "—")}</Table.Cell>
                         </Table.Row>
                       ))}
@@ -396,10 +522,10 @@ export function HistoryPage() {
                     <LayerCard className="record-card" key={`${row.dtom}-${index}`}>
                       <div className="record-card-header">
                         <div><h3>{formatTimestamp(String(row.dtom ?? ""))}</h3></div>
-                        <strong>{String(row.doserate ?? "—")} {unit}</strong>
+                        <strong>{formatDoseValue(row.doserate)} {unit}</strong>
                       </div>
                       <div className="card-meta">
-                        <span>Dose: {String(row.dose ?? "—")}</span>
+                        <span>Dose: {formatDoseValue(row.dose)}</span>
                         <span>Status: {String(row.stat ?? "—")}</span>
                       </div>
                     </LayerCard>

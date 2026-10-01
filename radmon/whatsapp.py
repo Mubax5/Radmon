@@ -6,6 +6,8 @@ from pathlib import Path
 import time
 from typing import Any
 
+from .formatting import format_dose_value
+
 
 class WhatsAppAlarmDispatcher:
     """Dispatch operator-facing policy ALARMs exactly once.
@@ -26,13 +28,14 @@ class WhatsAppAlarmDispatcher:
         when_text = when.strftime("%Y-%m-%d %H:%M:%S") if hasattr(when, "strftime") else str(when)
         measured = item.get("measured_value")
         threshold = item.get("threshold")
-        measured_text = "-" if measured is None else f"{float(measured):.2f}"
-        threshold_text = "-" if threshold is None else f"{float(threshold):.2f}"
+        measured_text = format_dose_value(measured)
+        threshold_text = format_dose_value(threshold)
         trigger_index = item.get("trigger_index")
         trigger = f" #{int(trigger_index)}" if trigger_index is not None else ""
         source = item.get("source_id") or "central"
+        severity = "LOW" if item.get("reason") == "LOW_THRESHOLD" else "HIGH"
         return (
-            f"[{source}] ALARM RadMon{trigger} {when_text} WIB, "
+            f"[{source}] {severity} THRESHOLD RadMon{trigger} {when_text} WIB, "
             f"[serid:{item.get('serid')}]: {measured_text} µSv/h >= "
             f"{threshold_text} µSv/h"
         )

@@ -18,7 +18,7 @@ def live(at, dose, *, observed=None):
     return row
 
 
-def test_fresh_warning_and_normal_close_original_alarm_but_only_normal_resets(tmp_path):
+def test_fresh_warning_retains_original_action_event_until_normal_and_only_normal_resets(tmp_path):
     security = SecurityStore(tmp_path / "security.db")
     audit = AuditTrail(security)
     store = AlarmPolicyStore(security)
@@ -27,17 +27,20 @@ def test_fresh_warning_and_normal_close_original_alarm_but_only_normal_resets(tm
 
     first = policy.evaluate_live(live(at, 25.1), source_id="gd52")
     warning = policy.evaluate_live(live(at + timedelta(seconds=10), 24.0), source_id="gd52")
-    closed = store.get_event(first["active_event_id"])
+    retained = store.get_event(first["active_event_id"])
 
-    assert warning["active_event_id"] is None
+    assert warning["underlying_dose_status"] == "ALERT"
+    assert warning["active_event_id"] == first["active_event_id"]
     assert warning["trigger_count"] == 1
-    assert closed.status == "AUTO_RESOLVED_WARNING"
-    assert closed.responded_at is None and closed.pic is None
-    assert closed.resolution_code == "AUTO_RESOLVED_WARNING"
+    assert retained.status == "ACTIVE"
+    assert retained.responded_at is None and retained.pic is None
 
     normal = policy.evaluate_live(live(at + timedelta(seconds=20), 0.2), source_id="gd52")
     assert normal["trigger_count"] == 0
     assert normal["retrigger_locked"] is False
+    closed = store.get_event(first["active_event_id"])
+    assert closed.status == "AUTO_RESOLVED_NORMAL"
+    assert closed.resolution_code == "AUTO_RESOLVED_NORMAL"
     assert any(item["action"] == "ALARM_POLICY_AUTO_RESOLVED" for item in audit.list_events())
 
 
@@ -56,6 +59,34 @@ def test_stale_or_out_of_order_normal_never_closes_active_alarm(tmp_path):
     assert stale["underlying_dose_status"] == "UNKNOWN"
     assert out_of_order["active_event_id"] == first["active_event_id"]
     assert store.get_event(first["active_event_id"]).status == "ACTIVE"
+
+
+def test_low_event_exposes_truthful_active_manual_response_and_normal_resolution(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    store = AlarmPolicyStore(security)
+    policy = AlarmPolicyService(store, AuditTrail(security))
+    at = datetime(2026, 9, 17, 10, 0, tzinfo=timezone.utc)
+    low = {"serid": 5702, "warnlevel": 23.0, "alarmlevel": 25.0}
+
+    first = policy.evaluate_live({**low, "dtom": at, "doserate": 24.0})
+    event_id = first["active_event_id"]
+    active = policy.get_policy(5702)
+    assert active["policy_state"] == "ALARM"
+    assert active["underlying_dose_status"] == "ALERT"
+    assert active["active_event_id"] == event_id
+    assert active["active_event_lifecycle"] == "ACTIVE"
+
+    policy.mark_event_responded(event_id, at + timedelta(seconds=1), "PIC", "Konfirmasi", "checked")
+    responded = policy.get_policy(5702)
+    assert responded["active_event_id"] is None
+    assert responded["active_event_lifecycle"] is None
+    assert store.get_event(event_id).status == "RESPONDED"
+
+    retrigger = policy.evaluate_live({**low, "dtom": at + timedelta(seconds=2), "doserate": 24.0})
+    assert retrigger["active_event_id"] != event_id
+    normal = policy.evaluate_live({**low, "dtom": at + timedelta(seconds=3), "doserate": 22.0})
+    assert normal["active_event_id"] is None
+    assert store.get_event(retrigger["active_event_id"]).status == "AUTO_RESOLVED_NORMAL"
 
 
 def test_source_i_flag_closes_linked_event_without_fabricating_operator_response(tmp_path):

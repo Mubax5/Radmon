@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc -b && vite build",
     "dev": "vite --host 0.0.0.0",
-    "check": "tsc -b --pretty false"
+    "check": "tsc -b --pretty false",
+    "test:format": "node --test test/format.test.mjs"
   },
   "dependencies": {
     "@cloudflare/kumo": "2.13.2",

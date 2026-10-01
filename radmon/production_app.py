@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+import logging
 from pathlib import Path
 import shutil
 import signal
@@ -122,6 +123,25 @@ def _default_grafana_startup(settings: Settings, paths: ApplicationPaths) -> str
     return PersistentGrafanaBootstrap(settings, project_root=paths.app_dir).ensure()
 
 
+def _bootstrap_grafana_without_blocking_control_plane(
+    settings: Settings,
+    paths: ApplicationPaths,
+    grafana_startup: Callable[[Settings, ApplicationPaths], Any],
+) -> Any:
+    try:
+        return grafana_startup(settings, paths)
+    except Exception as exc:
+        detail = str(exc)
+        for secret in (settings.db_password, settings.grafana_password):
+            if secret:
+                detail = detail.replace(secret, "<redacted>")
+        logging.getLogger(__name__).error(
+            "Grafana bootstrap is degraded; keeping the RadMon control plane available: %s",
+            detail,
+        )
+        return None
+
+
 def _migrate_legacy_env(paths: ApplicationPaths) -> bool:
     """Copy a legacy install-root .env into external config exactly once."""
     legacy_env = paths.install_root / ".env"
@@ -192,7 +212,7 @@ def run_production(
         _clear_legacy_listener(listener_owner)
         central = central_factory(settings, host="0.0.0.0", port=8090)
         central.start()
-        grafana_startup(settings, paths)
+        _bootstrap_grafana_without_blocking_control_plane(settings, paths, grafana_startup)
         return int(desktop_runner(settings, central.services, central.archive_catalog, log_path))
     finally:
         try:
@@ -242,7 +262,7 @@ def run_server(
         _clear_legacy_listener(listener_owner)
         central = central_factory(settings, host="0.0.0.0", port=8090)
         central.start()
-        grafana_startup(settings, paths)
+        _bootstrap_grafana_without_blocking_control_plane(settings, paths, grafana_startup)
         while not event.wait(1.0):
             pass
         return 0

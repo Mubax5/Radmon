@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { KeyboardEvent, PointerEvent } from "react";
+import { formatDoseValue } from "../format";
 
 export type TrendPoint = {
   at: string;
@@ -149,7 +150,7 @@ export function TrendChart({ points, unit }: { points: TrendPoint[]; unit: strin
   return (
     <div
       className="trend-chart"
-      aria-label={`Tren dose rate. Terbaru ${latest.toFixed(3)} ${unit}. Minimum ${layout.min.toFixed(3)}. Maksimum ${layout.max.toFixed(3)}.`}
+      aria-label={`Tren dose rate. Terbaru ${formatDoseValue(latest)} ${unit}. Minimum ${formatDoseValue(layout.min)}. Maksimum ${formatDoseValue(layout.max)}.`}
     >
       <div className="trend-chart-plot">
         <svg
@@ -183,7 +184,7 @@ export function TrendChart({ points, unit }: { points: TrendPoint[]; unit: strin
                 y={tick.y + 4}
                 textAnchor="end"
               >
-                {tick.value.toFixed(3)}
+                {formatDoseValue(tick.value)}
               </text>
             </g>
           ))}
@@ -249,7 +250,7 @@ export function TrendChart({ points, unit }: { points: TrendPoint[]; unit: strin
             role="status"
             aria-live="polite"
           >
-            <strong>{active.value.toFixed(3)} {unit}</strong>
+            <strong>{formatDoseValue(active.value)} {unit}</strong>
             <span>{tooltipTime(active.at)}</span>
           </div>
         ) : null}
