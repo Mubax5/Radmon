@@ -14,6 +14,8 @@ http://localhost:3300          -> Grafana admin/editor hanya di PC server
 
 Port **8090** adalah satu-satunya gateway yang dibuka Windows Firewall untuk client jaringan. Grafana native tetap bind ke loopback `127.0.0.1:3300`; browser remote menerima Grafana melalui reverse proxy RadMon pada origin yang sama (`:8090`), sehingga user BRIN-NET tidak perlu koneksi langsung ke port 3300.
 
+Panduan pemeriksaan gangguan operator dalam Bahasa Indonesia: [docs/TROUBLESHOOTING-ID.md](docs/TROUBLESHOOTING-ID.md). Untuk langkah start/pemulihan singkat, lihat [docs/OPERATOR-STARTUP-ID.md](docs/OPERATOR-STARTUP-ID.md).
+
 Anonymous hanya mendapat monitoring Grafana read-only. **Viewer tetap wajib login RadMon**. Role aplikasi:
 
 - **Viewer** — Overview, Stations, History, Archives/Reports read-only.

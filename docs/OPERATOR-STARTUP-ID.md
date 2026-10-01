@@ -56,3 +56,7 @@ melakukan pemeriksaan/pemulihan sebelum membuka halaman monitoring.
 Jangan menghapus folder `config`, `runtime`, `archives`, database, atau data
 Grafana untuk pemulihan. Jangan menghentikan/mengakhiri proses secara paksa;
 launcher menggunakan health check dan reuse untuk menghindari duplikasi.
+
+Untuk diagnosis port, datasource Grafana, query kosong, sumber LAN, checksum
+update, dan log yang aman dibagikan, lanjutkan ke
+[Panduan troubleshooting operator](TROUBLESHOOTING-ID.md).
