@@ -250,6 +250,7 @@ class GrafanaBootstrap:
                 "GF_PATHS_DATA": str(data.resolve()),
                 "GF_PATHS_LOGS": str(logs.resolve()),
                 "GF_PATHS_PLUGINS": str(plugins.resolve()),
+                "GF_PLUGINS_PREINSTALL_AUTO_UPDATE": "false",
                 "GF_SECURITY_ADMIN_USER": self.settings.grafana_user,
                 "GF_SECURITY_ADMIN_PASSWORD": self.settings.grafana_password,
                 "GF_AUTH_ANONYMOUS_ENABLED": "true",

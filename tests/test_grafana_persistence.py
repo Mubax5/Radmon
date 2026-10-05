@@ -335,6 +335,7 @@ def test_native_grafana_is_loopback_only_and_persistent(tmp_path: Path) -> None:
     assert env["GF_AUTH_ANONYMOUS_ENABLED"] == "true"
     assert env["GF_AUTH_ANONYMOUS_ORG_ROLE"] == "Viewer"
     assert env["GF_AUTH_DISABLE_LOGIN_FORM"] == "false"
+    assert env["GF_PLUGINS_PREINSTALL_AUTO_UPDATE"] == "false"
     assert str(tmp_path / "runtime" / "grafana" / "data") in env["GF_PATHS_DATA"]
 
 
