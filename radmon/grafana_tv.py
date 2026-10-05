@@ -184,7 +184,10 @@ FROM ({latest}) v
 
 
 def _format_dose_sql(expression: str) -> str:
-    cast = f"CAST({expression} AS CHAR)"
+    # doserate is a FLOAT/DOUBLE in MariaDB; a direct CHAR cast can expose
+    # binary tails (for example 11.100000000000001). Normalize to a scale far
+    # beyond detector precision, then trim only insignificant fractional 0s.
+    cast = f"CAST(CAST({expression} AS DECIMAL(30,12)) AS CHAR)"
     trimmed = f"TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM {cast}))"
     return f"CASE WHEN {cast} LIKE '%.%' THEN {trimmed} ELSE {cast} END"
 
@@ -231,8 +234,40 @@ def _latest_scalar_stat(
 
 def _dose_stat(panel_id, station, x, y, w, h=2):
     panel = _panel(panel_id, "stat", f"[{station.serid}] {station.room} ({station.location})", x, y, w, h)
+    panel["description"] = "latest-dose-value"
+    # vrecent retains the detector's last-known numeric dose when it is offline.
+    panel["targets"] = [_target(f"""
+SELECT doserate AS doserate
+FROM vrecent
+WHERE serid = {station.serid}
+ORDER BY dtom DESC
+LIMIT 1
+""")]
+    panel["fieldConfig"] = {
+        "defaults": {
+            "unit": "suffix: µSv/h",
+            "color": {"mode": "fixed", "fixedColor": "text"},
+        },
+        "overrides": [],
+    }
+    panel["options"] = {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False},
+        "text": {"valueSize": 32},
+        "textMode": "value",
+        "wideLayout": True,
+    }
+    return panel
+
+
+def _status_lamp(panel_id, station, x, y, w, h=1):
+    panel = _panel(panel_id, "stat", "", x, y, w, h)
     panel["description"] = "central-status-lamp"
-    # vrecent always exposes one row per known detector, including offline ones.
+    # Status is deliberately its own field/panel: Grafana Stat color mappings
+    # then reliably color the lamp without coupling color to dose magnitude.
     panel["targets"] = [_target(f"""
 SELECT CASE status
   WHEN 'OFFLINE' THEN 0
@@ -248,7 +283,7 @@ ORDER BY dtom DESC
 LIMIT 1
 """)]
     panel["fieldConfig"] = {"defaults": {"unit": "none", "color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "gray", "value": None}, {"color": "green", "value": 1}, {"color": "yellow", "value": 2}, {"color": "red", "value": 3}, {"color": "yellow", "value": 4}]}, "mappings": [{"type": "value", "options": {"0": {"color": "gray", "text": "OFFLINE"}, "1": {"color": "green", "text": "NORMAL"}, "2": {"color": "yellow", "text": "LOW / WARNING"}, "3": {"color": "red", "text": "HIGH / ALARM"}, "4": {"color": "yellow", "text": "SUPPRESSED"}}}]}, "overrides": []}
-    panel["options"] = {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False}, "text": {"valueSize": 28}, "textMode": "value", "wideLayout": True}
+    panel["options"] = {"colorMode": "background", "graphMode": "none", "justifyMode": "center", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": False}, "text": {"valueSize": 14}, "textMode": "value", "wideLayout": True}
     return panel
 
 
@@ -415,18 +450,24 @@ def build_page_one() -> dict[str, Any]:
     dashboard = _base_dashboard("RadMon TV · Realtime", PAGE_UIDS[0], time_from="now-10m")
     widths = [5, 5, 5, 5, 4]
     x_positions = [0, 5, 10, 15, 20]
+    stations = station_catalog()
     panel_id = 10
-    for index, station in enumerate(station_catalog()):
+    for index, station in enumerate(stations):
         row, col = divmod(index, 5)
         x = x_positions[col]
         width = widths[col]
-        y = 4 + row * 4
+        y = 4 + row * 5
         dashboard["panels"].append(_dose_stat(panel_id, station, x, y, width, 2))
         panel_id += 1
         dashboard["panels"].append(_dose_sparkline(panel_id, station, x, y + 2, width, 1))
         panel_id += 1
         dashboard["panels"].append(_time_stat(panel_id, station, x, y + 3, width, 1))
         panel_id += 1
+    for index, station in enumerate(stations):
+        row, col = divmod(index, 5)
+        dashboard["panels"].append(
+            _status_lamp(55 + index, station, x_positions[col], 8 + row * 5, widths[col], 1)
+        )
     return dashboard
 
 

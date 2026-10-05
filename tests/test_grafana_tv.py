@@ -17,6 +17,7 @@ from radmon.grafana_tv import (
     operation_page_stations,
     playlist_url,
 )
+from radmon.formatting import format_dose_value
 from radmon.stations import station_catalog
 
 
@@ -53,15 +54,36 @@ def test_every_generated_dashboard_has_shared_header_and_fits_without_scroll():
         assert "Instalasi Pengelolaan Limbah Radioaktif" in payload
 
 
-def test_page_one_station_lamps_use_central_status_and_lightweight_recent_trends():
+def test_page_one_station_cards_show_numeric_dose_and_separate_central_status_lamps():
     page1 = build_dashboard_payloads()[0]
-    dose = [panel for panel in page1["panels"] if panel.get("description") == "central-status-lamp"]
+    dose = [panel for panel in page1["panels"] if panel.get("description") == "latest-dose-value"]
+    lamps = [panel for panel in page1["panels"] if panel.get("description") == "central-status-lamp"]
     spark = [panel for panel in page1["panels"] if panel.get("description") == "latest-dose-sparkline"]
     timestamp = [panel for panel in page1["panels"] if panel.get("description") == "latest-measurement-time"]
-    assert len(dose) == len(spark) == len(timestamp) == 15
+    assert len(dose) == len(lamps) == len(spark) == len(timestamp) == 15
     for panel in dose:
         assert panel["type"] == "stat"
         sql = panel["targets"][0]["rawSql"]
+        assert "FROM vrecent" in sql
+        assert "FROM measurement" not in sql
+        assert "dtom IS NOT NULL" not in sql
+        assert "ORDER BY dtom DESC" in sql
+        assert "doserate" in sql
+        assert "SELECT doserate AS doserate" in sql
+        assert "CASE status" not in sql
+        assert "display_value" not in sql
+        assert panel["fieldConfig"]["defaults"]["unit"] == "suffix: µSv/h"
+        assert panel["fieldConfig"]["defaults"]["color"] == {
+            "mode": "fixed",
+            "fixedColor": "text",
+        }
+        assert panel["options"]["colorMode"] == "none"
+        assert panel["options"]["textMode"] == "value"
+        assert "transformations" not in panel
+        assert panel["gridPos"]["h"] == 2
+    for panel in lamps:
+        sql = panel["targets"][0]["rawSql"]
+        assert panel["type"] == "stat"
         assert "FROM vrecent" in sql
         assert "FROM measurement" not in sql
         assert "dtom IS NOT NULL" not in sql
@@ -74,6 +96,9 @@ def test_page_one_station_lamps_use_central_status_and_lightweight_recent_trends
         assert mappings["3"] == {"color": "red", "text": "HIGH / ALARM"}
         assert [step["value"] for step in panel["fieldConfig"]["defaults"]["thresholds"]["steps"]] == [None, 1, 2, 3, 4]
         assert panel["options"]["colorMode"] == "background"
+        assert panel["gridPos"]["h"] == 1
+    assert format_dose_value("0.833333") == "0.833333"
+    assert format_dose_value("1.340") == "1.34"
     for panel in spark:
         assert panel["type"] == "timeseries"
         sql = panel["targets"][0]["rawSql"]
@@ -139,9 +164,10 @@ def test_integer_summary_stats_have_no_trailing_decimal_places():
 
 def test_grafana_dose_sql_only_trims_zeroes_after_a_decimal_point():
     sql = _format_dose_sql("doserate")
-    assert "CASE WHEN CAST(doserate AS CHAR) LIKE '%.%'" in sql
-    assert "TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM CAST(doserate AS CHAR)))" in sql
-    assert "ELSE CAST(doserate AS CHAR) END" in sql
+    cast = "CAST(CAST(doserate AS DECIMAL(30,12)) AS CHAR)"
+    assert f"CASE WHEN {cast} LIKE '%.%'" in sql
+    assert f"TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM {cast}))" in sql
+    assert f"ELSE {cast} END" in sql
 
 
 def test_operations_live_status_uses_vrecent_and_alarm_table_uses_legacy_schema():

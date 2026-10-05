@@ -139,6 +139,7 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         # Grafana persists the dashboard root time range separately from panel
         # queries. Sync only this managed page-2 setting; never replace the
         # saved dashboard or its panel layout.
+        is_page_one = str(factory_dashboard.get("uid") or "") == PAGE_UIDS[0]
         is_page_two = str(factory_dashboard.get("uid") or "") == PAGE_UIDS[1]
         if is_page_two:
             factory_time = factory_dashboard.get("time")
@@ -159,6 +160,42 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         if not isinstance(panels, list):
             return migrated, changed
 
+        saved_page_one_panel_ids = {
+            panel.get("id")
+            for panel in panels
+            if isinstance(panel, dict)
+            and isinstance(panel.get("id"), int)
+            and 10 <= panel["id"] <= 54
+        }
+        has_complete_page_one = len(saved_page_one_panel_ids) == 45
+
+        if is_page_one and has_complete_page_one:
+            # Page 1's previous factory layout used four grid rows per
+            # station: dose stat, sparkline, timestamp. Reflow only panels
+            # that still have those exact factory coordinates; operator-moved
+            # panels remain where they were saved.
+            old_x_positions = (0, 5, 10, 15, 20)
+            old_widths = (5, 5, 5, 5, 4)
+            for panel in panels:
+                panel_id = panel.get("id") if isinstance(panel, dict) else None
+                if not isinstance(panel_id, int) or not 10 <= panel_id <= 54:
+                    continue
+                station_index, part = divmod(panel_id - 10, 3)
+                row, col = divmod(station_index, 5)
+                old_y = 4 + row * 4
+                old_position = {
+                    "x": old_x_positions[col],
+                    "y": old_y + (0 if part == 0 else 2 if part == 1 else 3),
+                    "w": old_widths[col],
+                    "h": 2 if part == 0 else 1,
+                }
+                factory_panel = factory_panels.get(panel_id)
+                factory_position = factory_panel.get("gridPos") if isinstance(factory_panel, dict) else None
+                if panel.get("gridPos") == old_position and isinstance(factory_position, dict):
+                    if panel.get("gridPos") != factory_position:
+                        panel["gridPos"] = deepcopy(factory_position)
+                        changed = True
+
         for panel in panels:
             if not isinstance(panel, dict):
                 continue
@@ -176,13 +213,16 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                 panel["datasource"] = deepcopy(factory_datasource)
                 changed = True
 
-            # Page-one status lamps are managed presentation: apply the central
-            # status mappings/colors while leaving every panel's saved grid
-            # position, title, and operator-created panels untouched.
-            if factory_panel.get("description") == "central-status-lamp":
-                for key in ("fieldConfig", "options"):
+            # Page-one dose values and status lamps are managed presentation:
+            # update visualization type/format/mappings while preserving each
+            # panel's saved title and any non-factory grid position.
+            if factory_panel.get("description") in {"latest-dose-value", "central-status-lamp"}:
+                for key in ("type", "description", "fieldConfig", "options", "transformations"):
                     factory_value = factory_panel.get(key)
-                    if factory_value is not None and panel.get(key) != factory_value:
+                    if factory_value is None and key in panel:
+                        panel.pop(key)
+                        changed = True
+                    elif factory_value is not None and panel.get(key) != factory_value:
                         panel[key] = deepcopy(factory_value)
                         changed = True
 
@@ -229,6 +269,20 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                     if saved_title != factory_title:
                         panel["title"] = factory_title
                         changed = True
+
+        if is_page_one and has_complete_page_one:
+            saved_ids = {
+                panel.get("id")
+                for panel in panels
+                if isinstance(panel, dict)
+            }
+            for panel_id, factory_panel in factory_panels.items():
+                if (
+                    panel_id not in saved_ids
+                    and factory_panel.get("description") == "central-status-lamp"
+                ):
+                    panels.append(deepcopy(factory_panel))
+                    changed = True
 
         return migrated, changed
 

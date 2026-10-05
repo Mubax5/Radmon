@@ -154,6 +154,73 @@ def test_status_lamp_contract_migrates_colors_without_changing_operator_layout(t
     assert next(panel for panel in migrated["panels"] if panel.get("id") == 999)["title"] == "Operator custom panel"
 
 
+def test_legacy_page_one_migrates_to_dose_values_and_adds_separate_status_lamps(tmp_path: Path) -> None:
+    bootstrap = PersistentGrafanaBootstrap(Settings(), project_root=tmp_path)
+    factory = bootstrap._dashboard_payloads()[0]
+    saved = deepcopy(factory)
+    saved["panels"] = [
+        panel for panel in saved["panels"]
+        if panel.get("description") != "central-status-lamp"
+    ]
+
+    # Model the persisted pre-fix layout and status-code stat panels. The
+    # migration should reflow only this known factory layout, retain station
+    # labels, and add one thin status panel per station.
+    for panel in saved["panels"]:
+        panel_id = panel.get("id")
+        if not isinstance(panel_id, int) or not 10 <= panel_id <= 54:
+            continue
+        station_index, part = divmod(panel_id - 10, 3)
+        row, col = divmod(station_index, 5)
+        x_positions, widths = [0, 5, 10, 15, 20], [5, 5, 5, 5, 4]
+        y = 4 + row * 4
+        panel["gridPos"] = {
+            "x": x_positions[col],
+            "y": y + (0 if part == 0 else 2 if part == 1 else 3),
+            "w": widths[col],
+            "h": 2 if part == 0 else 1,
+        }
+        if part == 0:
+            panel["description"] = "central-status-lamp"
+            panel["targets"] = [{"rawSql": "SELECT CASE status WHEN 'OFFLINE' THEN 0 END AS value FROM vrecent"}]
+            panel["fieldConfig"] = {"defaults": {"mappings": []}, "overrides": []}
+            panel["options"] = {"colorMode": "background"}
+            panel["transformations"] = [{"id": "organize", "options": {"excludeByName": {"value": True}}}]
+
+    original_title = saved["title"]
+    migrated, changed = bootstrap._refresh_managed_dashboard_queries(saved, factory)
+
+    assert changed is True
+    assert migrated["title"] == original_title
+    assert len(migrated["panels"]) == len(factory["panels"])
+    dose_panels = [panel for panel in migrated["panels"] if panel.get("description") == "latest-dose-value"]
+    lamp_panels = [panel for panel in migrated["panels"] if panel.get("description") == "central-status-lamp"]
+    assert len(dose_panels) == len(lamp_panels) == 15
+    for dose, lamp in zip(dose_panels, lamp_panels):
+        assert "doserate" in dose["targets"][0]["rawSql"]
+        assert "SELECT doserate AS doserate" in dose["targets"][0]["rawSql"]
+        assert "CASE status" not in dose["targets"][0]["rawSql"]
+        assert dose["fieldConfig"]["defaults"]["unit"] == "suffix: µSv/h"
+        assert dose["options"]["colorMode"] == "none"
+        assert "transformations" not in dose
+        assert dose["fieldConfig"] == next(
+            item for item in factory["panels"] if item.get("id") == dose["id"]
+        )["fieldConfig"]
+        mappings = lamp["fieldConfig"]["defaults"]["mappings"][0]["options"]
+        assert mappings["0"]["color"] == "gray"
+        assert mappings["1"]["color"] == "green"
+        assert mappings["2"]["color"] == "yellow"
+        assert mappings["3"]["color"] == "red"
+    assert [
+        panel["gridPos"]["y"]
+        for panel in sorted(dose_panels, key=lambda item: item["id"])
+    ] == [4] * 5 + [9] * 5 + [14] * 5
+    assert [
+        panel["gridPos"]["y"]
+        for panel in sorted(lamp_panels, key=lambda item: item["id"])
+    ] == [8] * 5 + [13] * 5 + [18] * 5
+
+
 def test_persisted_dose_panels_drop_fixed_decimals_without_clobbering_other_formatting(tmp_path: Path) -> None:
     bootstrap = PersistentGrafanaBootstrap(Settings(), project_root=tmp_path)
     page_two = bootstrap._dashboard_payloads()[1]
