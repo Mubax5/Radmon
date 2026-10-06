@@ -34,7 +34,7 @@ DASHBOARD_FILES = (
 BUILDING_PAGE_ORDER = ("50", "38", "52", "55", "57")
 PAGE_TWO_TIME_FROM = "now-1h"
 PAGE_TWO_TREND_LABEL = "1 Jam"
-SPARKLINE_POINT_LIMIT = 300
+SPARKLINE_POINT_LIMIT = 1000
 TREND_POINT_LIMIT = 600
 
 
@@ -297,8 +297,9 @@ def _dose_sparkline(panel_id, station, x, y, w, h=1):
     # Return actual samples from the dashboard's 30-minute window. recent.dtom
     # is a WIB wall-clock DATETIME: convert Grafana's UTC epoch boundaries to
     # WIB explicitly, independent of MariaDB session timezone. The nested
-    # indexed scan bounds work to the latest 300 samples, then restores
-    # chronological order. Empty offline results are intentional.
+    # indexed scan allows 1000 samples, enough to cover the 30-minute window
+    # at the observed sampling density, then restores chronological order.
+    # Empty offline results are intentional.
     panel["targets"] = [_target(f"""
 SELECT time, value
 FROM (

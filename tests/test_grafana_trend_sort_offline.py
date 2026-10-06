@@ -28,7 +28,8 @@ def test_page1_uses_full_30m_window_and_real_sample_count():
         assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
         assert "TIMESTAMPADD(SECOND" in sql
         assert "FROM recent" in sql
-        assert "LIMIT 300" in sql
+        assert "LIMIT 1000" in sql
+        assert not re.search(r"\bLIMIT\s+(?:10|300)\b", sql, re.I)
         assert re.search(r"ORDER\s+BY\s+time\s+ASC", sql, re.I)
         assert "$__unixEpochFrom() AS time" not in sql
         assert "$__unixEpochTo() AS time" not in sql
