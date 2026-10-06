@@ -49,7 +49,7 @@ def test_page1_sparkline_is_lightweight_and_has_no_offline_projection():
         assert "FROM measurement" not in main
         assert "$__unixEpochFrom()" in main and "$__unixEpochTo()" in main
         assert "CONVERT_TZ" not in main
-        assert _limit_value(main) == 300
+        assert _limit_value(main) == 1000
         assert "$__unixEpochFrom() AS time" not in main
         assert "$__unixEpochTo() AS time" not in main
         assert panel["fieldConfig"]["defaults"]["noValue"] == "No recent trend"

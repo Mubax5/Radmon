@@ -115,7 +115,7 @@ def test_page_one_station_cards_show_numeric_dose_and_separate_central_status_la
         assert "$__unixEpochFrom()" in sql
         assert "$__unixEpochTo()" in sql
         assert re.search(
-            r"FROM recent.*ORDER BY dtom DESC\s+LIMIT 300.*\) latest\s+ORDER BY time ASC",
+            r"FROM recent.*ORDER BY dtom DESC\s+LIMIT 1000.*\) latest\s+ORDER BY time ASC",
             sql,
             re.IGNORECASE | re.DOTALL,
         )
