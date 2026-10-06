@@ -11,8 +11,9 @@ export type AlarmLifecycleEvent = {
 const STATUS_LABELS: Record<string, string> = {
   ACTIVE: "Aktif — perlu tindakan",
   RESPONDED: "Ditanggapi operator",
-  AUTO_RESOLVED_NORMAL: "Pulih otomatis — bacaan kembali normal",
-  SOURCE_HANDLED: "Ditangani pada alat sumber",
+  ACKNOWLEDGED: "Ditangani",
+  AUTO_RESOLVED_NORMAL: "Pulih otomatis",
+  SOURCE_HANDLED: "Ditangani",
   RESOLVED: "Selesai",
   NORMAL: "Normal",
   ENDED: "Berakhir",
@@ -20,6 +21,7 @@ const STATUS_LABELS: Record<string, string> = {
   AUTO_SILENCED: "Diredam otomatis",
   RETRIGGER_LOCKED: "Pengulangan alarm ditahan",
   PENDING: "Menunggu konfirmasi",
+  WAITING: "Menunggu konfirmasi",
   AMBIGUOUS: "Perlu pemeriksaan operator",
   CONFIRMED: "Terkonfirmasi",
 };
@@ -57,6 +59,8 @@ export function statusLabel(status: string | null | undefined, fallback?: string
 export function kindLabel(kind: string | null | undefined): string {
   if (!kind) return "Event alarm";
   if (kind === "ALARM") return "Alarm";
+  if (kind === "SOURCE_ALARM") return "Alarm";
+  if (kind === "SUPPRESSION_START") return "Supresi dimulai";
   if (kind === "RETRIGGER_LOCKED") return "Pengulangan alarm ditahan";
   if (kind === "SUPPRESSED") return "Alarm tersupresi";
   if (kind === "SUPPRESSION_END") return "Supresi berakhir";

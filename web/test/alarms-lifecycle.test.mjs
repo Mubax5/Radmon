@@ -16,8 +16,9 @@ test("maps lifecycle statuses, reconciliation reasons, and suppression endings t
   const statuses = {
     ACTIVE: "Aktif — perlu tindakan",
     RESPONDED: "Ditanggapi operator",
-    AUTO_RESOLVED_NORMAL: "Pulih otomatis — bacaan kembali normal",
-    SOURCE_HANDLED: "Ditangani pada alat sumber",
+    ACKNOWLEDGED: "Ditangani",
+    AUTO_RESOLVED_NORMAL: "Pulih otomatis",
+    SOURCE_HANDLED: "Ditangani",
     RESOLVED: "Selesai",
     NORMAL: "Normal",
     ENDED: "Berakhir",
@@ -66,6 +67,9 @@ test("unknown codes use a human fallback and raw lifecycle values remain availab
   ]);
   const page = await readFile(new URL("../src/pages/AlarmsPage.tsx", import.meta.url), "utf8");
   assert.match(page, /data-testid="alarm-lifecycle-dialog"/);
+  assert.match(page, />Rincian</);
+  assert.match(page, /<Table.Head>Aksi<\/Table.Head>/);
+  assert.doesNotMatch(page, /Rincian teknis|Lifecycle \/ tindakan|Pulih otomatis — bacaan kembali normal|Source alarm/i);
   assert.match(page, /showModal\(\)/);
   assert.doesNotMatch(page, /<details>/);
   assert.match(page, /lifecycle\.raw\.map/);

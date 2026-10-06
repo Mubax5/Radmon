@@ -41,6 +41,8 @@ def test_preview_layout_is_centered_full_width_and_uses_micro_sievert():
     html = ReportService(FakeRepo(), Settings().for_dummy()).preview_html(start, end)
     assert html.count('width="100%"') >= 2
     assert html.count('align="center"') >= 2
+    assert "table-layout: fixed" in html
+    assert "overflow-wrap: anywhere" in html
     assert "Dose rate (µSv/h)" in html
     assert "Approx. Dose (µSv)" in html
     assert "Alert 8 µSv/h, Alarm 10 µSv/h" in html

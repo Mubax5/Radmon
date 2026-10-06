@@ -26,6 +26,21 @@ function quarterYear(value: unknown): string | null {
   return match?.[1] ?? null;
 }
 
+function exportStatus(job: ArchiveExportJob) {
+  const status = job.status === "queued" ? "Menunggu" : job.status === "running"
+    ? (job.phase?.startsWith("verifying:") ? `Memverifikasi ${job.phase.slice("verifying:".length)}` : job.phase?.startsWith("merging:") ? `Menggabungkan ${job.phase.slice("merging:".length)}` : "Menggabungkan")
+    : job.status === "completed" ? "Selesai" : "Gagal";
+  return (
+    <span className="archive-export-inline" role="status">
+      <span>{status}</span>
+      {job.status === "queued" || job.status === "running" ? <progress max={Math.max(job.partitions_total, 1)} value={job.partitions_read} aria-label="Progres bundle" /> : null}
+      <small>{job.partitions_read}/{job.partitions_total} bundle · {job.rows_read.toLocaleString()} baris · {job.bytes_written.toLocaleString()} byte</small>
+      {job.error ? <span role="alert">{job.error}</span> : null}
+      {job.status === "completed" ? <a href={archiveExportDownloadUrl(job.job_id)}>Unduh file database SQL</a> : null}
+    </span>
+  );
+}
+
 export function ArchivesPage() {
   const [items, setItems] = useState<ArchiveRecord[] | null>(null);
   const [year, setYear] = useState("all");
@@ -84,6 +99,7 @@ export function ArchivesPage() {
     () => Object.fromEntries([["all", `Semua tahun (${(items ?? []).length} arsip)`], ...derived.years.map((value) => [value, `${value} (${(items ?? []).filter((item) => quarterYear(item.quarter_id) === value).length} arsip)`])]),
     [derived.years, derived.filtered.length, items],
   );
+  const selectedExport = jobs.find((job) => job.selection === (year === "all" ? "all" : "year") && (year === "all" || job.selection_value === year));
 
   return (
     <div className="page-stack">
@@ -101,30 +117,20 @@ export function ArchivesPage() {
             <MetricCard label="Tahun" value={derived.years.length} badge={<span className="cell-subtle">Periode tersedia</span>} />
           </div>
 
-          <LayerCard className="filter-card archive-filter">
+          <div className="archive-filter">
             <Select
               label="Tahun arsip"
               items={yearItems}
               value={year}
               onValueChange={(value) => setYear(String(value ?? "all"))}
             />
-            <Button disabled={creating || !derived.filtered.some((item) => String(item.state).toUpperCase() === "COMPLETE")} onClick={() => void startExport(year === "all" ? "all" : "year", year === "all" ? null : year)}>
-              {year === "all" ? "Unduh semua arsip" : `Unduh tahun ${year}`}
-            </Button>
-          </LayerCard>
-
-          {jobs.length ? <PageSection title="Unduhan database" description="Gabungkan bundle yang dipilih menjadi satu dump SQL portabel.">
-            <div className="archive-export-jobs">
-              {jobs.map((job) => <LayerCard className="archive-export-job" key={job.job_id}>
-                <strong>{job.selection === "single" ? job.selection_value : job.selection === "year" ? `Tahun ${job.selection_value}` : "Semua arsip"}</strong>
-                <span>{job.status === "queued" ? "Menunggu" : job.status === "running" ? (job.phase?.startsWith("verifying:") ? `Memverifikasi ${job.phase.slice("verifying:".length)}` : job.phase?.startsWith("merging:") ? `Menggabungkan ${job.phase.slice("merging:".length)}` : "Menggabungkan") : job.status === "completed" ? "Selesai" : "Gagal"}</span>
-                <progress max={Math.max(job.partitions_total, 1)} value={job.partitions_read} aria-label="Progres bundle" />
-                <small>{job.partitions_read}/{job.partitions_total} bundle · {job.rows_read.toLocaleString()} baris · {job.bytes_written.toLocaleString()} byte</small>
-                {job.error ? <span role="alert">{job.error}</span> : null}
-                {job.status === "completed" ? <a href={archiveExportDownloadUrl(job.job_id)}>Unduh file database SQL</a> : null}
-              </LayerCard>)}
+            <div className="archive-export-control">
+              <Button disabled={creating || !derived.filtered.some((item) => String(item.state).toUpperCase() === "COMPLETE")} onClick={() => void startExport(year === "all" ? "all" : "year", year === "all" ? null : year)}>
+                {year === "all" ? "Ekspor semua arsip" : `Ekspor tahun ${year}`}
+              </Button>
+              {selectedExport ? exportStatus(selectedExport) : null}
             </div>
-          </PageSection> : null}
+          </div>
 
           <PageSection
             title="Detail arsip"
@@ -152,7 +158,12 @@ export function ArchivesPage() {
                           <Table.Cell>{formatTimestamp(item.start_at)}</Table.Cell>
                           <Table.Cell>{formatTimestamp(item.end_at)}</Table.Cell>
                           <Table.Cell>{formatTimestamp(item.updated_at ?? item.created_at)}</Table.Cell>
-                          <Table.Cell><Button disabled={creating || String(item.state).toUpperCase() !== "COMPLETE"} onClick={() => void startExport("single", String(item.quarter_id))}>Unduh</Button></Table.Cell>
+                          <Table.Cell>
+                            <div className="archive-export-control">
+                              <Button disabled={creating || String(item.state).toUpperCase() !== "COMPLETE"} onClick={() => void startExport("single", String(item.quarter_id))}>Ekspor database</Button>
+                              {jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id) ? exportStatus(jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id)!) : null}
+                            </div>
+                          </Table.Cell>
                         </Table.Row>
                       ))}
                     </Table.Body>
@@ -174,7 +185,10 @@ export function ArchivesPage() {
                         {item.end_at ? <span>Selesai: {formatTimestamp(item.end_at)}</span> : null}
                         {(item.updated_at || item.created_at) ? <span>Diperbarui: {formatTimestamp(item.updated_at ?? item.created_at)}</span> : null}
                       </div>
-                      <Button disabled={creating || String(item.state).toUpperCase() !== "COMPLETE"} onClick={() => void startExport("single", String(item.quarter_id))}>Unduh database</Button>
+                      <div className="archive-export-control">
+                        <Button disabled={creating || String(item.state).toUpperCase() !== "COMPLETE"} onClick={() => void startExport("single", String(item.quarter_id))}>Ekspor database</Button>
+                        {jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id) ? exportStatus(jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id)!) : null}
+                      </div>
                     </LayerCard>
                   ))}
                 </div>

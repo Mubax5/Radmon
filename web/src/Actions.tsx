@@ -266,7 +266,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
               <div className="mobile-sheet-handle" aria-hidden />
               <Dialog.Title>Respons alarm</Dialog.Title>
               <Dialog.Description>
-                PIN operator diverifikasi oleh backend RadMon sebelum respons diterima.
+                PIN operator diperlukan untuk mencatat respons alarm.
               </Dialog.Description>
               <form className="action-form dialog-form" onSubmit={respond}>
                 <NativeSelect

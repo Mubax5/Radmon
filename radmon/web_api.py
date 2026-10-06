@@ -226,10 +226,10 @@ def attach_web_api_routes(
         return repository.history(serid, limit=limit)
 
     @app.get("/api/v1/web/alarm-history")
-    def alarm_history(limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0), identity: UserIdentity = Depends(viewer)):
+    def alarm_history(limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0, le=1000000), identity: UserIdentity = Depends(viewer)):
         """Paginated merged source alarm rows and central policy lifecycle."""
         source_fields = {"source_id", "serid", "remote_serid", "event_time", "level", "measured_value", "threshold", "hit_count", "is_active", "source_i_flag", "source_observed_at", "source_observation_version"}
-        policy_fields = {"event_id", "source_id", "serid", "remote_serid", "remote_event_time", "surfaced_at", "event_time", "kind", "status", "reason", "resolution_code", "measured_value", "threshold", "hit_count", "policy_decision"}
+        policy_fields = {"event_id", "source_id", "serid", "remote_serid", "remote_event_time", "surfaced_at", "event_time", "kind", "status", "reason", "resolution_code", "measured_value", "threshold", "hit_count", "policy_decision", "suppression_id"}
 
         def project(raw: dict[str, Any], fields: set[str]) -> dict[str, Any]:
             return {key: raw[key] for key in fields if key in raw}
@@ -249,6 +249,55 @@ def attach_web_api_routes(
                 item = project(dict(raw), policy_fields)
                 item.update({"event_type": "policy_lifecycle", "event_time": item.get("surfaced_at"), "acknowledged": item.get("status") == "RESPONDED", "suppressed": item.get("kind") == "SUPPRESSED"})
                 policies.append(item)
+
+        policy_store = getattr(alarm_policy, "store", None) if alarm_policy is not None else None
+        list_suppressions = getattr(policy_store, "list_suppressions", None)
+        if callable(list_suppressions):
+            suppression_rows = []
+            known_ends = {
+                str(item.get("suppression_id"))
+                for item in policies
+                if item.get("kind") == "SUPPRESSION_END" and item.get("suppression_id")
+            }
+            now = datetime.now().astimezone()
+            for suppression in list_suppressions(limit=5000):
+                raw = dict(suppression) if isinstance(suppression, dict) else {
+                    key: getattr(suppression, key)
+                    for key in ("suppression_id", "serid", "started_at", "expires_at", "ended_at", "ended_reason", "reason")
+                }
+                suppression_id = str(raw.get("suppression_id") or "")
+                start_at = raw.get("started_at")
+                if start_at is not None:
+                    suppression_rows.append({
+                        "event_id": f"suppression-start:{suppression_id}", "suppression_id": suppression_id,
+                        "serid": int(raw["serid"]), "event_type": "policy_lifecycle",
+                        "event_time": start_at, "surfaced_at": start_at, "kind": "SUPPRESSION_START",
+                        "status": "SUPPRESSED", "reason": raw.get("reason"),
+                        "acknowledged": False, "suppressed": True,
+                    })
+                ended_at = raw.get("ended_at")
+                ended_reason = raw.get("ended_reason")
+                if ended_at is None and raw.get("expires_at") is not None:
+                    expiry = raw["expires_at"]
+                    if isinstance(expiry, str):
+                        try:
+                            expiry = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+                        except ValueError:
+                            expiry = None
+                    if expiry is not None:
+                        comparison_now = now if expiry.tzinfo else now.replace(tzinfo=None)
+                        if expiry <= comparison_now:
+                            ended_at, ended_reason = expiry, "EXPIRED"
+                if ended_at is not None and suppression_id not in known_ends:
+                    end_reason = str(ended_reason or "EXPIRED")
+                    suppression_rows.append({
+                        "event_id": f"suppression-end:{suppression_id}", "suppression_id": suppression_id,
+                        "serid": int(raw["serid"]), "event_type": "policy_lifecycle",
+                        "event_time": ended_at, "surfaced_at": ended_at, "kind": "SUPPRESSION_END",
+                        "status": "ENDED", "action": end_reason.split(":", 1)[0], "reason": end_reason,
+                        "acknowledged": False, "suppressed": False,
+                    })
+            policies.extend(suppression_rows)
 
         def time_key(item):
             value = item.get("event_time") or item.get("surfaced_at")

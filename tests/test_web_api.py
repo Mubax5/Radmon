@@ -113,14 +113,28 @@ def test_alarm_history_merges_source_and_policy_rows_with_pagination_without_mut
             self.calls = 0
         def list_alarms(self, *, limit):
             self.calls += 1
-            return [{"source_id": "gd52", "serid": 5702, "remote_serid": 5702,
+            return [{"source_id": source_id, "serid": 5702, "remote_serid": 5702,
                       "event_time": at, "level": "ALARM", "is_active": True,
                       "acknowledged_at": None, "pic": "SECRET PIC", "note": "SECRET NOTE",
                       "action": "SECRET ACTION", "operator": "SECRET OP", "user_id": 91,
-                      "i_flag": 1}]
+                      "i_flag": 1} for source_id in ("gd50", "gd52", "gd38")]
 
     class Policy:
         include_event = True
+        class Store:
+            def list_suppressions(self, *, limit):
+                return [
+                    {"suppression_id": "active-1", "serid": 5702, "started_at": "2026-10-08T10:00:00",
+                     "expires_at": "2026-10-09T13:00:00", "ended_at": None, "ended_reason": None,
+                     "reason": "Pemeliharaan detector"},
+                    {"suppression_id": "ended-1", "serid": 5703, "started_at": "2026-10-01T08:00:00",
+                     "expires_at": "2026-10-01T09:00:00", "ended_at": "2026-10-01T09:00:00",
+                     "ended_reason": "EXPIRED", "reason": "Pengujian"},
+                    {"suppression_id": "expired-unprocessed", "serid": 5704, "started_at": "2026-09-30T08:00:00",
+                     "expires_at": "2026-09-30T09:00:00", "ended_at": None, "ended_reason": None,
+                     "reason": "Pemeliharaan selesai"},
+                ]
+        store = Store()
         def list_events(self, *, limit):
             return ([{"event_id": "p1", "source_id": "gd52", "serid": 5702,
                       "remote_serid": 5702, "remote_event_time": at,
@@ -135,25 +149,32 @@ def test_alarm_history_merges_source_and_policy_rows_with_pagination_without_mut
     client = TestClient(app)
     client.cookies.set(SESSION_COOKIE, token)
 
-    response = client.get("/api/v1/web/alarm-history?limit=1&offset=0")
+    response = client.get("/api/v1/web/alarm-history?limit=10&offset=0")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 1
-    assert body["items"][0]["event_type"] == "source_alarm"
-    assert body["items"][0]["policy_event"]["event_id"] == "p1"
-    assert body["items"][0]["acknowledged"] is False
-    assert not {"pic", "note", "action", "operator", "user_id", "i_flag"} & body["items"][0].keys()
-    assert body["items"][0]["source_i_flag"] == 1
-    assert not {"action", "resolution_reason", "operator_id", "secret"} & body["items"][0]["policy_event"].keys()
-    assert body["items"][0]["suppressed"] is False
+    assert body["total"] == 8
+    source_rows = [item for item in body["items"] if item["event_type"] == "source_alarm"]
+    assert {item["source_id"] for item in source_rows} == {"gd50", "gd52", "gd38"}
+    merged_source = next((item for item in source_rows if item.get("policy_event", {}).get("event_id") == "p1"), None)
+    assert merged_source is not None, body["items"]
+    assert merged_source["acknowledged"] is False
+    assert not {"pic", "note", "action", "operator", "user_id", "i_flag"} & merged_source.keys()
+    assert merged_source["source_i_flag"] == 1
+    assert not {"action", "resolution_reason", "operator_id", "secret"} & merged_source["policy_event"].keys()
+    assert merged_source["suppressed"] is False
+    suppression_events = [item for item in body["items"] if item.get("suppression_id")]
+    assert {(item["kind"], item["status"]) for item in suppression_events} == {
+        ("SUPPRESSION_START", "SUPPRESSED"), ("SUPPRESSION_END", "ENDED"),
+    }
+    assert {item["suppression_id"] for item in suppression_events} == {"active-1", "ended-1", "expired-unprocessed"}
+    assert next(item for item in suppression_events if item["suppression_id"] == "expired-unprocessed" and item["kind"] == "SUPPRESSION_END")["action"] == "EXPIRED"
     assert mirror.calls == 1
 
     policy.include_event = False
-    source_only = client.get("/api/v1/web/alarm-history?limit=1&offset=0").json()
-    assert source_only["total"] == 1
-    assert source_only["items"][0]["event_type"] == "source_alarm"
-    assert "policy_event" not in source_only["items"][0]
+    source_only = client.get("/api/v1/web/alarm-history?limit=10&offset=0").json()
+    assert len([item for item in source_only["items"] if item["event_type"] == "source_alarm"]) == 3
+    assert all("policy_event" not in item for item in source_only["items"] if item["event_type"] == "source_alarm")
 
 
 def test_system_diagnostics_are_administrator_only(tmp_path):

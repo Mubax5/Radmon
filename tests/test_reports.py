@@ -3,8 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import pytest
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.platypus import Table as ReportLabTable
 
 from radmon.config import Settings
+import radmon.reports as reports_module
 from radmon.reports import ReportService
 
 
@@ -147,6 +151,60 @@ def test_pdf_formats_period_and_measurements_in_wib():
     payload = ReportService(FakeRepo(), Settings()).pdf_bytes(start, start + timedelta(hours=1))
     assert b"From 2026-09-07 08:00:00 WIB to 2026-09-07 09:00:00 WIB" in payload
     assert b"2026-09-07 08:00:00 WIB" in payload
+
+
+def test_portrait_pdf_tables_stay_inside_equal_margins_and_wrap_long_cells(monkeypatch):
+    class LongStationRepo(FakeRepo):
+        def station_config(self, serid=None):
+            from radmon.models import StationConfig
+
+            return StationConfig(
+                5202, "52", "Station name with a deliberately very long description " * 5,
+                "Building location that is also intentionally unusually long " * 5,
+                8, 10, 5, "uSv/h",
+            )
+
+    tables = []
+    table_data = []
+
+    def capture_table(*args, **kwargs):
+        table = ReportLabTable(*args, **kwargs)
+        tables.append(table)
+        table_data.append(args[0])
+        return table
+
+    monkeypatch.setattr(reports_module, "Table", capture_table)
+    start = datetime(2026, 9, 7, 8, 0)
+    payload = ReportService(LongStationRepo(), Settings()).pdf_bytes(start, start + timedelta(hours=1))
+
+    assert payload.startswith(b"%PDF")
+    usable_width = A4[0] - 20 * mm
+    report_tables = [table for table in tables if table.repeatRows == 1]
+    assert len(report_tables) == 3
+    for table in report_tables:
+        assert table.hAlign == "CENTER"
+        assert table.repeatRows == 1
+        assert sum(table._colWidths) == pytest.approx(usable_width)
+        assert table._width <= usable_width + 0.01
+    summary_cells = table_data[1][1]
+    wrapped_cells = [cell for cell in summary_cells if isinstance(cell, reports_module.Paragraph)]
+    assert len(wrapped_cells) == 8
+    assert all(cell.style.splitLongWords for cell in wrapped_cells)
+
+
+def test_pdf_includes_page_numbers_for_multi_page_detail_tables():
+    class MultiPageRepo(FakeRepo):
+        def measurement_history(self, start, end, *, serid=None, limit=5000):
+            return [
+                {"serid": 5202, "dtom": start + timedelta(seconds=index), "doserate": 0.1, "dose": 0.0}
+                for index in range(100)
+            ]
+
+    start = datetime(2026, 9, 7, 8, 0)
+    payload = ReportService(MultiPageRepo(), Settings()).pdf_bytes(start, start + timedelta(hours=1))
+
+    assert b"Page 1" in payload
+    assert b"Page 2" in payload
 
 
 def test_pdf_includes_every_alarm_below_explicit_bound():

@@ -276,8 +276,8 @@ class ReportService:
 body {{ font-family: Arial, sans-serif; color: #222; font-size: 10pt; margin: 2px; padding: 0; }}
 h1, h2 {{ text-align: center; margin: 4px 0; }}
 hr {{ margin: 8px 0 10px; }}
-table {{ border-collapse: collapse; margin: 8px 0 16px; }}
-th, td {{ border: 1px solid #777; padding: 5px 4px; text-align: center; }}
+table {{ width: 100%; table-layout: fixed; border-collapse: collapse; margin: 8px auto 16px; }}
+th, td {{ border: 1px solid #777; padding: 5px 4px; text-align: center; overflow-wrap: anywhere; word-break: break-word; }}
 th {{ background: #efefef; font-weight: bold; }}
 .range {{ text-align: center; font-weight: bold; margin: 4px 0 8px; }}
 .note {{ text-align: center; color: #555; font-size: 9pt; margin: 2px 0 8px; }}
@@ -349,8 +349,12 @@ th {{ background: #efefef; font-weight: bold; }}
         styles["Heading2"].fontSize = 11
         styles["Heading2"].leading = 13
         styles["BodyText"].fontSize = 8
+        styles["Title"].alignment = 1
         styles["Heading2"].alignment = 1
-        cell_body = ParagraphStyle("ReportCell", parent=styles["BodyText"], fontSize=6.5, leading=8, alignment=1)
+        cell_body = ParagraphStyle(
+            "ReportCell", parent=styles["BodyText"], fontSize=6.5,
+            leading=8, alignment=1, splitLongWords=1,
+        )
         cell_header = ParagraphStyle("ReportHeader", parent=cell_body, fontName="Helvetica-Bold", textColor=colors.white)
 
         def wrapped(data):
@@ -369,6 +373,24 @@ th {{ background: #efefef; font-weight: bold; }}
             title=f"Radmon Report - {station.room}",
             pageCompression=0,
         )
+
+        def column_widths(proportions: tuple[float, ...]) -> list[float]:
+            """Allocate each table within the document's usable portrait width."""
+            if not proportions or any(value <= 0 for value in proportions):
+                raise ValueError("table column proportions must be positive")
+            total = sum(proportions)
+            widths = [document.width * value / total for value in proportions]
+            # Avoid cumulative floating point error making the last column spill.
+            widths[-1] = document.width - sum(widths[:-1])
+            return widths
+
+        def draw_page_number(canvas: Canvas, _document) -> None:
+            canvas.saveState()
+            canvas.setFont("Helvetica", 8)
+            canvas.setFillColor(colors.HexColor("#555555"))
+            canvas.drawCentredString(A4[0] / 2, 5 * mm, f"Page {canvas.getPageNumber()}")
+            canvas.restoreState()
+
         unit = _micro_unit(getattr(station, "unit", None))
         description = f"Alert {station.warnlevel:g} {unit}, Alarm {station.alarmlevel:g} {unit}"
         story: list[Any] = [
@@ -392,7 +414,12 @@ th {{ background: #efefef; font-weight: bold; }}
                 self._fmt(summary.maximum),
             ],
         ]
-        summary_table = Table(wrapped(summary_data), colWidths=[8*mm, 18*mm, 19*mm, 29*mm, 28*mm, 28*mm, 30*mm, 30*mm], repeatRows=1, hAlign="CENTER")
+        summary_table = Table(
+            wrapped(summary_data),
+            colWidths=column_widths((5, 12, 12, 18, 16, 16, 13, 8)),
+            repeatRows=1,
+            hAlign="CENTER",
+        )
         summary_table.setStyle(self._table_style())
         story.extend([summary_table, Spacer(1, 5 * mm), Paragraph("Dose rate and Approx. Dose", styles["Heading2"]), Paragraph(f"From {self._dt(start)} to {self._dt(end)}", styles["BodyText"]), Spacer(1, 2 * mm)])
 
@@ -422,7 +449,12 @@ th {{ background: #efefef; font-weight: bold; }}
             )
         if len(measurement_data) == 1:
             measurement_data.append(["-", "-", "-", "-", "No data", "-", "-"])
-        measurements = Table(wrapped(measurement_data), colWidths=[10*mm, 15*mm, 24*mm, 24*mm, 42*mm, 30*mm, 38*mm], repeatRows=1, hAlign="CENTER")
+        measurements = Table(
+            wrapped(measurement_data),
+            colWidths=column_widths((7, 9, 16, 16, 21, 15, 16)),
+            repeatRows=1,
+            hAlign="CENTER",
+        )
         measurements.setStyle(self._table_style())
         story.extend([measurements, Spacer(1, 6 * mm)])
 
@@ -438,7 +470,12 @@ th {{ background: #efefef; font-weight: bold; }}
             )
         if len(alarm_data) == 1:
             alarm_data.append(["-", "-", "-", "No alarms"])
-        alarm_table = Table(wrapped(alarm_data), colWidths=[22*mm, 38*mm, 25*mm, document.width - 85*mm], repeatRows=1)
+        alarm_table = Table(
+            wrapped(alarm_data),
+            colWidths=column_widths((12, 20, 14, 54)),
+            repeatRows=1,
+            hAlign="CENTER",
+        )
         alarm_table.setStyle(self._table_style())
         if alarms:
             story.extend([Paragraph("Alarm history", styles["Heading2"]), alarm_table])
@@ -446,7 +483,7 @@ th {{ background: #efefef; font-weight: bold; }}
             kwargs["invariant"] = 1
             return Canvas(*args, **kwargs)
 
-        document.build(story, canvasmaker=stable_canvas)
+        document.build(story, onFirstPage=draw_page_number, onLaterPages=draw_page_number, canvasmaker=stable_canvas)
         return output.getvalue()
 
     @staticmethod
