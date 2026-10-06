@@ -114,7 +114,7 @@ def _micro_unit(unit: str | None) -> str:
 
 class ReportService:
     PREVIEW_ROW_LIMIT = 250
-    MAX_MEASUREMENT_ROWS = 20_000
+    MAX_MEASUREMENT_ROWS = 50_000
     MAX_ALARM_ROWS = 10_000
     REPORT_TIMEZONE = ZoneInfo("Asia/Jakarta")
 
@@ -137,12 +137,14 @@ class ReportService:
     ) -> list[dict[str, Any]]:
         if end <= start:
             raise ValueError("report end must be after start")
-        count = self._count("measurement_count", start, end)
+        database_start = self._database_time(start)
+        database_end = self._database_time(end)
+        count = self._count("measurement_count", database_start, database_end)
         if count is not None and count > self.MAX_MEASUREMENT_ROWS:
             raise ValueError(f"jumlah pengukuran melebihi batas {self.MAX_MEASUREMENT_ROWS:,}; pilih rentang waktu lebih sempit")
         rows = self.repository.measurement_history(
-            start,
-            end,
+            database_start,
+            database_end,
             serid=self.settings.serid,
             limit=min(limit, self.MAX_MEASUREMENT_ROWS + 1),
         )
@@ -156,11 +158,20 @@ class ReportService:
             return int(method(start, end, serid=self.settings.serid))
         return None
 
+    @classmethod
+    def _database_time(cls, value: datetime) -> datetime:
+        """Measurement and alarm DATETIME columns store Asia/Jakarta wall time."""
+        if value.tzinfo is None or value.utcoffset() is None:
+            return value
+        return value.astimezone(cls.REPORT_TIMEZONE).replace(tzinfo=None)
+
     def _checked_alarms(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
-        count = self._count("alarm_count", start, end)
+        database_start = self._database_time(start)
+        database_end = self._database_time(end)
+        count = self._count("alarm_count", database_start, database_end)
         if count is not None and count > self.MAX_ALARM_ROWS:
             raise ValueError(f"jumlah alarm melebihi batas {self.MAX_ALARM_ROWS:,}; pilih rentang waktu lebih sempit")
-        rows = self.repository.alarm_history(start, end, serid=self.settings.serid, limit=self.MAX_ALARM_ROWS + 1)
+        rows = self.repository.alarm_history(database_start, database_end, serid=self.settings.serid, limit=self.MAX_ALARM_ROWS + 1)
         if len(rows) > self.MAX_ALARM_ROWS:
             raise ValueError(f"jumlah alarm melebihi batas {self.MAX_ALARM_ROWS:,}; pilih rentang waktu lebih sempit")
         return rows
@@ -168,10 +179,12 @@ class ReportService:
     def preflight(self, start: datetime, end: datetime) -> None:
         if end <= start:
             raise ValueError("report end must be after start")
-        measurements = self._count("measurement_count", start, end)
+        database_start = self._database_time(start)
+        database_end = self._database_time(end)
+        measurements = self._count("measurement_count", database_start, database_end)
         if measurements is not None and measurements > self.MAX_MEASUREMENT_ROWS:
             raise ValueError(f"jumlah pengukuran melebihi batas {self.MAX_MEASUREMENT_ROWS:,}; pilih rentang waktu lebih sempit")
-        alarms = self._count("alarm_count", start, end)
+        alarms = self._count("alarm_count", database_start, database_end)
         if alarms is not None and alarms > self.MAX_ALARM_ROWS:
             raise ValueError(f"jumlah alarm melebihi batas {self.MAX_ALARM_ROWS:,}; pilih rentang waktu lebih sempit")
 
@@ -183,12 +196,16 @@ class ReportService:
         fallback_rows: list[dict[str, Any]] | None = None,
     ) -> ReportSummary:
         if self.summary_reader is not None:
-            row = self.summary_reader.summary(start, end, serid=self.settings.serid)
+            row = self.summary_reader.summary(
+                self._database_time(start),
+                self._database_time(end),
+                serid=self.settings.serid,
+            )
             if row:
                 return _summary_from_mapping(row)
         aggregate = getattr(self.repository, "measurement_summary", None)
         if callable(aggregate):
-            row = aggregate(start, end, serid=self.settings.serid)
+            row = aggregate(self._database_time(start), self._database_time(end), serid=self.settings.serid)
             if row:
                 return _summary_from_mapping(row)
         rows = fallback_rows if fallback_rows is not None else self.rows(start, end)
@@ -333,15 +350,33 @@ th {{ background: #efefef; font-weight: bold; }}
         path.write_bytes(self.pdf_bytes(start, end))
         return path
 
-    def pdf_bytes(self, start: datetime, end: datetime) -> bytes:
-        """Generate the canonical, complete portrait PDF for every report surface."""
+    def pdf_bytes(self, start: datetime, end: datetime, *, preview: bool = False) -> bytes:
+        """Generate a complete report PDF, or a bounded draft PDF preview."""
         if end <= start:
             raise ValueError("report end must be after start")
-        self.preflight(start, end)
+        if not preview:
+            self.preflight(start, end)
         station = self.repository.station_config(self.settings.serid)
-        rows = self.rows(start, end)
+        if preview:
+            rows = self.repository.measurement_history(
+                self._database_time(start),
+                self._database_time(end),
+                serid=self.settings.serid,
+                limit=self.PREVIEW_ROW_LIMIT,
+            )
+        else:
+            rows = self.rows(start, end)
         summary = self._summary_for_range(start, end, fallback_rows=rows)
-        alarms = self._checked_alarms(start, end)
+        alarms = (
+            self.repository.alarm_history(
+                self._database_time(start),
+                self._database_time(end),
+                serid=self.settings.serid,
+                limit=250,
+            )
+            if preview
+            else self._checked_alarms(start, end)
+        )
 
         styles = getSampleStyleSheet()
         styles["Title"].fontSize = 12
@@ -456,7 +491,13 @@ th {{ background: #efefef; font-weight: bold; }}
             hAlign="CENTER",
         )
         measurements.setStyle(self._table_style())
-        story.extend([measurements, Spacer(1, 6 * mm)])
+        story.extend([measurements, Spacer(1, 2 * mm)])
+        if preview and summary.sample_count > len(rows):
+            story.append(Paragraph(
+                f"Pratinjau: menampilkan {len(rows):,} dari {summary.sample_count:,} pengukuran dalam rentang pilihan.",
+                styles["BodyText"],
+            ))
+        story.append(Spacer(1, 6 * mm))
 
         alarm_data = [["Alarm ID", "Time", "Type", "Message"]]
         for row in alarms:

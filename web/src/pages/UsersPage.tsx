@@ -142,7 +142,7 @@ function CreateUserDialog({ onCreated, administratorExists }: { onCreated: () =>
     <dialog ref={dialog} className="native-user-dialog" aria-labelledby="user-create-title" data-testid="user-create-dialog">
       <div className="native-user-dialog-content">
         <h2 id="user-create-title">Buat pengguna</h2>
-        <p>Buat identitas RadMon terautentikasi. Viewer hanya dapat membaca; izin Operator dan Administrator tetap ditegakkan oleh backend.</p>
+        <p>Buat akun untuk mengakses RadMon. Peran Viewer hanya dapat melihat data, sedangkan Operator dan Administrator memiliki akses sesuai tugasnya.</p>
          <CreateUserForm onCreated={onCreated} onDone={() => dialog.current?.close()} administratorExists={administratorExists} />
         <form method="dialog" className="form-actions dialog-close-row"><button type="submit" className="native-dialog-close">Tutup</button></form>
       </div>
@@ -180,7 +180,7 @@ export function UsersPage() {
     <div className="page-stack">
       <PageHeading
         title="Pengguna"
-        description="Identitas RadMon terautentikasi, role, dan status akun. Password serta PIN tetap write-only."
+        description="Kelola akun, peran, dan akses pengguna RadMon."
         action={createUserAction}
       />
       {error ? <ErrorCard message={error} /> : null}
@@ -193,7 +193,7 @@ export function UsersPage() {
             <MetricCard label="Administrator" value={summary.administrators} badge={<span className="cell-subtle">Akses administrasi</span>} />
           </div>
 
-          <PageSection title="Direktori pengguna" description="Role dan status akun ditampilkan tanpa material password atau PIN.">
+          <PageSection title="Daftar pengguna" description="Tinjau peran dan status akses setiap akun.">
             <ResponsiveDataView
               desktop={<UserTable users={items} onChanged={() => void load()} />}
               mobile={<UserCards users={items} onChanged={() => void load()} />}

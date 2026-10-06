@@ -465,7 +465,7 @@ def test_history_station_toolbar_order_and_compact_viewport_layout(chrome_driver
             assert geometry["chart"]["top"] < height
             visible_chart = min(geometry["chart"]["bottom"], height) - max(geometry["chart"]["top"], 0)
             assert visible_chart / geometry["chart"]["height"] >= 0.8, geometry
-            assert chrome_driver.find_elements(By.CSS_SELECTOR, ".history-selected-meta")
+            assert not chrome_driver.find_elements(By.CSS_SELECTOR, ".history-selected-meta")
             _assert_no_horizontal_overflow(chrome_driver)
 
 
@@ -522,7 +522,7 @@ def test_history_station_combobox_searches_by_name_and_serid_and_supports_keyboa
         station.send_keys(Keys.ENTER)
         WebDriverWait(chrome_driver, 8).until(lambda browser: "serid=5201" in browser.current_url)
         assert "Server 52" in station.get_attribute("value")
-        assert "Offline — last-known" in chrome_driver.find_element(By.CSS_SELECTOR, ".history-selected-meta").text
+        assert not chrome_driver.find_elements(By.CSS_SELECTOR, ".history-selected-meta")
 
         station.click()
         station.send_keys(Keys.CONTROL, "a")

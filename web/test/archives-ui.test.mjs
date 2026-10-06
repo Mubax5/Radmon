@@ -22,5 +22,6 @@ test("archive year and quarter exports remain unboxed, responsive, and show asyn
   assert.match(css, /\.archive-filter\s*\{[^}]*display:\s*grid/);
   assert.match(css, /\.archive-export-inline\s*\{[^}]*flex-wrap:\s*wrap/);
   assert.match(css, /@media \(min-width: 768px\)[\s\S]*?\.archive-filter\s*\{/);
-  assert.match(history, /className="filter-card history-filter"/);
+  assert.match(history, /<div className="history-filter">/);
+  assert.doesNotMatch(history, /filter-card history-filter/);
 });

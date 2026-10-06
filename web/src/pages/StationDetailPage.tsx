@@ -57,7 +57,7 @@ export function StationDetailPage() {
   if (!serid) return <ErrorCard message="SERID stasiun tidak valid." />;
   if (!station && !error) return <LoadingCard />;
   return <div className="page-stack">
-    <PageHeading title="Detail stasiun" description="Status terakhir dan konfigurasi yang dapat diedit tanpa mengubah measurement atau identitas detector." action={<Button variant="secondary" onClick={() => navigate("stations")}>Kembali</Button>} />
+    <PageHeading title="Detail stasiun" description="Lihat kondisi terkini dan pengaturan pemantauan stasiun." action={<Button variant="secondary" onClick={() => navigate("stations")}>Kembali</Button>} />
     {error ? <ErrorCard message={error} /> : null}
     <StationDetail
       station={station}

@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
             self.repository,
             replace(self.settings, serid=int(serid)),
             summary_reader=self.summary_reader,
-        ).pdf_bytes(start, end)
+        ).pdf_bytes(start, end, preview=True)
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:

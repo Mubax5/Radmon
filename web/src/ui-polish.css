@@ -365,10 +365,6 @@
   line-height: 1.35;
 }
 
-.history-filter {
-  padding: 8px 10px;
-}
-
 .history-filter > .history-toolbar,
 .history-filter > .history-toolbar-meta {
   width: 100%;
@@ -527,28 +523,6 @@
   max-width: none;
   min-width: 0;
   padding: 2px 2px 0;
-}
-
-.history-selected-meta {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 6px 12px;
-  min-width: 0;
-  max-width: 100%;
-  margin: 0;
-}
-
-.history-selected-meta > span {
-  min-width: 0;
-  overflow-wrap: anywhere;
-  text-align: right;
-}
-
-.history-selected-meta .alarm-status {
-  flex: 0 0 auto;
-  white-space: nowrap;
 }
 
 .history-carousel-hint {
@@ -870,17 +844,6 @@
     grid-column: 1;
     max-width: none;
     padding: 0 2px;
-  }
-
-  .history-selected-meta {
-    display: block;
-    text-align: left;
-  }
-
-  .history-selected-meta > span + span {
-    display: block;
-    margin: 3px 0 0;
-    text-align: left;
   }
 
   .history-carousel-hint {

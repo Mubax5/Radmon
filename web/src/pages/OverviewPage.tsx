@@ -62,7 +62,7 @@ export function OverviewPage() {
     <div className="page-stack">
       <PageHeading
         title="Monitoring radiasi"
-        description="Status operasi live, antrean perhatian, kesegaran data, dan konteks dose untuk seluruh stasiun terkonfigurasi."
+        description="Pantau kondisi radiasi terkini dan temukan stasiun yang perlu diperiksa."
       />
       {error ? <ErrorCard message={error} /> : null}
       {data ? (
@@ -93,7 +93,7 @@ export function OverviewPage() {
             )}
           </PageSection>
 
-          <PageSection title="Kesegaran data" description="Measurement terbaru yang diterima oleh read model central RadMon.">
+          <PageSection title="Kesegaran data" description="Waktu pembaruan terakhir dari seluruh stasiun.">
             <div className="metric-grid freshness-grid">
               <MetricCard
                 label="Measurement live terbaru"
@@ -103,7 +103,7 @@ export function OverviewPage() {
               <MetricCard
                 label="Stasiun terkonfigurasi"
                 value={data.stations.length}
-                badge={<span className="cell-subtle">Ringkasan central</span>}
+                badge={<span className="cell-subtle">Dalam pemantauan</span>}
               />
             </div>
           </PageSection>

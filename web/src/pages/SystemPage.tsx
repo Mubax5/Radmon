@@ -127,7 +127,7 @@ export function SystemPage() {
     <div className="page-stack">
       <PageHeading
         title="Sistem"
-        description="Diagnostik runtime central, kesehatan source LAN, dan administrasi Grafana lokal."
+        description="Periksa koneksi sumber data dan status layanan pemantauan."
         action={data?.grafana_admin_url ? (
           <Button
             variant="secondary"
@@ -149,7 +149,7 @@ export function SystemPage() {
 
           <PageSection
             title="Kesehatan source LAN"
-            description="Konektivitas, kesegaran poll, jumlah kegagalan, dan error terbaru dari central security sidecar."
+            description="Status koneksi dan pembaruan terakhir untuk setiap sumber data LAN."
             className="source-health-section"
           >
             <ResponsiveDataView
@@ -158,10 +158,10 @@ export function SystemPage() {
             />
           </PageSection>
 
-          <PageSection title="Administrasi" description={`Terautentikasi sebagai ${data.role}. Editor Grafana tetap lokal di server Dell.`}>
+          <PageSection title="Administrasi" description={`Masuk sebagai ${data.role}. Pengaturan Grafana tersedia untuk administrator.`}>
             <LayerCard className="action-card system-admin-card">
               <h2>Administrasi Grafana</h2>
-              <p>Editing dashboard tetap pada listener loopback Dell; client BRIN tetap memakai gateway RadMon untuk monitoring read-only.</p>
+              <p>Kelola dashboard Grafana pada server ini. Pemantauan stasiun tetap tersedia melalui RadMon.</p>
               <div className="form-actions">
                 <Button variant="secondary" onClick={() => window.open(data.grafana_admin_url, "_blank", "noopener,noreferrer")}>Buka admin Grafana lokal</Button>
               </div>

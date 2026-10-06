@@ -102,7 +102,7 @@ export function StationsPage() {
     <div className="page-stack">
       <PageHeading
         title="Stasiun"
-        description="Cari, filter, periksa threshold, lalu lanjut langsung ke riwayat measurement."
+        description="Cari stasiun, tinjau status dan ambang radiasinya, atau buka riwayat pengukuran."
       />
       {error ? <ErrorCard message={error} /> : null}
       {overview ? (

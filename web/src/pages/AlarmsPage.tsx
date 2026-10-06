@@ -271,7 +271,7 @@ export function AlarmsPage() {
     <div className="page-stack">
       <PageHeading
         title="Alarm"
-        description="Alarm aktif diprioritaskan; suppression dan riwayat event tetap dilindungi oleh role dan policy PIN operator."
+        description="Tinjau alarm aktif, catat tindak lanjut, dan lihat riwayat perubahan alarm."
         action={<div className="form-actions">
           <Button variant="secondary" onClick={() => void load()}>Muat ulang</Button>
           <Button variant={soundOn ? "secondary" : "primary"} onClick={() => {
@@ -311,12 +311,12 @@ export function AlarmsPage() {
 
           <div className="metric-grid alarm-summary">
             <MetricCard label="Aktif" value={summary.active.length} badge={<Badge variant={summary.active.length ? "error" : "success"}>{summary.active.length ? "Perlu tindakan" : "Aman"}</Badge>} />
-            <MetricCard label="Retrigger locked" value={summary.retriggerLocked} badge={<span className="cell-subtle">Burst policy</span>} />
-            <MetricCard label="Event tersupresi" value={summary.suppressed} badge={<span className="cell-subtle">Riwayat policy</span>} />
-            <MetricCard label="Event terbaru" value={summary.total} badge={<span className="cell-subtle">Rekaman dimuat</span>} />
+            <MetricCard label="Alarm ditahan sementara" value={summary.retriggerLocked} badge={<span className="cell-subtle">Menunggu pemicu baru</span>} />
+            <MetricCard label="Alarm diredam" value={summary.suppressed} badge={<span className="cell-subtle">Sesuai pengaturan</span>} />
+            <MetricCard label="Catatan terbaru" value={summary.total} badge={<span className="cell-subtle">Riwayat alarm</span>} />
           </div>
 
-          <PageSection title="Tindakan operator" description="Respons alarm: pilih event aktif, action, PIC, alasan, dan PIN operator. Suppression: pilih stasiun dan durasi; setiap perubahan memerlukan PIN terotorisasi.">
+          <PageSection title="Tindakan operator" description="Catat respons dan penanggung jawab alarm, atau redam alarm stasiun untuk waktu tertentu. Perubahan memerlukan PIN operator.">
             {suppressionError ? (
               <div className="alarm-suppression-error">
                 <ErrorCard message={`Daftar suppression tidak tersedia: ${suppressionError}`} />
@@ -326,7 +326,7 @@ export function AlarmsPage() {
             <AlarmOperations events={items.filter((event) => event.event_type !== "source_alarm") as (PolicyEvent & { event_id: string })[]} suppressions={suppressions} onChanged={() => void load()} initialEventId={requestedEventId} />
           </PageSection>
 
-          <PageSection title="Riwayat event" description="Riwayat alarm alat, perubahan kebijakan, dan supresi dalam urutan waktu.">
+          <PageSection title="Riwayat alarm" description="Lihat alarm alat dan perubahan pengaturan alarm berdasarkan waktu.">
             <ResponsiveDataView
               desktop={<EventTable events={items} onChanged={() => void load()} />}
               mobile={<EventCards events={items} onChanged={() => void load()} />}

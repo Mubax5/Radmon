@@ -10,6 +10,7 @@ from radmon.audit import AuditTrail
 from radmon.config import Settings
 from radmon.models import StationConfig
 from radmon.remote_alarm import RemoteAlarmMirror
+from radmon.reports import ReportService
 from radmon.secure_api import attach_secure_routes
 from radmon.security import Role, SecurityStore
 from radmon.web_reports import WebReportJobs
@@ -73,7 +74,7 @@ def test_report_request_validates_station_and_range_and_audits_only_requests(tmp
 def test_oversized_report_is_rejected_before_job_or_artifact_state_is_created(tmp_path):
     class OversizedRepository(ReportRepository):
         def measurement_count(self, start, end, *, serid=None):
-            return 20_001
+            return ReportService.MAX_MEASUREMENT_ROWS + 1
 
     security = SecurityStore(tmp_path / "security.db")
     identity = security.create_user("operator", "Operator", Role.OPERATOR, "Password123!", "2468")
@@ -82,8 +83,8 @@ def test_oversized_report_is_rejected_before_job_or_artifact_state_is_created(tm
 
     with pytest.raises(ValueError, match="pengukuran.*rentang waktu lebih sempit"):
         jobs.create(identity, serid=5201, start=start, end=start + timedelta(hours=1))
-    with pytest.raises(ValueError, match="pengukuran.*rentang waktu lebih sempit"):
-        jobs.preview_pdf(serid=5201, start=start, end=start + timedelta(hours=1))
+    preview = jobs.preview_pdf(serid=5201, start=start, end=start + timedelta(hours=1))
+    assert preview.startswith(b"%PDF")
     assert jobs.list() == []
     assert not (tmp_path / "reports" / "web").exists()
     jobs.shutdown()
@@ -267,13 +268,16 @@ def test_reports_frontend_contract_uses_native_controls_and_safe_download_url():
     assert "window.location" not in page
     assert "<Dialog" not in page
     assert "draft-preview?${query}" in page
-    assert "disabled={creating || !serid || !selectedRange || !draftUrl}" in page
+    assert "disabled={creating || !serid || !selectedRange || !currentPreviewReady}" in page
     assert 'grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr)' in styles
     assert "@media (max-width: 767px)" in styles and ".report-workspace { grid-template-columns: minmax(0, 1fr); }" in styles
     assert page.index('className="report-preview-pane"') < page.index('className="action-card report-form-card"')
     assert '<section className="report-preview"' not in page
     assert "report-preview-pane iframe" in styles
-    assert "const displayedPreviewUrl = (draftLoading || draftError) && previewUrl ? previewUrl" in page
+    assert 'const currentDraftUrl = draftPreview?.key === selectedKey ? draftPreview.url : null' in page
+    assert 'PDF sebelumnya — bukan pilihan saat ini' in page
+    assert 'const backendDetail = payload.detail' in page
+    assert 'new Date(startAt)' in page and 'start.toISOString()' in page
     assert 'reportRows.find((job) => job.status === "completed")?.job_id ?? null' in page
     assert "setPreviewJobId(created.job_id)" in page
     pdf_source = (root / "radmon/reports.py").read_text(encoding="utf-8")

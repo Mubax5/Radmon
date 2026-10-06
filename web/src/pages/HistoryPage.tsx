@@ -7,9 +7,6 @@ import { api, type Station } from "../api";
 import { TrendChart, type TrendPoint } from "../components/TrendChart";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
 import { useWebRefresh } from "../live";
-import { useSession } from "../auth";
-import { AlarmStatus } from "../components/AlarmStatus";
-import { navigate } from "../navigation";
 import { formatDoseValue } from "../format";
 import {
   ErrorCard,
@@ -18,7 +15,6 @@ import {
   PageHeading,
   PageSection,
   formatTimestamp,
-  freshnessLabel,
 } from "../ui";
 
 type HistoryRow = Record<string, unknown> & {
@@ -37,7 +33,6 @@ function numericDoseRate(row: HistoryRow): number | null {
 const HISTORY_LIMIT = 240;
 
 export function HistoryPage() {
-  const { user } = useSession();
   const [stations, setStations] = useState<Station[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [rows, setRows] = useState<HistoryRow[]>([]);
@@ -343,10 +338,10 @@ export function HistoryPage() {
     <div className="page-stack history-page">
       <PageHeading
         title="Riwayat"
-        description="Tren menampilkan hingga 240 measurement terbaru untuk stasiun yang dipilih."
+        description="Jelajahi tren dan rekaman pengukuran terbaru dari stasiun pilihan."
         action={<span className={`refresh-indicator${refreshing ? " is-visible" : ""}`}>Memperbarui…</span>}
       />
-      <LayerCard className="filter-card history-filter">
+      <div className="history-filter">
         <div className="history-toolbar">
           <div className="history-carousel" role="group" aria-label="Navigasi stasiun">
             <Button
@@ -404,16 +399,6 @@ export function HistoryPage() {
             </Button>
           </div>
           <div className="history-toolbar-meta">
-            {selectedStation ? (
-              <div className="history-selected-meta cell-subtle" aria-live="polite">
-                <span>SERID {selectedStation.serid} · {selectedStation.location}</span>
-                {selectedStation.status === "offline" ? <span>Offline — last-known {freshnessLabel(selectedStation.dtom)} · {formatTimestamp(selectedStation.dtom)}</span> : <span>{freshnessLabel(selectedStation.dtom)} · {selectedStation.doserate != null ? `${formatDoseValue(selectedStation.doserate)} ${selectedStation.unit}` : "—"}</span>}
-                <AlarmStatus
-                  station={selectedStation}
-                  onAction={user && user.role !== "Viewer" ? (station) => navigate("alarms", { serid: station.serid, event: station.active_event_id ?? undefined }) : undefined}
-                />
-              </div>
-            ) : null}
             {filteredStations.length !== stations.length ? (
               <div className="cell-subtle" aria-live="polite">{filteredStations.length} dari {stations.length} stasiun cocok</div>
             ) : null}
@@ -422,7 +407,7 @@ export function HistoryPage() {
             </div>
           </div>
         </div>
-      </LayerCard>
+      </div>
       {stationMenuOpen ? createPortal(
         <div
           id="history-station-listbox"
@@ -461,7 +446,7 @@ export function HistoryPage() {
 
           <PageSection
             title="Tren dose rate"
-            description={`${history.points.length} measurement dimuat dari database central.`}
+            description={`${history.points.length} pengukuran ditampilkan pada grafik.`}
           >
             <LayerCard className="action-card trend-chart-card">
               <div className={`trend-chart-wrap${refreshing ? " is-refreshing" : ""}`} aria-busy={refreshing}>
@@ -470,7 +455,7 @@ export function HistoryPage() {
             </LayerCard>
           </PageSection>
 
-          <PageSection title="Rekaman measurement terbaru" description="Rekaman terbaru ditampilkan lebih dulu.">
+          <PageSection title="Pengukuran terbaru" description="Waktu terbaru ditampilkan lebih dulu.">
             <ResponsiveDataView
               desktop={(
                 <LayerCard className="table-card">
@@ -511,7 +496,7 @@ export function HistoryPage() {
                     </LayerCard>
                   ))}
                 </div>
-              ) : <LayerCard className="empty-card">Belum ada measurement untuk stasiun ini.</LayerCard>}
+              ) : <LayerCard className="empty-card">Belum ada pengukuran untuk stasiun ini.</LayerCard>}
             />
           </PageSection>
         </>

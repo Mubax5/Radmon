@@ -42,13 +42,15 @@ def test_action_navigation_is_operator_gated_and_deep_links_to_response_modal():
         "web/src/pages/OverviewPage.tsx",
         "web/src/pages/StationsPage.tsx",
         "web/src/pages/StationDetailPage.tsx",
-        "web/src/pages/HistoryPage.tsx",
     ):
         text = source(path)
         assert 'user.role !== "Viewer"' in text
         assert 'navigate("alarms", { serid: station.serid, event: station.active_event_id' in text or (
             'navigate("alarms", { serid: item.serid, event: item.active_event_id' in text
         )
+    history = source("web/src/pages/HistoryPage.tsx")
+    assert "history-selected-meta" not in history
+    assert 'navigate("alarms"' not in history
     assert "initialEventId={requestedEventId}" in source("web/src/pages/AlarmsPage.tsx")
     assert "setRespondOpen(true)" in source("web/src/Actions.tsx")
 

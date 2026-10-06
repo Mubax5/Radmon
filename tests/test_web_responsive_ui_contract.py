@@ -78,9 +78,9 @@ def test_primary_page_copy_defaults_to_indonesian():
     expectations = {
         "pages/OverviewPage.tsx": ("Monitoring radiasi", "Perhatian", "Kesehatan stasiun"),
         "pages/StationsPage.tsx": ("Stasiun", "Cari", "Detail stasiun"),
-        "pages/HistoryPage.tsx": ("Riwayat", "measurement", "Rekaman"),
-        "pages/ArchivesPage.tsx": ("Arsip", "Detail arsip"),
-        "pages/AlarmsPage.tsx": ("Tindakan operator", "Respons alarm", "Riwayat event"),
+        "pages/HistoryPage.tsx": ("Riwayat", "pengukuran", "Pengukuran terbaru"),
+        "pages/ArchivesPage.tsx": ("Arsip", "Daftar arsip"),
+        "pages/AlarmsPage.tsx": ("Tindakan operator", "Respons alarm", "Riwayat alarm"),
         "pages/UsersPage.tsx": ("Pengguna", "Buat pengguna"),
         "pages/SystemPage.tsx": ("Sistem", "Kesehatan source", "Administrasi Grafana"),
     }
@@ -104,7 +104,7 @@ def test_history_keeps_station_toolbar_before_summary_and_chart_with_compact_rul
     history = read("pages/HistoryPage.tsx")
     css = read("ui-polish.css")
     assert 'className="page-stack history-page"' in history
-    assert history.index('className="filter-card history-filter"') < history.index('className="metric-grid history-summary"')
+    assert history.index('className="history-filter"') < history.index('className="metric-grid history-summary"')
     assert history.index('className="metric-grid history-summary"') < history.index('className="action-card trend-chart-card"')
     carousel = history[history.index('className="history-carousel"'):history.index('className="history-toolbar-meta"')]
     for control in ('data-testid="history-prev"', 'data-testid="history-station-combobox"', 'data-testid="history-next"'):
@@ -112,7 +112,8 @@ def test_history_keeps_station_toolbar_before_summary_and_chart_with_compact_rul
     assert 'data-testid="history-search"' not in history
     assert 'data-testid="history-station-select"' not in history
     assert 'data-testid="history-range-select"' not in history
-    assert 'Offline — last-known' in history
+    assert 'Offline — last-known' not in history
+    assert 'SERID {selectedStation.serid} · {selectedStation.location}' not in history
     assert '.history-carousel {' in css and 'grid-template-columns: 40px minmax(0, 1fr) 40px' in css
     assert 'grid-template-columns: minmax(0, 1fr);' in css
     assert 'column-gap: 12px' in css and 'row-gap: 8px' in css

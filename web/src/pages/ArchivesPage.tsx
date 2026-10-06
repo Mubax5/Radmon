@@ -105,7 +105,7 @@ export function ArchivesPage() {
     <div className="page-stack">
       <PageHeading
         title="Arsip"
-        description="Inventaris arsip per kuartal, status verifikasi, dan konteks retensi dari katalog central."
+        description="Temukan arsip pengukuran per kuartal dan unduh data untuk disimpan atau ditinjau."
       />
       {error ? <ErrorCard message={error} /> : null}
       {!items ? <LoadingCard /> : (
@@ -113,7 +113,7 @@ export function ArchivesPage() {
           <div className="metric-grid archive-summary">
             <MetricCard label="Bundle arsip" value={items.length} badge={<span className="cell-subtle">Total katalog</span>} />
             <MetricCard label="Selesai" value={derived.complete} badge={<span className="cell-subtle">Bundle selesai</span>} />
-            <MetricCard label="Periode terbaru" value={derived.latestQuarter} badge={<span className="cell-subtle">Quarter ID</span>} />
+            <MetricCard label="Periode terbaru" value={derived.latestQuarter} badge={<span className="cell-subtle">Kuartal</span>} />
             <MetricCard label="Tahun" value={derived.years.length} badge={<span className="cell-subtle">Periode tersedia</span>} />
           </div>
 
@@ -133,7 +133,7 @@ export function ArchivesPage() {
           </div>
 
           <PageSection
-            title="Detail arsip"
+            title="Daftar arsip"
             description={`${derived.filtered.length} bundle arsip pada periode yang dipilih.`}
           >
             <ResponsiveDataView

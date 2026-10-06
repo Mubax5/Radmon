@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from dataclasses import replace
 from pathlib import Path
 
 from radmon.config import Settings
@@ -146,3 +147,70 @@ def test_report_service_accepts_production_summary_reader_for_full_range_aggrega
     )
     html = service.preview_html(start, end)
     assert "7.70 / 8.80" in html
+
+
+def test_draft_preview_uses_local_wall_time_and_bounds_high_volume_details():
+    class SelectedStationRepo(FakeRepo):
+        def __init__(self):
+            self.query_range = None
+
+        def station_config(self, serid=None):
+            from radmon.models import StationConfig
+            return StationConfig(3000, "30", "Station 3000", "Gedung 30", 8, 10, 5, "uSv/h")
+
+        def measurement_history(self, start, end, *, serid=None, limit=5000):
+            self.query_range = (serid, start, end, limit)
+            return [{"serid": serid, "dtom": start, "doserate": 0.1, "dose": 0.0}]
+
+    class SummaryReader:
+        def __init__(self):
+            self.query_range = None
+
+        def summary(self, start, end, *, serid):
+            self.query_range = (serid, start, end)
+            return {
+                "first_measurement": start,
+                "last_measurement": end,
+                "minimum": 0.1,
+                "average": 0.2,
+                "maximum": 0.3,
+                "sample_count": 21_497,
+                "approximate_dose": 1.23,
+            }
+
+    start = datetime(2026, 10, 5, 22, 52, tzinfo=timezone.utc)
+    end = datetime(2026, 10, 6, 22, 51, tzinfo=timezone.utc)
+    expected_start = datetime(2026, 10, 6, 5, 52)
+    expected_end = datetime(2026, 10, 7, 5, 51)
+    repo = SelectedStationRepo()
+    summary_reader = SummaryReader()
+    service = ReportService(
+        repo,
+        replace(Settings().for_dummy(), serid=3000),
+        summary_reader=summary_reader,
+    )
+
+    pdf = service.pdf_bytes(start, end, preview=True)
+
+    assert repo.query_range == (3000, expected_start, expected_end, ReportService.PREVIEW_ROW_LIMIT)
+    assert summary_reader.query_range == (3000, expected_start, expected_end)
+    assert pdf.startswith(b"%PDF")
+    assert b"595.2756 841.8898" in pdf  # A4 portrait media box
+    assert b"2026-10-06 05:52:00 WIB" in pdf
+    assert b"2026-10-07 05:51:00 WIB" in pdf
+    assert b"menampilkan 1 dari 21,497 pengukuran" in pdf
+
+
+def test_full_report_preflight_accepts_valid_daily_range_above_old_20k_cap():
+    class DailyVolumeRepo(FakeRepo):
+        def measurement_count(self, start, end, *, serid=None):
+            return 21_497
+
+        def alarm_count(self, start, end, *, serid=None):
+            return 0
+
+    start = datetime(2026, 10, 5, 22, 52, tzinfo=timezone.utc)
+    end = datetime(2026, 10, 6, 22, 51, tzinfo=timezone.utc)
+    service = ReportService(DailyVolumeRepo(), Settings().for_dummy())
+
+    service.preflight(start, end)
