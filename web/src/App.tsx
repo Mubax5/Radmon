@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { LayerCard } from "@cloudflare/kumo";
 import { AuthProvider, LoginPage, useSession } from "./auth";
 import { AppLayout, useAppRoute } from "./layout";
+import { PolicyAlarmNotifications } from "./components/PolicyAlarmNotifications";
 
 const AlarmsPage = lazy(() => import("./pages/AlarmsPage").then(({ AlarmsPage }) => ({ default: AlarmsPage })));
 const ArchivesPage = lazy(() => import("./pages/ArchivesPage").then(({ ArchivesPage }) => ({ default: ArchivesPage })));
@@ -24,6 +25,7 @@ function RadMonApplication() {
 
   return (
     <AppLayout user={user} route={route} onSignOut={signOut}>
+      <PolicyAlarmNotifications enabled={user.role !== "Viewer"} />
       <Suspense fallback={<LayerCard className="login-card">Memuat halaman...</LayerCard>}>
         {route === "overview" && <OverviewPage />}
         {route === "stations" && <StationsPage />}

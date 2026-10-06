@@ -699,6 +699,27 @@ ON CONFLICT(event_key) DO NOTHING
             ).fetchall()
         return [item for row in rows if (item := self._event_from_row(row)) is not None]
 
+    def policy_events_after(self, cursor: int | None, *, limit: int = 100) -> tuple[list[PolicyEvent], int | None]:
+        """Read a bounded page using SQLite's monotonic rowid insertion sequence."""
+        page_limit = min(100, max(1, int(limit)))
+        fields = "event_id, event_key, serid, source_id, remote_serid, remote_event_time, origin, kind, trigger_index, surfaced_at, measured_value, threshold, status, suppression_id, responded_at, pic, action, reason, notification_sent_at, resolved_at, resolution_code, resolution_reason"
+        with self.security._connection() as db:
+            if cursor is None:
+                rows = []
+            else:
+                rows = db.execute(
+                    f"SELECT rowid, {fields} FROM alarm_policy_event WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                    (cursor, page_limit),
+                ).fetchall()
+            latest = db.execute(
+                "SELECT rowid FROM alarm_policy_event ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+        events = [item for row in rows if (item := self._event_from_row(row[1:])) is not None]
+        next_cursor = int(rows[-1][0]) if rows else cursor
+        if cursor is None:
+            next_cursor = int(latest[0]) if latest is not None else 0
+        return events, next_cursor
+
     def respond_event(self, event_id: str, responded_at: datetime, pic: str, action: str, reason: str,
                       *, connection: sqlite3.Connection | None = None) -> PolicyEvent:
         own = connection is None

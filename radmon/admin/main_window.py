@@ -202,6 +202,8 @@ class MainWindow(QMainWindow):
         self._monitoring_poll_timer = QTimer(self)
         self._monitoring_poll_timer.setInterval(250)
         self._monitoring_poll_timer.timeout.connect(self._open_monitoring_if_ready)
+        self._policy_alarm_cursor = None
+        self._seen_policy_alarm_ids: set[str] = set()
 
         sidebar = self._build_station_sidebar()
         splitter = QSplitter(Qt.Horizontal)
@@ -915,6 +917,21 @@ class MainWindow(QMainWindow):
         context = get_context()
         if context is None:
             return
+        policy = getattr(context, "alarm_policy", None)
+        if policy is not None:
+            try:
+                new_events, self._policy_alarm_cursor = policy.store.policy_events_after(
+                    self._policy_alarm_cursor, limit=100
+                )
+                for event in new_events:
+                    if event.kind == "ALARM" and event.reason in {"LOW_THRESHOLD", "HIGH_THRESHOLD"} and event.event_id not in self._seen_policy_alarm_ids:
+                        self._seen_policy_alarm_ids.add(event.event_id)
+                        QApplication.beep()
+                if len(self._seen_policy_alarm_ids) > 1000:
+                    self._seen_policy_alarm_ids = set(list(self._seen_policy_alarm_ids)[-500:])
+            except Exception:
+                # Keep desktop refresh operational if the policy event store is unavailable.
+                pass
         try:
             active = context.alarm_mirror.list_alarms(active_only=True, limit=1)
         except Exception:

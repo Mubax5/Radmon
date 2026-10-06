@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from dataclasses import asdict
 import sqlite3
 from typing import Any
 
@@ -228,6 +229,24 @@ def attach_secure_routes(
         if alarm_policy is None:
             raise HTTPException(status_code=404, detail="alarm policy unavailable")
         return alarm_policy.list_events(limit=500)
+
+    @app.get("/api/v1/control/alarm-events/since")
+    def alarm_events_since(cursor: str | None = None, identity: UserIdentity = Depends(require_operator)):
+        if alarm_policy is None:
+            raise HTTPException(status_code=404, detail="alarm policy unavailable")
+        parsed_cursor = None
+        if cursor:
+            if not cursor.isdecimal() or len(cursor) > 20:
+                raise HTTPException(status_code=400, detail="invalid event cursor")
+            parsed_cursor = int(cursor)
+        events, next_position = alarm_policy.store.policy_events_after(parsed_cursor, limit=100)
+        reconciliations = alarm_policy.store.source_reconciliations([item.event_id for item in events])
+        next_cursor = str(next_position) if next_position is not None else cursor
+        return {
+            "events": [dict(asdict(item), source_reconciliation=reconciliations.get(item.event_id)) for item in events],
+            "next_cursor": next_cursor,
+            "has_more": len(events) == 100,
+        }
 
     @app.get("/api/v1/control/alarm-policy/{serid}")
     def alarm_policy_status(serid: int, identity: UserIdentity = Depends(require_operator)):

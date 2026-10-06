@@ -18,6 +18,29 @@ def test_policy_schema_is_additive_and_idempotent(tmp_path):
         assert "ended_by" in {row[1] for row in db.execute("PRAGMA table_info(alarm_suppression)")}
 
 
+def test_monotonic_policy_event_cursor_surfaces_short_lived_alarm_once(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    store = AlarmPolicyStore(security)
+    baseline, cursor = store.policy_events_after(None)
+    assert baseline == []
+
+    event = store.create_policy_event(
+        event_key="transient-high", serid=3000, kind="ALARM", origin="central",
+        surfaced_at=datetime(2026, 10, 4, 14, 0, 4), measured_value=14_000_000_000,
+        threshold=150, reason="HIGH_THRESHOLD",
+    )
+    with security._connection() as db:
+        db.execute(
+            "UPDATE alarm_policy_event SET status='AUTO_RESOLVED_NORMAL', resolved_at=? WHERE event_id=?",
+            ("2026-10-04T14:00:08", event.event_id),
+        )
+    events, next_cursor = store.policy_events_after(cursor)
+    assert [item.event_id for item in events] == [event.event_id]
+    assert events[0].status == "AUTO_RESOLVED_NORMAL"
+    assert events[0].measured_value == 14_000_000_000
+    assert store.policy_events_after(next_cursor)[0] == []
+
+
 def test_policy_schema_adds_end_actor_to_an_installed_suppression_table(tmp_path):
     security = SecurityStore(tmp_path / "security.db")
     with security._connection() as db:

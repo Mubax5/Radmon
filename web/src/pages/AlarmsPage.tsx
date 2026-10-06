@@ -3,7 +3,8 @@ import { Badge, Button, LayerCard, Table } from "@cloudflare/kumo";
 import { api } from "../api";
 import { AlarmOperations, type Suppression } from "../Actions";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
-import { formatDoseValue } from "../format";
+import { formatDoseValue, formatPolicyMeasurement } from "../format";
+import { describeLifecycle, kindLabel, statusLabel } from "./alarmLifecycle";
 import { useWebRefresh } from "../live";
 import {
   ErrorCard,
@@ -24,28 +25,37 @@ export type PolicyEvent = Record<string, unknown> & {
   surfaced_at?: string;
   action?: string | null;
   reason?: string | null;
+  resolution_code?: string | null;
+  resolution_reason?: string | null;
   source_reconciliation?: { status?: string; reason?: string } | null;
 };
 
-function lifecycle(event: PolicyEvent): string {
-  if (event.source_reconciliation?.reason) {
-    return `${event.source_reconciliation.status ?? "PENDING"}: ${event.source_reconciliation.reason}`;
-  }
-  return event.kind === "SUPPRESSION_END" ? `${event.action ?? "—"}: ${event.reason ?? "—"}` : "—";
+function LifecycleDescription({ event }: { event: PolicyEvent }) {
+  const lifecycle = describeLifecycle(event);
+  if (!lifecycle) return <>—</>;
+  return (
+    <span className="alarm-lifecycle">
+      <span>{lifecycle.label}</span>
+      <details>
+        <summary>Rincian teknis</summary>
+        <ul>{lifecycle.raw.map((detail) => <li key={detail}><code>{detail}</code></li>)}</ul>
+      </details>
+    </span>
+  );
 }
 
 function eventVariant(event: PolicyEvent): "success" | "warning" | "error" | "secondary" {
   if (event.kind === "ALARM" && event.status === "ACTIVE") return event.reason === "LOW_THRESHOLD" ? "warning" : "error";
+  if (["RESPONDED", "AUTO_RESOLVED_NORMAL", "SOURCE_HANDLED", "RESOLVED", "NORMAL", "ENDED"].includes(event.status)) return "success";
   if (event.kind === "RETRIGGER_LOCKED") return "warning";
   if (event.kind === "SUPPRESSED") return "warning";
-  if (event.status === "RESOLVED" || event.status === "NORMAL") return "success";
   return "secondary";
 }
 
 function eventLabel(event: PolicyEvent): string {
   if (event.kind === "ALARM" && event.reason === "LOW_THRESHOLD") return "LOW / WARNING";
   if (event.kind === "ALARM" && event.reason === "HIGH_THRESHOLD") return "HIGH / ALARM";
-  return event.kind;
+  return kindLabel(event.kind);
 }
 
 function EventCards({ events }: { events: PolicyEvent[] }) {
@@ -59,13 +69,13 @@ function EventCards({ events }: { events: PolicyEvent[] }) {
               <h3>SERID {event.serid}</h3>
               <div className="cell-subtle">{eventLabel(event)}</div>
             </div>
-            <Badge variant={eventVariant(event)}>{event.status || event.kind}</Badge>
+            <Badge variant={eventVariant(event)}>{statusLabel(event.status, event.kind)}</Badge>
           </div>
           <div className="card-meta">
-            <span>Measurement: {formatDoseValue(event.measured_value)}</span>
+            <span>Measurement: {formatPolicyMeasurement(event)}</span>
             <span>Threshold: {formatDoseValue(event.threshold)}</span>
             <span>Muncul: {formatTimestamp(event.surfaced_at)}</span>
-            {lifecycle(event) !== "—" ? <span>Lifecycle: {lifecycle(event)}</span> : null}
+            {describeLifecycle(event) ? <span>Lifecycle: <LifecycleDescription event={event} /></span> : null}
           </div>
         </LayerCard>
       ))}
@@ -94,11 +104,11 @@ function EventTable({ events }: { events: PolicyEvent[] }) {
             <Table.Row key={event.event_id}>
               <Table.Cell><strong>SERID {event.serid}</strong></Table.Cell>
               <Table.Cell>{eventLabel(event)}</Table.Cell>
-              <Table.Cell><Badge variant={eventVariant(event)}>{event.status || event.kind}</Badge></Table.Cell>
-              <Table.Cell>{formatDoseValue(event.measured_value)}</Table.Cell>
+              <Table.Cell><Badge variant={eventVariant(event)}>{statusLabel(event.status, event.kind)}</Badge></Table.Cell>
+              <Table.Cell>{formatPolicyMeasurement(event)}</Table.Cell>
               <Table.Cell>{formatDoseValue(event.threshold)}</Table.Cell>
               <Table.Cell>{formatTimestamp(event.surfaced_at)}</Table.Cell>
-              <Table.Cell>{lifecycle(event)}</Table.Cell>
+              <Table.Cell><LifecycleDescription event={event} /></Table.Cell>
             </Table.Row>
           ))}
         </Table.Body>

@@ -1,5 +1,29 @@
 /* RadMon-owned viewport and modal safety overrides layered after Kumo standalone styles. */
 
+.policy-alarm-center {
+  position: fixed;
+  z-index: 1200;
+  right: 1rem;
+  top: 1rem;
+  width: min(25rem, calc(100vw - 2rem));
+  display: grid;
+  gap: .5rem;
+}
+.policy-alarm-controls, .policy-alarm-toast {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem;
+  padding: .75rem;
+  border: 1px solid #b42318;
+  border-radius: .75rem;
+  background: #fff;
+  box-shadow: 0 8px 28px #10182833;
+}
+.policy-alarm-toast { justify-content: space-between; }
+.policy-alarm-toast strong { color: #b42318; }
+.policy-alarm-center button { cursor: pointer; }
+
 /* Kumo 2.13 renders dialog portal descendants without an explicit stacking level.
    Keep backdrop above application chrome and the popup above its backdrop. */
 body .fixed.inset-0.bg-kumo-recessed.opacity-80[role="presentation"] {

@@ -1,5 +1,10 @@
 export type DoseValue = number | string | null | undefined;
 
+/** Display policy-event values exactly as supplied by the API; never apply unit scaling here. */
+export function formatPolicyMeasurement(event: { measured_value?: DoseValue }): string {
+  return formatDoseValue(event.measured_value);
+}
+
 /** Format a dose value rounded to exactly two fractional digits. */
 export function formatDoseValue(value: DoseValue): string {
   if (value == null) return "—";
