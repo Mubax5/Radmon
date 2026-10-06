@@ -64,11 +64,11 @@ def test_background_refresh_never_opens_modal_error_popups():
             assert "QMessageBox" not in refresh_body
 
 
-def test_public_monitoring_is_grafana_tv_playlist_with_two_second_refresh():
+def test_public_monitoring_is_grafana_tv_playlist_with_stable_refresh():
     assert not (ROOT / "radmon/public_api.py").exists()
     assert not (ROOT / "monitoring").exists()
     for dashboard in build_dashboard_payloads():
-        assert dashboard["refresh"] == "2s"
+        assert dashboard["refresh"] == "5s"
         assert dashboard["templating"]["list"] == []
     runtime = read("radmon/runtime.py")
     assert "uvicorn" not in runtime

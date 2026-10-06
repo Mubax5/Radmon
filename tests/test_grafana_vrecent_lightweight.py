@@ -4,9 +4,8 @@ Regression contract for the No-Data + heavy-query incident:
 - live/realtime single-value panels read vrecent (never measurement full-scan)
   and must return an offline (NULL) row instead of zero rows for detectors
   without recent samples;
-- time-series panels (sparklines/trends) read the narrow indexed ``recent``
-  table with an index-friendly ``$__timeFilter(dtom)`` range and a LIMIT
-  guardrail, without per-row CONVERT_TZ range filters;
+- time-series panels read the narrow indexed ``recent`` table with explicit
+  WIB epoch bounds and a LIMIT guardrail, without per-row CONVERT_TZ filters;
 - no generated panel may full-scan ``measurement`` (32M+ rows).
 """
 
@@ -66,16 +65,16 @@ def test_live_dose_panels_use_vrecent_and_return_offline_row():
         assert "LIMIT 1" in sql
 
 
-def test_live_time_panels_use_vrecent_and_return_offline_row():
-    for panel in _panels("latest-measurement-time"):
-        sql = panel["targets"][0]["rawSql"]
-        assert "FROM vrecent" in sql
-        assert "dtom IS NOT NULL" not in sql
-        assert "ORDER BY dtom DESC" in sql
-        assert "LIMIT 1" in sql
+def test_timestamp_only_panels_are_replaced_by_full_card_trends():
+    assert not [
+        panel
+        for dashboard in build_dashboard_payloads()
+        for panel in dashboard["panels"]
+        if panel.get("description") == "latest-measurement-time"
+    ]
 
 
-def test_sparklines_use_indexed_recent_with_timefilter():
+def test_sparklines_use_indexed_recent_with_timezone_explicit_range():
     spark = _panels("latest-dose-sparkline")
     assert len(spark) == 15
     for panel in spark:
@@ -83,9 +82,12 @@ def test_sparklines_use_indexed_recent_with_timefilter():
         assert "FROM recent" in sql
         assert "FROM vrecent" not in sql
         assert "FROM measurement" not in sql
-        assert "$__timeFilter(dtom)" in sql
+        assert "$__unixEpochFrom()" in sql
+        assert "$__unixEpochTo()" in sql
         assert "CONVERT_TZ" not in sql
-        assert "UNIX_TIMESTAMP(dtom)" in sql
+        assert "TIMESTAMPDIFF(SECOND" in sql
+        assert "TIMESTAMPADD(SECOND" in sql
+        assert panel["fieldConfig"]["defaults"]["noValue"] == "No recent trend"
         assert "LIMIT" in sql
 
 
@@ -95,7 +97,7 @@ def test_building_trends_use_lightweight_aggregation_over_recent():
     for panel in trends:
         sql = panel["targets"][0]["rawSql"]
         assert "FROM measurement" not in sql
-        # Aggregated recent rows (or vrecent) keep the 3h trend bounded and
+        # Aggregated recent rows keep the 1h trend bounded and
         # cheap; raw per-sample scans of the 51k-row view are not allowed.
         assert "FROM recent" in sql or "FROM vrecent" in sql
         assert "$__unixEpochFrom()" in sql

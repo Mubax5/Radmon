@@ -1,20 +1,22 @@
 from radmon.grafana_tv import build_dashboard_payloads
 
 
-def test_measurement_time_stat_uses_numeric_epoch_from_vrecent():
+def test_page1_uses_timezone_explicit_30_minute_trend():
     page1 = build_dashboard_payloads()[0]
-    timestamp = [
+    trend = [
         panel for panel in page1["panels"]
-        if panel.get("description") == "latest-measurement-time"
+        if panel.get("description") == "latest-dose-sparkline"
     ]
-    assert len(timestamp) == 15
-    for panel in timestamp:
+    assert page1["time"]["from"] == "now-30m"
+    assert len(trend) == 15
+    for panel in trend:
         sql = panel["targets"][0]["rawSql"]
         assert "TIMESTAMPDIFF" in sql
-        assert "CONVERT_TZ(dtom, '+07:00', '+00:00')" in sql
-        assert "FROM vrecent" in sql
+        assert "TIMESTAMPADD(SECOND" in sql
+        assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
+        assert "FROM recent" in sql
         assert "DATE_FORMAT" not in sql
-        assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
+        assert panel["fieldConfig"]["defaults"]["noValue"] == "No recent trend"
 
 
 def test_every_dashboard_has_date_organization_and_wib_update_header():

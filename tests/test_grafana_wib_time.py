@@ -19,22 +19,23 @@ def test_realtime_sparkline_filters_local_wib_datetimes_by_epoch():
     realtime = build_dashboard_payloads()[0]
     sparkline = _panel(realtime, description="latest-dose-sparkline")
     sql = sparkline["targets"][0]["rawSql"]
-    # Indexed recent scan: $__timeFilter(dtom) is a PK range in the session
-    # timezone (Asia/Jakarta on the central DB), and UNIX_TIMESTAMP(dtom) is
-    # numerically identical to the legacy CONVERT_TZ WIB epoch.
+    # recent.dtom is a WIB wall-clock DATETIME. Explicit epoch bounds avoid
+    # depending on the datasource session timezone.
     assert "FROM recent" in sql
-    assert "UNIX_TIMESTAMP(dtom)" in sql
-    assert "$__timeFilter(dtom)" in sql
+    assert "TIMESTAMPDIFF(SECOND" in sql
+    assert "TIMESTAMPADD(SECOND" in sql
+    assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
     assert "CONVERT_TZ" not in sql
-    assert "$__unixEpochFrom()" not in sql
 
 
-def test_realtime_measurement_time_converts_wib_datetime_to_absolute_epoch():
+def test_realtime_trend_epoch_is_adjusted_from_wib_datetime_to_utc():
     realtime = build_dashboard_payloads()[0]
-    time_panel = _panel(realtime, description="latest-measurement-time")
-    sql = time_panel["targets"][0]["rawSql"]
-    assert "CONVERT_TZ(dtom, '+07:00', '+00:00')" in sql
+    trend_panel = _panel(realtime, description="latest-dose-sparkline")
+    sql = trend_panel["targets"][0]["rawSql"]
+    assert "FROM recent" in sql
     assert "TIMESTAMPDIFF" in sql
+    assert "- 7 * 60 * 60 AS time" in sql
+    assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
 
 
 def test_operation_offline_check_is_projected_by_vrecent_using_wib_now():

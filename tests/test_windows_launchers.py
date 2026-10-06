@@ -33,9 +33,9 @@ def test_runtime_collision_is_prevented_by_single_instance_lock():
     assert "return 2" in source
 
 
-def test_refresh_interval_is_two_seconds_everywhere_live():
+def test_dashboard_refresh_is_stable_while_local_live_refresh_remains_fast():
     assert "RADMON_REFRESH_INTERVAL=2" in read(".env.example")
     assert "self.refresh_timer.start(2000)" in read("radmon/admin/main_window.py")
     for dashboard in build_dashboard_payloads():
-        assert dashboard["refresh"] == "2s"
+        assert dashboard["refresh"] == "5s"
         assert "2s" in dashboard["timepicker"]["refresh_intervals"]
