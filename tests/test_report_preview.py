@@ -118,7 +118,7 @@ def test_preview_uses_database_aggregate_when_repository_provides_it():
     start = datetime(2026, 9, 7, 8, 0, 0)
     end = start + timedelta(days=1)
     html = ReportService(AggregateRepo(), Settings().for_dummy()).preview_html(start, end)
-    assert "9.9000 / 10.1000" in html
+    assert "9.90 / 10.10" in html
 
 
 def test_report_service_accepts_production_summary_reader_for_full_range_aggregates():
@@ -142,4 +142,4 @@ def test_report_service_accepts_production_summary_reader_for_full_range_aggrega
         summary_reader=SummaryReader(),
     )
     html = service.preview_html(start, end)
-    assert "7.7000 / 8.8000" in html
+    assert "7.70 / 8.80" in html

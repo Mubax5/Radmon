@@ -184,12 +184,8 @@ FROM ({latest}) v
 
 
 def _format_dose_sql(expression: str) -> str:
-    # doserate is a FLOAT/DOUBLE in MariaDB; a direct CHAR cast can expose
-    # binary tails (for example 11.100000000000001). Normalize to a scale far
-    # beyond detector precision, then trim only insignificant fractional 0s.
-    cast = f"CAST(CAST({expression} AS DECIMAL(30,12)) AS CHAR)"
-    trimmed = f"TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM {cast}))"
-    return f"CASE WHEN {cast} LIKE '%.%' THEN {trimmed} ELSE {cast} END"
+    # Cast through DECIMAL to remove FLOAT tails and guarantee fixed precision.
+    return f"CAST(CAST({expression} AS DECIMAL(30,2)) AS CHAR)"
 
 
 def _latest_scalar_stat(
@@ -246,6 +242,7 @@ LIMIT 1
     panel["fieldConfig"] = {
         "defaults": {
             "unit": "suffix: µSv/h",
+            "decimals": 2,
             "color": {"mode": "fixed", "fixedColor": "text"},
         },
         "overrides": [],
@@ -334,7 +331,7 @@ LIMIT 1)
 ORDER BY time ASC
 """, format_="time_series", ref_id="B"),
     ]
-    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "color": {"mode": "fixed", "fixedColor": "green"}, "custom": {"axisPlacement": "hidden", "drawStyle": "line", "fillOpacity": 18, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
+    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "color": {"mode": "fixed", "fixedColor": "green"}, "custom": {"axisPlacement": "hidden", "drawStyle": "line", "fillOpacity": 18, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
     panel["options"] = {"legend": {"displayMode": "hidden", "placement": "bottom", "showLegend": False}, "tooltip": {"mode": "single", "sort": "none"}}
     return panel
 
@@ -378,7 +375,7 @@ SELECT
 FROM ({relation}) s
 ORDER BY FIELD(s.status, 'OFFLINE' {STATUS_COLLATION}, 'SUPPRESSED' {STATUS_COLLATION}, 'ALARM' {STATUS_COLLATION}, 'ALERT' {STATUS_COLLATION}, 'NORMAL' {STATUS_COLLATION}), s.serid
 """)]
-    table["fieldConfig"] = {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": [{"matcher": {"id": "byName", "options": "Dose Rate"}, "properties": [{"id": "unit", "value": "suffix: µSv/h"}]}, {"matcher": {"id": "byName", "options": "Status"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"NORMAL": {"color": "green", "text": "NORMAL"}, "ALERT": {"color": "yellow", "text": "LOW / WARNING"}, "ALARM": {"color": "red", "text": "HIGH / ALARM"}, "OFFLINE": {"color": "gray", "text": "OFFLINE"}, "SUPPRESSED": {"color": "yellow", "text": "SUPPRESSED"}}}]}, {"id": "custom.cellOptions", "value": {"type": "color-background"}}]}]}
+    table["fieldConfig"] = {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": [{"matcher": {"id": "byName", "options": "Dose Rate"}, "properties": [{"id": "unit", "value": "suffix: µSv/h"}, {"id": "decimals", "value": 2}]}, {"matcher": {"id": "byName", "options": "Status"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"NORMAL": {"color": "green", "text": "NORMAL"}, "ALERT": {"color": "yellow", "text": "LOW / WARNING"}, "ALARM": {"color": "red", "text": "HIGH / ALARM"}, "OFFLINE": {"color": "gray", "text": "OFFLINE"}, "SUPPRESSED": {"color": "yellow", "text": "SUPPRESSED"}}}]}, {"id": "custom.cellOptions", "value": {"type": "color-background"}}]}]}
     table["options"] = {"cellHeight": "sm", "enablePagination": False, "showHeader": True}
     return table
 
@@ -441,7 +438,7 @@ ORDER BY time ASC, metric ASC
 LIMIT 30
 """, format_="time_series", ref_id="B"),
     ]
-    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
+    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
     panel["options"] = {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": True, "calcs": []}, "tooltip": {"mode": "multi", "sort": "desc"}}
     return panel
 
@@ -486,8 +483,8 @@ def build_page_two() -> dict[str, Any]:
         panel_id += 1
     latest = _latest_relation()
     summaries = [
-        ("Dose Rate Tertinggi Saat Ini", f"SELECT MAX(m.doserate) AS value FROM ({latest}) m", 0, "red", "suffix: µSv/h", None),
-        ("Rata-rata Saat Ini", f"SELECT AVG(m.doserate) AS value FROM ({latest}) m", 6, "blue", "suffix: µSv/h", None),
+        ("Dose Rate Tertinggi Saat Ini", f"SELECT MAX(m.doserate) AS value FROM ({latest}) m", 0, "red", "suffix: µSv/h", 2),
+        ("Rata-rata Saat Ini", f"SELECT AVG(m.doserate) AS value FROM ({latest}) m", 6, "blue", "suffix: µSv/h", 2),
         ("Detector Online", f"SELECT SUM(CASE WHEN s.status <> 'OFFLINE' {STATUS_COLLATION} THEN 1 ELSE 0 END) AS value FROM ({_status_relation()}) s", 12, "green", "none", 0),
         ("Detector Offline", f"SELECT SUM(CASE WHEN s.status = 'OFFLINE' {STATUS_COLLATION} THEN 1 ELSE 0 END) AS value FROM ({_status_relation()}) s", 18, "purple", "none", 0),
     ]
@@ -563,7 +560,7 @@ WHERE a.serid IN ({_station_ids()})
 ORDER BY a.dtoa DESC, a.serid
 LIMIT 12
 """)]
-    alarms["fieldConfig"] = {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": []}
+    alarms["fieldConfig"] = {"defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}}, "overrides": [{"matcher": {"id": "byName", "options": "Dose Rate"}, "properties": [{"id": "unit", "value": "suffix: µSv/h"}, {"id": "decimals", "value": 2}]}, {"matcher": {"id": "byName", "options": "Threshold"}, "properties": [{"id": "unit", "value": "suffix: µSv/h"}, {"id": "decimals", "value": 2}]}]}
     alarms["options"] = {"cellHeight": "sm", "enablePagination": False, "showHeader": True}
     dashboard["panels"].append(alarms)
     return dashboard

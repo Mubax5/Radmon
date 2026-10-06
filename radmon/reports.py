@@ -156,7 +156,7 @@ class ReportService:
         return "-" if value is None else value.strftime("%Y-%m-%d %H:%M:%S")
 
     @staticmethod
-    def _fmt(value: float | None, decimals: int = 4) -> str:
+    def _fmt(value: float | None, decimals: int = 2) -> str:
         return "-" if value is None else f"{value:.{decimals}f}"
 
     def preview_html(

@@ -97,10 +97,11 @@ def test_page_one_station_cards_show_numeric_dose_and_separate_central_status_la
         assert [step["value"] for step in panel["fieldConfig"]["defaults"]["thresholds"]["steps"]] == [None, 1, 2, 3, 4]
         assert panel["options"]["colorMode"] == "background"
         assert panel["gridPos"]["h"] == 1
-    assert format_dose_value("0.833333") == "0.833333"
+    assert format_dose_value("0.833333") == "0.83"
     assert format_dose_value("1.340") == "1.34"
     for panel in spark:
         assert panel["type"] == "timeseries"
+        assert panel["fieldConfig"]["defaults"]["decimals"] == 2
         sql = panel["targets"][0]["rawSql"]
         assert "FROM recent" in sql
         assert "FROM measurement" not in sql
@@ -131,6 +132,7 @@ def test_page_two_one_hour_trends_and_live_summary_use_rolling_vrecent():
     assert page2["time"] == {"from": "now-1h", "to": "now"}
     assert {panel["title"] for panel in trends} == {f"Dose Rate · Gedung {building} · 1 Jam" for building in BUILDING_PAGE_ORDER}
     for panel in trends:
+        assert panel["fieldConfig"]["defaults"]["decimals"] == 2
         sql = panel["targets"][0]["rawSql"]
         assert "FROM recent" in sql
         assert "FROM measurement" not in sql
@@ -148,6 +150,8 @@ def test_page_two_one_hour_trends_and_live_summary_use_rolling_vrecent():
     }
     assert len(summaries) == 4
     assert all("vrecent" in panel["targets"][0]["rawSql"] for panel in summaries.values())
+    assert summaries["Dose Rate Tertinggi Saat Ini"]["fieldConfig"]["defaults"]["decimals"] == 2
+    assert summaries["Rata-rata Saat Ini"]["fieldConfig"]["defaults"]["decimals"] == 2
 
 
 def test_integer_summary_stats_have_no_trailing_decimal_places():
@@ -162,12 +166,22 @@ def test_integer_summary_stats_have_no_trailing_decimal_places():
     assert seen == wanted
 
 
-def test_grafana_dose_sql_only_trims_zeroes_after_a_decimal_point():
+def test_grafana_dose_sql_uses_fixed_two_decimal_cast():
     sql = _format_dose_sql("doserate")
-    cast = "CAST(CAST(doserate AS DECIMAL(30,12)) AS CHAR)"
-    assert f"CASE WHEN {cast} LIKE '%.%'" in sql
-    assert f"TRIM(TRAILING '.' FROM TRIM(TRAILING '0' FROM {cast}))" in sql
-    assert f"ELSE {cast} END" in sql
+    assert sql == "CAST(CAST(doserate AS DECIMAL(30,2)) AS CHAR)"
+
+
+def test_grafana_dose_table_fields_use_two_decimals_and_status_lamps_remain_status():
+    for dashboard in build_dashboard_payloads():
+        for panel in dashboard["panels"]:
+            if panel.get("description") in {"latest-dose-value", "latest-dose-sparkline", "building-dose-trend"}:
+                assert panel["fieldConfig"]["defaults"]["decimals"] == 2
+            for override in panel.get("fieldConfig", {}).get("overrides", []):
+                if override.get("matcher", {}).get("options") in {"Dose Rate", "Threshold"}:
+                    properties = {item["id"]: item["value"] for item in override["properties"]}
+                    assert properties["decimals"] == 2
+            if panel.get("description") == "central-status-lamp":
+                assert "decimals" not in panel["fieldConfig"]["defaults"]
 
 
 def test_operations_live_status_uses_vrecent_and_alarm_table_uses_legacy_schema():

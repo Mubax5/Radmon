@@ -226,38 +226,54 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                         panel[key] = deepcopy(factory_value)
                         changed = True
 
-            # Remove stale fixed precision from managed dose panels. Grafana's
-            # automatic formatter keeps significant digits without padding or
-            # rounding them; keep all other saved field formatting intact.
+            # Keep managed dose fields at exactly two decimals while retaining
+            # every unrelated operator-owned field setting.
             factory_config = factory_panel.get("fieldConfig") or {}
             saved_config = panel.get("fieldConfig")
             if isinstance(factory_config, dict) and isinstance(saved_config, dict):
                 factory_defaults = factory_config.get("defaults") or {}
                 saved_defaults = saved_config.get("defaults")
-                managed_dose_unit = isinstance(factory_defaults, dict) and "µSv/h" in str(factory_defaults.get("unit") or "")
-                if managed_dose_unit and isinstance(saved_defaults, dict) and "decimals" not in factory_defaults and "decimals" in saved_defaults:
-                    saved_defaults.pop("decimals", None)
+                if (
+                    isinstance(factory_defaults, dict)
+                    and factory_defaults.get("decimals") == 2
+                    and isinstance(saved_defaults, dict)
+                    and saved_defaults.get("decimals") != 2
+                ):
+                    saved_defaults["decimals"] = 2
                     changed = True
 
                 factory_overrides = factory_config.get("overrides") or []
                 saved_overrides = saved_config.get("overrides") or []
-                dose_overrides = {
-                    (item.get("matcher", {}).get("id"), item.get("matcher", {}).get("options"))
+                factory_decimals = {
+                    (item.get("matcher", {}).get("id"), item.get("matcher", {}).get("options")): next(
+                        (prop.get("value") for prop in item.get("properties", []) if prop.get("id") == "decimals"),
+                        None,
+                    )
                     for item in factory_overrides
                     if isinstance(item, dict)
-                    and item.get("matcher", {}).get("id") == "byName"
-                    and item.get("matcher", {}).get("options") in {"Dose Rate", "Threshold"}
+                    and any(prop.get("id") == "decimals" for prop in item.get("properties", []))
                 }
                 for override in saved_overrides:
                     if not isinstance(override, dict):
                         continue
                     matcher = override.get("matcher") or {}
-                    if (matcher.get("id"), matcher.get("options")) not in dose_overrides:
+                    key = (matcher.get("id"), matcher.get("options"))
+                    if key not in factory_decimals:
                         continue
                     properties = override.get("properties") or []
-                    retained = [item for item in properties if item.get("id") != "decimals"]
-                    if len(retained) != len(properties):
-                        override["properties"] = retained
+                    decimal_value = factory_decimals[key]
+                    decimal_props = [item for item in properties if item.get("id") == "decimals"]
+                    decimal_prop = decimal_props[0] if decimal_props else None
+                    if decimal_prop is None:
+                        properties.append({"id": "decimals", "value": decimal_value})
+                        override["properties"] = properties
+                        changed = True
+                    elif decimal_prop.get("value") != decimal_value or len(decimal_props) > 1:
+                        decimal_prop["value"] = decimal_value
+                        override["properties"] = [
+                            item for item in properties
+                            if item.get("id") != "decimals" or item is decimal_prop
+                        ]
                         changed = True
 
             # Migrate the installed factory label, but leave an operator's

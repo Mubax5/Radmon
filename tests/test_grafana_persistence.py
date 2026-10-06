@@ -221,7 +221,7 @@ def test_legacy_page_one_migrates_to_dose_values_and_adds_separate_status_lamps(
     ] == [8] * 5 + [13] * 5 + [18] * 5
 
 
-def test_persisted_dose_panels_drop_fixed_decimals_without_clobbering_other_formatting(tmp_path: Path) -> None:
+def test_persisted_dose_panels_migrate_to_two_decimals_without_clobbering_other_formatting(tmp_path: Path) -> None:
     bootstrap = PersistentGrafanaBootstrap(Settings(), project_root=tmp_path)
     page_two = bootstrap._dashboard_payloads()[1]
     saved_page_two = deepcopy(page_two)
@@ -231,7 +231,7 @@ def test_persisted_dose_panels_drop_fixed_decimals_without_clobbering_other_form
     migrated_page_two, changed = bootstrap._refresh_managed_dashboard_queries(saved_page_two, page_two)
     migrated_trend = next(panel for panel in migrated_page_two["panels"] if panel.get("description") == "building-dose-trend")
     assert changed is True
-    assert "decimals" not in migrated_trend["fieldConfig"]["defaults"]
+    assert migrated_trend["fieldConfig"]["defaults"]["decimals"] == 2
     assert migrated_trend["fieldConfig"]["defaults"]["custom"]["lineWidth"] == 2
 
     operations = bootstrap._dashboard_payloads()[2]
@@ -243,7 +243,7 @@ def test_persisted_dose_panels_drop_fixed_decimals_without_clobbering_other_form
     migrated_table = next(panel for panel in migrated_operations["panels"] if panel.get("description") == "operational-condition")
     migrated_override = next(item for item in migrated_table["fieldConfig"]["overrides"] if item["matcher"].get("options") == "Dose Rate")
     assert changed is True
-    assert all(item["id"] != "decimals" for item in migrated_override["properties"])
+    assert {item["id"]: item["value"] for item in migrated_override["properties"]}["decimals"] == 2
 
 
 def test_persisted_page_two_time_and_factory_titles_are_migrated_safely(tmp_path: Path) -> None:

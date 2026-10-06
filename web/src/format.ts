@@ -1,18 +1,28 @@
 export type DoseValue = number | string | null | undefined;
 
-/** Format a dose value without rounding away measured precision. */
+/** Format a dose value rounded to exactly two fractional digits. */
 export function formatDoseValue(value: DoseValue): string {
   if (value == null) return "—";
   const raw = String(value).trim();
   if (!raw) return "—";
   const numeric = Number(raw);
   if (!Number.isFinite(numeric)) return raw;
-  if (numeric === 0) return "0";
 
-  // Keep ordinary decimal strings exact, only removing insignificant zeroes.
-  // Exponential inputs use Number's shortest round-trippable representation.
-  if (!/[eE]/.test(raw) && /^[-+]?\d*\.\d+$/.test(raw)) {
-    return raw.replace(/0+$/, "").replace(/\.$/, "");
+  const match = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(String(numeric));
+  if (!match) return numeric.toFixed(2);
+  const [, sign, integer = "", fraction = "", exponentText = "0"] = match;
+  const digits = `${integer || "0"}${fraction}`;
+  const decimalPlaces = fraction.length - Number(exponentText);
+  const shift = 2 - decimalPlaces;
+  let scaled: bigint;
+  if (shift >= 0) {
+    scaled = BigInt(digits) * 10n ** BigInt(shift);
+  } else {
+    const cut = digits.length + shift;
+    scaled = BigInt(cut > 0 ? digits.slice(0, cut) : "0");
+    if (cut >= 0 && digits[cut] >= "5") scaled += 1n;
   }
-  return String(numeric);
+  const whole = scaled / 100n;
+  const cents = String(scaled % 100n).padStart(2, "0");
+  return `${sign === "-" && scaled !== 0n ? "-" : ""}${whole}.${cents}`;
 }

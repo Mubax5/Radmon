@@ -30,6 +30,13 @@ VISUAL_STATUS = "Status Pie"
 VISUAL_PROGRESS = "Threshold Progress"
 
 
+class DoseRateAxisItem(pg.AxisItem):
+    """Keep dose-rate tick labels consistent with every other display."""
+
+    def tickStrings(self, values, scale, spacing):
+        return [format_dose_value(value) for value in values]
+
+
 def chart_series_from_rows(rows):
     """Return the exact values stored in measurement, ordered by measurement time."""
     normalized = []
@@ -248,7 +255,9 @@ class ChartPage(QWidget):
         controls.addWidget(reset)
         controls.addStretch(1)
 
-        self.plot = pg.PlotWidget(axisItems={"bottom": pg.DateAxisItem()})
+        self.plot = pg.PlotWidget(
+            axisItems={"left": DoseRateAxisItem(orientation="left"), "bottom": pg.DateAxisItem()}
+        )
         self.plot.setBackground("w")
         self.plot.showGrid(x=True, y=True, alpha=0.2)
         self.plot.setLabel("left", "Dose rate", units="µSv/h")

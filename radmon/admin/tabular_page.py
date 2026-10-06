@@ -7,6 +7,7 @@ from PySide6.QtCore import QDateTime
 from PySide6.QtWidgets import QCheckBox, QDateTimeEdit, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QPushButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget
 
 from radmon.reports import ReportService
+from radmon.formatting import format_dose_value
 from .period_dialog import PeriodSelectionDialog
 
 
@@ -69,7 +70,10 @@ class TabularPage(QWidget):
             for r, row in enumerate(rows):
                 for c, field in enumerate(fields):
                     value = row.get(field)
-                    text = value.strftime("%Y-%m-%d %H:%M:%S") if hasattr(value, "strftime") else ("" if value is None else str(value))
+                    if field == "doserate":
+                        text = "" if value is None else format_dose_value(value)
+                    else:
+                        text = value.strftime("%Y-%m-%d %H:%M:%S") if hasattr(value, "strftime") else ("" if value is None else str(value))
                     self.table.setItem(r, c, QTableWidgetItem(text))
             self.last_error = None
         except Exception as exc:
