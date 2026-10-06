@@ -137,14 +137,18 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         changed = False
 
         # Grafana persists the dashboard root time range separately from panel
-        # queries. Sync only this managed page-2 setting; never replace the
-        # saved dashboard or its panel layout.
+        # queries. Keep the managed trend windows and stable refresh in sync,
+        # while preserving saved layout and panel presentation.
         is_page_one = str(factory_dashboard.get("uid") or "") == PAGE_UIDS[0]
         is_page_two = str(factory_dashboard.get("uid") or "") == PAGE_UIDS[1]
-        if is_page_two:
+        if is_page_one or is_page_two:
             factory_time = factory_dashboard.get("time")
             if isinstance(factory_time, dict) and migrated.get("time") != factory_time:
                 migrated["time"] = deepcopy(factory_time)
+                changed = True
+            factory_refresh = factory_dashboard.get("refresh")
+            if factory_refresh and migrated.get("refresh") != factory_refresh:
+                migrated["refresh"] = factory_refresh
                 changed = True
 
         if migrated.get("editable") is False:
@@ -160,38 +164,50 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         if not isinstance(panels, list):
             return migrated, changed
 
-        saved_page_one_panel_ids = {
-            panel.get("id")
-            for panel in panels
-            if isinstance(panel, dict)
-            and isinstance(panel.get("id"), int)
-            and 10 <= panel["id"] <= 54
-        }
-        has_complete_page_one = len(saved_page_one_panel_ids) == 45
+        if is_page_one:
+            # The factory no longer uses the timestamp-only row; the trend
+            # itself now occupies that card area beneath status and dose.
+            retained_panels = [
+                panel for panel in panels
+                if not (isinstance(panel, dict) and panel.get("description") == "latest-measurement-time")
+            ]
+            if len(retained_panels) != len(panels):
+                panels = retained_panels
+                migrated["panels"] = panels
+                changed = True
 
-        if is_page_one and has_complete_page_one:
-            # Page 1's previous factory layout used four grid rows per
-            # station: dose stat, sparkline, timestamp. Reflow only panels
-            # that still have those exact factory coordinates; operator-moved
-            # panels remain where they were saved.
+        if is_page_one:
+            # Reflow only panels still at known factory coordinates. A panel
+            # moved by an operator is left untouched.
             old_x_positions = (0, 5, 10, 15, 20)
             old_widths = (5, 5, 5, 5, 4)
             for panel in panels:
-                panel_id = panel.get("id") if isinstance(panel, dict) else None
-                if not isinstance(panel_id, int) or not 10 <= panel_id <= 54:
+                if not isinstance(panel, dict):
                     continue
-                station_index, part = divmod(panel_id - 10, 3)
-                row, col = divmod(station_index, 5)
-                old_y = 4 + row * 4
-                old_position = {
-                    "x": old_x_positions[col],
-                    "y": old_y + (0 if part == 0 else 2 if part == 1 else 3),
-                    "w": old_widths[col],
-                    "h": 2 if part == 0 else 1,
-                }
+                panel_id = panel.get("id")
                 factory_panel = factory_panels.get(panel_id)
                 factory_position = factory_panel.get("gridPos") if isinstance(factory_panel, dict) else None
-                if panel.get("gridPos") == old_position and isinstance(factory_position, dict):
+                if not isinstance(factory_position, dict):
+                    continue
+                old_position = None
+                if isinstance(panel_id, int) and 10 <= panel_id <= 54:
+                    station_index, part = divmod(panel_id - 10, 3)
+                    row, col = divmod(station_index, 5)
+                    old_y = 4 + row * 5
+                    old_position = {
+                        "x": old_x_positions[col],
+                        "y": old_y + (0 if part == 0 else 2 if part == 1 else 3),
+                        "w": old_widths[col],
+                        "h": 2 if part == 0 else 1,
+                    }
+                elif isinstance(panel_id, int) and 55 <= panel_id <= 69:
+                    station_index = panel_id - 55
+                    row, col = divmod(station_index, 5)
+                    old_position = {
+                        "x": old_x_positions[col], "y": 8 + row * 5,
+                        "w": old_widths[col], "h": 1,
+                    }
+                if panel.get("gridPos") == old_position:
                     if panel.get("gridPos") != factory_position:
                         panel["gridPos"] = deepcopy(factory_position)
                         changed = True
@@ -242,6 +258,25 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                     saved_defaults["decimals"] = 2
                     changed = True
 
+                if (
+                    isinstance(factory_defaults, dict)
+                    and factory_defaults.get("noValue")
+                    and isinstance(saved_defaults, dict)
+                ):
+                    if saved_defaults.get("noValue") != factory_defaults["noValue"]:
+                        saved_defaults["noValue"] = factory_defaults["noValue"]
+                        changed = True
+                factory_custom = factory_defaults.get("custom") if isinstance(factory_defaults, dict) else None
+                saved_custom = saved_defaults.get("custom") if isinstance(saved_defaults, dict) else None
+                if (
+                    isinstance(factory_custom, dict)
+                    and factory_custom.get("spanNulls") is False
+                    and isinstance(saved_custom, dict)
+                    and saved_custom.get("spanNulls") is not False
+                ):
+                    saved_custom["spanNulls"] = False
+                    changed = True
+
                 factory_overrides = factory_config.get("overrides") or []
                 saved_overrides = saved_config.get("overrides") or []
                 factory_decimals = {
@@ -286,7 +321,15 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                         panel["title"] = factory_title
                         changed = True
 
-        if is_page_one and has_complete_page_one:
+        has_managed_station_panels = sum(
+            1 for panel in panels
+            if isinstance(panel, dict)
+            and (
+                panel.get("description") in {"latest-dose-value", "latest-dose-sparkline"}
+                or isinstance(panel.get("id"), int) and 10 <= panel["id"] <= 54
+            )
+        ) >= 15
+        if is_page_one and has_managed_station_panels:
             saved_ids = {
                 panel.get("id")
                 for panel in panels

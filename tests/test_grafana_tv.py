@@ -44,7 +44,7 @@ def test_every_generated_dashboard_has_shared_header_and_fits_without_scroll():
     assert len(dashboards) == 7
     assert [dashboard["uid"] for dashboard in dashboards] == list(DASHBOARD_UIDS)
     for dashboard in dashboards:
-        assert dashboard["refresh"] == "2s"
+        assert dashboard["refresh"] == "5s"
         assert dashboard["time"]["to"] == "now"
         assert dashboard["templating"]["list"] == []
         max_bottom = max(panel["gridPos"]["y"] + panel["gridPos"]["h"] for panel in dashboard["panels"])
@@ -59,8 +59,8 @@ def test_page_one_station_cards_show_numeric_dose_and_separate_central_status_la
     dose = [panel for panel in page1["panels"] if panel.get("description") == "latest-dose-value"]
     lamps = [panel for panel in page1["panels"] if panel.get("description") == "central-status-lamp"]
     spark = [panel for panel in page1["panels"] if panel.get("description") == "latest-dose-sparkline"]
-    timestamp = [panel for panel in page1["panels"] if panel.get("description") == "latest-measurement-time"]
-    assert len(dose) == len(lamps) == len(spark) == len(timestamp) == 15
+    assert len(dose) == len(lamps) == len(spark) == 15
+    assert not [panel for panel in page1["panels"] if panel.get("description") == "latest-measurement-time"]
     for panel in dose:
         assert panel["type"] == "stat"
         sql = panel["targets"][0]["rawSql"]
@@ -81,6 +81,7 @@ def test_page_one_station_cards_show_numeric_dose_and_separate_central_status_la
         assert panel["options"]["textMode"] == "value"
         assert "transformations" not in panel
         assert panel["gridPos"]["h"] == 2
+        assert panel["fieldConfig"]["defaults"]["decimals"] == 2
     for panel in lamps:
         sql = panel["targets"][0]["rawSql"]
         assert panel["type"] == "stat"
@@ -97,6 +98,9 @@ def test_page_one_station_cards_show_numeric_dose_and_separate_central_status_la
         assert [step["value"] for step in panel["fieldConfig"]["defaults"]["thresholds"]["steps"]] == [None, 1, 2, 3, 4]
         assert panel["options"]["colorMode"] == "background"
         assert panel["gridPos"]["h"] == 1
+    for lamp, value, trend in zip(lamps, dose, spark):
+        assert lamp["gridPos"]["y"] < value["gridPos"]["y"] < trend["gridPos"]["y"]
+        assert trend["gridPos"]["h"] == 3
     assert format_dose_value("0.833333") == "0.83"
     assert format_dose_value("1.340") == "1.34"
     for panel in spark:
@@ -107,24 +111,14 @@ def test_page_one_station_cards_show_numeric_dose_and_separate_central_status_la
         assert "FROM measurement" not in sql
         assert "FROM vrecent" not in sql
         assert "CONVERT_TZ" not in sql
-        assert "UNIX_TIMESTAMP(dtom)" in sql
-        assert "$__timeFilter(dtom)" in sql
+        assert "TIMESTAMPDIFF(SECOND" in sql
+        assert "$__unixEpochFrom()" in sql
+        assert "$__unixEpochTo()" in sql
         assert re.search(
-            r"FROM recent.*ORDER BY dtom DESC\s+LIMIT 10.*\) latest\s+ORDER BY time ASC",
+            r"FROM recent.*ORDER BY dtom DESC\s+LIMIT 300.*\) latest\s+ORDER BY time ASC",
             sql,
             re.IGNORECASE | re.DOTALL,
         )
-    for panel in timestamp:
-        sql = panel["targets"][0]["rawSql"]
-        assert "FROM vrecent" in sql
-        assert "dtom IS NOT NULL" not in sql
-        assert "ORDER BY dtom DESC" in sql
-        assert "TIMESTAMPDIFF" in sql
-        assert "CONVERT_TZ(dtom, '+07:00', '+00:00')" in sql
-        assert "DATE_FORMAT" not in sql
-        assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
-
-
 def test_page_two_one_hour_trends_and_live_summary_use_rolling_vrecent():
     page2 = build_dashboard_payloads()[1]
     trends = [panel for panel in page2["panels"] if panel.get("description") == "building-dose-trend"]

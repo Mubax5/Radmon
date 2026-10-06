@@ -1,16 +1,16 @@
 from radmon.grafana_tv import build_page_one, build_page_three
 
 
-def test_playlist_one_measurement_time_is_explicit_24_hour_format():
+def test_page_one_uses_trend_space_instead_of_timestamp_only_row():
     dashboard = build_page_one()
     time_panels = [
         panel for panel in dashboard["panels"]
         if panel.get("description") == "latest-measurement-time"
     ]
-    assert len(time_panels) == 15
-    for panel in time_panels:
-        assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
-        assert panel["options"]["text"]["valueSize"] <= 12
+    assert not time_panels
+    trends = [panel for panel in dashboard["panels"] if panel.get("description") == "latest-dose-sparkline"]
+    assert len(trends) == 15
+    assert all(panel["gridPos"]["h"] >= 3 for panel in trends)
 
 
 def test_operations_status_detector_has_room_for_labels_and_values():

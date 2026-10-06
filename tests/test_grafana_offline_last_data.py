@@ -1,15 +1,4 @@
-"""Offline last-known + lightweight regression contract.
-
-User contract:
-- Grafana + admin panel wajib tampilkan data TERAKHIR jika offline,
-  termasuk grafik page 1. Page 2 disesuaikan, page 3 sisanya.
-- Page 1 grafik pakai recent + $__timeFilter + latest-10.
-- Page 2 tren pakai agregasi per-menit dari recent + LIMIT <= 600,
-  dengan fallback last-known jika offline.
-- Status/offline logic terpusat di vrecent (panel tidak menduplikasi
-  CASE status; subquery latest yang berat wajib dari recent berindeks,
-  bukan full-scan view vrecent / measurement).
-"""
+"""Offline dose values remain visible without fabricating an offline trend."""
 
 from __future__ import annotations
 
@@ -48,26 +37,22 @@ def _limit_value(sql: str) -> int:
     return int(match.group(1))
 
 
-def test_page1_sparkline_is_lightweight_with_offline_fallback():
+def test_page1_sparkline_is_lightweight_and_has_no_offline_projection():
     spark = _panels("latest-dose-sparkline")
     assert len(spark) == 15
     for panel in spark:
         targets = panel.get("targets") or []
-        # Main lightweight window + dedicated last-known fallback so an
-        # offline detector keeps its last point instead of No Data.
-        assert len(targets) == 2, "sparkline must carry main + offline fallback targets"
-        main, fallback = targets[0]["rawSql"], targets[1]["rawSql"]
+        assert len(targets) == 1
+        main = targets[0]["rawSql"]
         assert "FROM recent" in main
         assert "FROM vrecent" not in main
         assert "FROM measurement" not in main
-        assert "$__timeFilter(dtom)" in main
+        assert "$__unixEpochFrom()" in main and "$__unixEpochTo()" in main
         assert "CONVERT_TZ" not in main
-        assert _limit_value(main) <= 300
-        assert "FROM recent" in fallback
-        assert "FROM measurement" not in fallback
-        assert "$__timeFilter" not in fallback
-        assert "ORDER BY dtom DESC" in fallback
-        assert "LIMIT 1" in fallback
+        assert _limit_value(main) == 300
+        assert "$__unixEpochFrom() AS time" not in main
+        assert "$__unixEpochTo() AS time" not in main
+        assert panel["fieldConfig"]["defaults"]["noValue"] == "No recent trend"
 
 
 def test_page1_stat_panels_show_offline_last_known():
@@ -85,22 +70,22 @@ def test_page1_stat_panels_show_offline_last_known():
         assert "LIMIT 1" in sql
 
 
-def test_page2_trends_bounded_with_offline_fallback():
+def test_page2_trends_bounded_without_offline_fallback():
     trends = _panels("building-dose-trend")
     assert len(trends) == 5
     for panel in trends:
         targets = panel.get("targets") or []
-        assert len(targets) == 2, "trend must carry main + offline fallback targets"
-        main, fallback = targets[0]["rawSql"], targets[1]["rawSql"]
+        assert len(targets) == 1
+        main = targets[0]["rawSql"]
         assert "FROM measurement" not in main
         assert "FROM recent" in main
         assert "$__unixEpochFrom()" in main
         assert "$__unixEpochTo()" in main
         assert "GROUP BY" in main
         assert _limit_value(main) <= 600
-        assert "FROM measurement" not in fallback
-        assert "$__timeFilter" not in fallback
-        assert "LIMIT" in fallback
+        assert "$__unixEpochFrom() AS time" not in main
+        assert "$__unixEpochTo() AS time" not in main
+        assert panel["fieldConfig"]["defaults"]["noValue"] == "No recent trend"
 
 
 def test_latest_relations_use_indexed_recent_for_newest():

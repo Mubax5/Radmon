@@ -34,7 +34,7 @@ DASHBOARD_FILES = (
 BUILDING_PAGE_ORDER = ("50", "38", "52", "55", "57")
 PAGE_TWO_TIME_FROM = "now-1h"
 PAGE_TWO_TREND_LABEL = "1 Jam"
-SPARKLINE_POINT_LIMIT = 10
+SPARKLINE_POINT_LIMIT = 300
 TREND_POINT_LIMIT = 600
 
 
@@ -100,7 +100,7 @@ def _base_dashboard(title: str, uid: str, *, time_from: str) -> dict[str, Any]:
         "id": None,
         "links": [],
         "panels": _header_panels(),
-        "refresh": "2s",
+        "refresh": "5s",
         "schemaVersion": 42,
         "style": "dark",
         "tags": ["radmon-tv", "radiation", "monitoring", "dpfk"],
@@ -294,44 +294,29 @@ def _utc_epoch_ms_sql(column: str) -> str:
 def _dose_sparkline(panel_id, station, x, y, w, h=1):
     panel = _panel(panel_id, "timeseries", "", x, y, w, h)
     panel["description"] = "latest-dose-sparkline"
-    # Narrow indexed recent scan: $__timeFilter(dtom) becomes a PK range so
-    # the vrecent view (device + runtime joins, per-row CONVERT_TZ) is never
-    # touched by the 10-minute sparkline. Server TZ is Asia/Jakarta, hence
-    # UNIX_TIMESTAMP(dtom) equals the old
-    # TIMESTAMPDIFF(CONVERT_TZ(dtom,'+07:00','+00:00')) epoch numerically.
-    # Take the newest ten rows in the indexed order, then restore chronological
-    # order for Grafana's long-to-wide conversion. Target B is the offline
-    # fallback: two last-known points projected to $__unixEpochFrom/To so an
-    # offline detector keeps a flat last-value line inside the visible range.
-    panel["targets"] = [
-        _target(f"""
+    # Return actual samples from the dashboard's 30-minute window. recent.dtom
+    # is a WIB wall-clock DATETIME: convert Grafana's UTC epoch boundaries to
+    # WIB explicitly, independent of MariaDB session timezone. The nested
+    # indexed scan bounds work to the latest 300 samples, then restores
+    # chronological order. Empty offline results are intentional.
+    panel["targets"] = [_target(f"""
 SELECT time, value
 FROM (
-  SELECT UNIX_TIMESTAMP(dtom) AS time, doserate AS value
+  SELECT
+    TIMESTAMPDIFF(SECOND, '1970-01-01 00:00:00', dtom) - 7 * 60 * 60 AS time,
+    doserate AS value,
+    dtom
   FROM recent
   WHERE serid = {station.serid}
-    AND $__timeFilter(dtom)
+    AND dtom BETWEEN
+      TIMESTAMPADD(SECOND, $__unixEpochFrom() + 7 * 60 * 60, '1970-01-01 00:00:00') AND
+      TIMESTAMPADD(SECOND, $__unixEpochTo() + 7 * 60 * 60, '1970-01-01 00:00:00')
   ORDER BY dtom DESC
   LIMIT {SPARKLINE_POINT_LIMIT}
 ) latest
 ORDER BY time ASC
-""", format_="time_series"),
-        _target(f"""
-(SELECT $__unixEpochFrom() AS time, doserate AS value
-FROM recent
-WHERE serid = {station.serid}
-ORDER BY dtom DESC
-LIMIT 1)
-UNION ALL
-(SELECT $__unixEpochTo() AS time, doserate AS value
-FROM recent
-WHERE serid = {station.serid}
-ORDER BY dtom DESC
-LIMIT 1)
-ORDER BY time ASC
-""", format_="time_series", ref_id="B"),
-    ]
-    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "color": {"mode": "fixed", "fixedColor": "green"}, "custom": {"axisPlacement": "hidden", "drawStyle": "line", "fillOpacity": 18, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
+""", format_="time_series")]
+    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "noValue": "No recent trend", "color": {"mode": "fixed", "fixedColor": "green"}, "custom": {"axisPlacement": "hidden", "drawStyle": "line", "fillOpacity": 18, "lineWidth": 1, "showPoints": "never", "spanNulls": False}}, "overrides": []}
     panel["options"] = {"legend": {"displayMode": "hidden", "placement": "bottom", "showLegend": False}, "tooltip": {"mode": "single", "sort": "none"}}
     return panel
 
@@ -391,11 +376,10 @@ def _building_trend(panel_id: int, building: str, x: int, y: int, w: int, h: int
     # relying on the datasource session timezone.
     # ORDER BY time ASC is mandatory: Grafana long->wide fails with
     # "not sorted in ascending order by time" otherwise.
-    # Target B is the offline fallback: last-known per detector projected to
-    # $__unixEpochFrom/To (inside the visible range) so an offline series
-    # keeps a flat last-value line instead of "Data outside time range".
-    panel["targets"] = [
-        _target(f"""
+    # Only real, timestamped samples within the selected hour are drawn.
+    # Offline stations therefore have no recent trend rather than an invented
+    # flat line; their last-known dose remains available on Page 1.
+    panel["targets"] = [_target(f"""
 SELECT
   ((TIMESTAMPDIFF(SECOND, '1970-01-01 00:00:00', r.dtom) - 7 * 60 * 60) DIV 60) * 60 AS time,
   CONCAT('[', r.serid, '] ', d.name) AS metric,
@@ -409,42 +393,14 @@ WHERE r.serid IN ({_station_ids(stations)})
 GROUP BY 1, 2
 ORDER BY time ASC, metric ASC
 LIMIT {TREND_POINT_LIMIT}
-""", format_="time_series"),
-        _target(f"""
-(SELECT $__unixEpochFrom() AS time,
-  CONCAT('[', r.serid, '] ', d.name) AS metric,
-  r.doserate AS value
-FROM (
-  SELECT serid, MAX(dtom) AS dtom
-  FROM recent
-  WHERE serid IN ({_station_ids(stations)})
-  GROUP BY serid
-) m
-JOIN recent r ON r.serid = m.serid AND r.dtom = m.dtom
-JOIN device d ON d.serid = r.serid)
-UNION ALL
-(SELECT $__unixEpochTo() AS time,
-  CONCAT('[', r.serid, '] ', d.name) AS metric,
-  r.doserate AS value
-FROM (
-  SELECT serid, MAX(dtom) AS dtom
-  FROM recent
-  WHERE serid IN ({_station_ids(stations)})
-  GROUP BY serid
-) m
-JOIN recent r ON r.serid = m.serid AND r.dtom = m.dtom
-JOIN device d ON d.serid = r.serid)
-ORDER BY time ASC, metric ASC
-LIMIT 30
-""", format_="time_series", ref_id="B"),
-    ]
-    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never", "spanNulls": 4000}}, "overrides": []}
+""", format_="time_series")]
+    panel["fieldConfig"] = {"defaults": {"unit": "suffix: µSv/h", "decimals": 2, "noValue": "No recent trend", "min": 0, "color": {"mode": "palette-classic"}, "custom": {"drawStyle": "line", "fillOpacity": 0, "lineWidth": 1, "showPoints": "never", "spanNulls": False}}, "overrides": []}
     panel["options"] = {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": True, "calcs": []}, "tooltip": {"mode": "multi", "sort": "desc"}}
     return panel
 
 
 def build_page_one() -> dict[str, Any]:
-    dashboard = _base_dashboard("RadMon TV · Realtime", PAGE_UIDS[0], time_from="now-10m")
+    dashboard = _base_dashboard("RadMon TV · Realtime", PAGE_UIDS[0], time_from="now-30m")
     widths = [5, 5, 5, 5, 4]
     x_positions = [0, 5, 10, 15, 20]
     stations = station_catalog()
@@ -453,18 +409,15 @@ def build_page_one() -> dict[str, Any]:
         row, col = divmod(index, 5)
         x = x_positions[col]
         width = widths[col]
-        y = 4 + row * 5
-        dashboard["panels"].append(_dose_stat(panel_id, station, x, y, width, 2))
-        panel_id += 1
-        dashboard["panels"].append(_dose_sparkline(panel_id, station, x, y + 2, width, 1))
-        panel_id += 1
-        dashboard["panels"].append(_time_stat(panel_id, station, x, y + 3, width, 1))
-        panel_id += 1
-    for index, station in enumerate(stations):
-        row, col = divmod(index, 5)
+        y = 4 + row * 6
         dashboard["panels"].append(
-            _status_lamp(55 + index, station, x_positions[col], 8 + row * 5, widths[col], 1)
+            _status_lamp(55 + index, station, x, y, width, 1)
         )
+        dashboard["panels"].append(_dose_stat(panel_id, station, x, y + 1, width, 2))
+        panel_id += 1
+        dashboard["panels"].append(_dose_sparkline(panel_id, station, x, y + 3, width, 3))
+        panel_id += 1
+        panel_id += 1
     return dashboard
 
 

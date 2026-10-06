@@ -44,11 +44,12 @@ def test_healthy_existing_datasource_is_left_untouched_while_saved_dashboards_ar
         if "/api/datasources" in url
     ]
     assert datasource_writes == []
-    assert len(writes) == 1
-    assert writes[0][0] == "POST"
-    assert writes[0][1].endswith("/api/dashboards/db")
-    assert writes[0][2]["dashboard"]["uid"] == PAGE_UIDS[1]
-    assert writes[0][2]["dashboard"]["time"] == {"from": "now-1h", "to": "now"}
+    assert len(writes) == 2
+    dashboards = [write[2]["dashboard"] for write in writes]
+    assert {item["uid"] for item in dashboards} == set(PAGE_UIDS[:2])
+    assert all(write[0] == "POST" and write[1].endswith("/api/dashboards/db") for write in writes)
+    assert next(item for item in dashboards if item["uid"] == PAGE_UIDS[0])["time"] == {"from": "now-30m", "to": "now"}
+    assert next(item for item in dashboards if item["uid"] == PAGE_UIDS[1])["time"] == {"from": "now-1h", "to": "now"}
 
 
 def test_persisted_managed_dashboard_queries_are_refreshed_without_clobbering_layout(tmp_path: Path) -> None:
@@ -163,9 +164,9 @@ def test_legacy_page_one_migrates_to_dose_values_and_adds_separate_status_lamps(
         if panel.get("description") != "central-status-lamp"
     ]
 
-    # Model the persisted pre-fix layout and status-code stat panels. The
-    # migration should reflow only this known factory layout, retain station
-    # labels, and add one thin status panel per station.
+    # Model the persisted dashboard without separate lamps, with legacy time
+    # panels. Migration must remove the timestamp row and restore the lamps.
+    saved["panels"].append({"id": 500, "description": "latest-measurement-time", "targets": []})
     for panel in saved["panels"]:
         panel_id = panel.get("id")
         if not isinstance(panel_id, int) or not 10 <= panel_id <= 54:
@@ -173,26 +174,20 @@ def test_legacy_page_one_migrates_to_dose_values_and_adds_separate_status_lamps(
         station_index, part = divmod(panel_id - 10, 3)
         row, col = divmod(station_index, 5)
         x_positions, widths = [0, 5, 10, 15, 20], [5, 5, 5, 5, 4]
-        y = 4 + row * 4
+        y = 4 + row * 5
         panel["gridPos"] = {
             "x": x_positions[col],
             "y": y + (0 if part == 0 else 2 if part == 1 else 3),
             "w": widths[col],
             "h": 2 if part == 0 else 1,
         }
-        if part == 0:
-            panel["description"] = "central-status-lamp"
-            panel["targets"] = [{"rawSql": "SELECT CASE status WHEN 'OFFLINE' THEN 0 END AS value FROM vrecent"}]
-            panel["fieldConfig"] = {"defaults": {"mappings": []}, "overrides": []}
-            panel["options"] = {"colorMode": "background"}
-            panel["transformations"] = [{"id": "organize", "options": {"excludeByName": {"value": True}}}]
-
     original_title = saved["title"]
     migrated, changed = bootstrap._refresh_managed_dashboard_queries(saved, factory)
 
     assert changed is True
     assert migrated["title"] == original_title
     assert len(migrated["panels"]) == len(factory["panels"])
+    assert not [panel for panel in migrated["panels"] if panel.get("description") == "latest-measurement-time"]
     dose_panels = [panel for panel in migrated["panels"] if panel.get("description") == "latest-dose-value"]
     lamp_panels = [panel for panel in migrated["panels"] if panel.get("description") == "central-status-lamp"]
     assert len(dose_panels) == len(lamp_panels) == 15
@@ -214,11 +209,11 @@ def test_legacy_page_one_migrates_to_dose_values_and_adds_separate_status_lamps(
     assert [
         panel["gridPos"]["y"]
         for panel in sorted(dose_panels, key=lambda item: item["id"])
-    ] == [4] * 5 + [9] * 5 + [14] * 5
+    ] == [5] * 5 + [11] * 5 + [17] * 5
     assert [
         panel["gridPos"]["y"]
         for panel in sorted(lamp_panels, key=lambda item: item["id"])
-    ] == [8] * 5 + [13] * 5 + [18] * 5
+    ] == [4] * 5 + [10] * 5 + [16] * 5
 
 
 def test_persisted_dose_panels_migrate_to_two_decimals_without_clobbering_other_formatting(tmp_path: Path) -> None:

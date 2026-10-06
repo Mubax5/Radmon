@@ -167,7 +167,7 @@ def test_grafana_tv_uses_three_logical_pages_with_five_operations_variants():
     assert len(dashboards) == 7
     assert [dashboard["uid"] for dashboard in dashboards] == list(DASHBOARD_UIDS)
     for dashboard in dashboards:
-        assert dashboard["refresh"] == "2s"
+        assert dashboard["refresh"] == "5s"
         assert dashboard["timezone"] == "browser"
         assert dashboard["templating"]["list"] == []
     playlist_values = [item["value"] for item in build_playlist_payload()["spec"]["items"]]
@@ -198,18 +198,18 @@ def test_grafana_tv_uses_three_logical_pages_with_five_operations_variants():
     assert "Kondisi Operasional Detector · Page 5/5" in payload
 
 
-def test_realtime_measurement_time_uses_numeric_epoch_for_grafana_datetime():
+def test_realtime_trend_uses_timezone_explicit_epoch_for_grafana_datetime():
     dashboard = build_page_one()
-    time_panels = [panel for panel in dashboard["panels"] if panel.get("description") == "latest-measurement-time"]
-    assert len(time_panels) == 15
-    for panel in time_panels:
+    trend_panels = [panel for panel in dashboard["panels"] if panel.get("description") == "latest-dose-sparkline"]
+    assert len(trend_panels) == 15
+    for panel in trend_panels:
         sql = panel["targets"][0]["rawSql"]
         assert "TIMESTAMPDIFF" in sql
-        assert "CONVERT_TZ(dtom, '+07:00', '+00:00')" in sql
-        assert "FROM vrecent" in sql
+        assert "TIMESTAMPADD(SECOND" in sql
+        assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
+        assert "FROM recent" in sql
         assert "DATE_FORMAT" not in sql
-        assert panel["fieldConfig"]["defaults"]["unit"] == "time:DD/MM/YYYY HH:mm:ss"
-        assert panel["options"]["text"]["valueSize"] <= 12
+        assert panel["fieldConfig"]["defaults"]["noValue"] == "No recent trend"
 
 
 def test_trend_page_auto_scales_above_one_microsievert_and_keeps_large_summaries():

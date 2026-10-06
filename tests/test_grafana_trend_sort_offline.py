@@ -1,115 +1,82 @@
-"""Regression: trends wide-series sort + offline last-data inside time range.
-
-Bukti user:
-- trends: "failed to convert long to wide series... not sorted in ascending order by time"
-- realtime offline (3001-3004 stale 15 Sep, 5701 Jun) "Data outside time range" padahal
-  wajib tampilkan data terakhir termasuk grafik page1. Page2 disesuaikan, page3 sisanya.
-- loading 20s+ wajib 1-3s. Manfaatkan vrecent/recent, jangan scan measurement 33jt.
-
-Kontrak:
-- semua target time_series (wide-series) wajib ORDER BY time ASC eksplisit.
-- spark page1 + tren page2 wajib punya fallback last-known TANPA $__timeFilter
-  yang memproyeksikan waktu ke dalam range dashboard via $__unixEpochTo()/From()
-  (bukan UNIX_TIMESTAMP(dtom) tua di luar range) sehingga offline tetap tampil.
-- spark latest-10, tren per-menit LIMIT <= 600, tanpa CONVERT_TZ per-baris,
-  tanpa FROM measurement, newest dari recent (PK) bukan vrecent.
-"""
+"""Contracts for useful, timestamped Grafana trends and offline cards."""
 
 from __future__ import annotations
 
 import re
 
-
 from radmon.grafana_tv import build_dashboard_payloads
 
 
-def _panels(description: str) -> list[dict]:
-    found = []
-    for dashboard in build_dashboard_payloads():
-        for panel in dashboard["panels"]:
-            if panel.get("description") == description:
-                found.append(panel)
-    assert found, f"no panels with description {description!r}"
-    return found
+def _dashboard(index: int) -> dict:
+    return build_dashboard_payloads()[index]
 
 
-def _all_raw_sql() -> list[str]:
-    sql: list[str] = []
-    for dashboard in build_dashboard_payloads():
-        for panel in dashboard["panels"]:
-            for target in panel.get("targets") or []:
-                raw = target.get("rawSql")
-                if raw:
-                    sql.append(raw)
-    assert sql
-    return sql
+def _panels(dashboard: dict, description: str) -> list[dict]:
+    return [p for p in dashboard["panels"] if p.get("description") == description]
 
 
-def _limit_value(sql: str) -> int:
-    m = re.search(r"LIMIT\s+(\d+)", sql, re.IGNORECASE)
-    assert m, f"expected LIMIT in: {sql[:160]}"
-    return int(m.group(1))
+def test_page1_uses_full_30m_window_and_real_sample_count():
+    page = _dashboard(0)
+    assert page["time"] == {"from": "now-30m", "to": "now"}
+    assert page["refresh"] == "5s"
+    trends = _panels(page, "latest-dose-sparkline")
+    assert len(trends) == 15
+    for panel in trends:
+        targets = panel["targets"]
+        assert len(targets) == 1
+        sql = targets[0]["rawSql"]
+        assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
+        assert "TIMESTAMPADD(SECOND" in sql
+        assert "FROM recent" in sql
+        assert "LIMIT 300" in sql
+        assert re.search(r"ORDER\s+BY\s+time\s+ASC", sql, re.I)
+        assert "$__unixEpochFrom() AS time" not in sql
+        assert "$__unixEpochTo() AS time" not in sql
+        assert panel["fieldConfig"]["defaults"]["decimals"] == 2
+        assert panel["fieldConfig"]["defaults"]["noValue"] == "No recent trend"
+        assert panel["fieldConfig"]["defaults"]["custom"]["spanNulls"] is False
 
 
-def test_no_panel_scans_measurement_33jt():
-    for sql in _all_raw_sql():
-        assert "FROM measurement" not in sql, f"must not scan 33jt measurement: {sql[:160]}"
+def test_page2_uses_one_hour_actual_sorted_samples_only():
+    page = _dashboard(1)
+    assert page["time"] == {"from": "now-1h", "to": "now"}
+    trends = _panels(page, "building-dose-trend")
+    assert len(trends) == 5
+    for panel in trends:
+        assert len(panel["targets"]) == 1
+        sql = panel["targets"][0]["rawSql"]
+        assert "$__unixEpochFrom()" in sql and "$__unixEpochTo()" in sql
+        assert "FROM recent" in sql and "GROUP BY" in sql
+        assert "ORDER BY time ASC" in sql
+        assert "$__unixEpochFrom() AS time" not in sql
+        assert "$__unixEpochTo() AS time" not in sql
+        assert panel["fieldConfig"]["defaults"]["decimals"] == 2
+        assert panel["fieldConfig"]["defaults"]["noValue"] == "No recent trend"
 
 
-def test_wide_series_targets_sort_time_asc_explicit():
+def test_page1_card_layout_status_dose_then_full_width_trend():
+    page = _dashboard(0)
+    lamps = _panels(page, "central-status-lamp")
+    doses = _panels(page, "latest-dose-value")
+    trends = _panels(page, "latest-dose-sparkline")
+    assert len(lamps) == len(doses) == len(trends) == 15
+    for lamp, dose, trend in zip(lamps, doses, trends):
+        assert lamp["gridPos"]["y"] < dose["gridPos"]["y"] < trend["gridPos"]["y"]
+        assert lamp["gridPos"]["x"] == dose["gridPos"]["x"] == trend["gridPos"]["x"]
+        assert lamp["gridPos"]["w"] == dose["gridPos"]["w"] == trend["gridPos"]["w"]
+        assert trend["gridPos"]["h"] >= 3
+        assert dose["fieldConfig"]["defaults"]["decimals"] == 2
+        assert "FROM vrecent" in dose["targets"][0]["rawSql"]
+
+
+def test_every_time_series_is_ascending_and_does_not_scan_measurement():
     checked = 0
     for dashboard in build_dashboard_payloads():
         for panel in dashboard["panels"]:
             for target in panel.get("targets") or []:
-                if target.get("format") != "time_series":
-                    continue
                 sql = target.get("rawSql") or ""
-                checked += 1
-                # Grafana long->wide conversion gagal bila time tidak ASC eksplisit.
-                assert re.search(r"ORDER\s+BY\s+[^\n;]*\bASC\b", sql, re.IGNORECASE), (
-                    f"time_series must ORDER BY ... ASC explicit: {sql[:200]}"
-                )
-    assert checked >= 20, f"expected >=20 time_series targets, got {checked}"
-
-
-def test_page1_sparkline_offline_last_data_inside_range():
-    sparks = _panels("latest-dose-sparkline")
-    assert len(sparks) == 15
-    for panel in sparks:
-        targets = panel.get("targets") or []
-        assert len(targets) == 2, "sparkline wajib main + fallback offline"
-        main, fallback = targets[0]["rawSql"], targets[1]["rawSql"]
-        # Main ringan: recent + timefilter + limit kecil, tanpa CONVERT_TZ berat.
-        assert "FROM recent" in main
-        assert "$__timeFilter(dtom)" in main
-        assert "CONVERT_TZ" not in main
-        assert _limit_value(main) == 10
-        # Fallback offline: tanpa timefilter, proyeksikan ke dalam range
-        # via $__unixEpochTo/From (bukan timestamp tua di luar range).
-        assert "FROM recent" in fallback
-        assert "$__timeFilter" not in fallback
-        assert ("$__unixEpochTo()" in fallback or "$__unixEpochFrom()" in fallback), (
-            f"offline fallback must project inside range via $__unixEpochTo/From: {fallback[:200]}"
-        )
-        assert "LIMIT 1" in fallback or "LIMIT 2" in fallback
-
-
-def test_page2_trend_offline_last_data_inside_range_and_bounded():
-    trends = _panels("building-dose-trend")
-    assert len(trends) == 5
-    for panel in trends:
-        targets = panel.get("targets") or []
-        assert len(targets) == 2, "trend wajib main + fallback offline"
-        main, fallback = targets[0]["rawSql"], targets[1]["rawSql"]
-        assert "FROM recent" in main
-        assert "$__unixEpochFrom()" in main
-        assert "$__unixEpochTo()" in main
-        assert "GROUP BY" in main
-        assert "CONVERT_TZ" not in main
-        assert _limit_value(main) <= 600, f"trend per-menit wajib LIMIT rendah: {main[:200]}"
-        assert "FROM measurement" not in fallback
-        assert "$__timeFilter" not in fallback
-        assert ("$__unixEpochTo()" in fallback or "$__unixEpochFrom()" in fallback), (
-            f"trend fallback must project inside range: {fallback[:200]}"
-        )
-        assert "LIMIT" in fallback
+                assert "FROM measurement" not in sql
+                if target.get("format") == "time_series":
+                    checked += 1
+                    assert re.search(r"ORDER\s+BY\s+[^\n;]*\bASC\b", sql, re.I)
+    assert checked >= 20
