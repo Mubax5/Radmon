@@ -81,7 +81,7 @@ jobs:
           assert [len(operation_page_stations(page)) for page in range(1, 6)] == [3, 3, 3, 3, 3]
           for dashboard in dashboards:
               json.dumps(dashboard, ensure_ascii=False)
-              assert dashboard['refresh'] == '2s'
+              assert dashboard['refresh'] == '5s'
               assert max(panel['gridPos']['y'] + panel['gridPos']['h'] for panel in dashboard['panels']) <= 24
           playlist = build_playlist_payload()
           assert playlist['spec']['interval'] == '30s'
