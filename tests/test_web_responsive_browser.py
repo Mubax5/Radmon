@@ -110,13 +110,13 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
                 ],
             )
 
-        if path == "/api/v1/control/alarm-events":
+        if path == "/api/v1/web/alarm-history":
             return _send_json(
                 self,
-                [
-                    {"event_id": "alarm-1", "serid": 5001, "status": "ACTIVE", "kind": "ALARM", "measured_value": 27.1, "threshold": 25.0, "surfaced_at": "2026-09-14T03:40:00+00:00"},
-                    {"event_id": "locked-1", "serid": 5001, "status": "ACTIVE", "kind": "RETRIGGER_LOCKED", "measured_value": 27.4, "threshold": 25.0, "surfaced_at": "2026-09-14T03:41:00+00:00"},
-                ],
+                {"items": [
+                    {"event_type": "policy_lifecycle", "event_id": "alarm-1", "serid": 5001, "status": "ACTIVE", "kind": "ALARM", "measured_value": 27.1, "threshold": 25.0, "surfaced_at": "2026-09-14T03:40:00+00:00"},
+                    {"event_type": "policy_lifecycle", "event_id": "locked-1", "serid": 5001, "status": "ACTIVE", "kind": "RETRIGGER_LOCKED", "measured_value": 27.4, "threshold": 25.0, "surfaced_at": "2026-09-14T03:41:00+00:00"},
+                ], "total": 2, "limit": 500, "offset": 0, "has_more": False},
             )
 
         if path == "/api/v1/control/suppressions":

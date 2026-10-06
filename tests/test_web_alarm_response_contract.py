@@ -102,3 +102,11 @@ def test_modal_stacking_keeps_background_mounted_and_select_on_top():
     assert 'className="radmon-dialog mobile-sheet-dialog"' in actions
     # Saat menyimpan, Escape/backdrop diblokir agar POST tidak ganda/batal diam-diam.
     assert 'if (!open && pending === "respond") return;' in actions
+
+
+def test_source_alarm_rows_have_real_source_ack_not_policy_event_response():
+    alarms = read("pages/AlarmsPage.tsx")
+    assert 'event.event_type !== "source_alarm"' in alarms
+    assert "/api/v1/control/alarms/${encodeURIComponent(event.source_id)}/${event.serid}/ack" in alarms
+    assert "source_i_flag !== 1" in alarms
+    assert "i_flag diperbarui" in alarms

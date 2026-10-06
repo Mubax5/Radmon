@@ -65,3 +65,40 @@ def test_after_window_next_alarm_is_new_one_when_not_locked(tmp_path):
     service.mark_event_responded(a2["active_event_id"], t0, "PIC", "Confirm", "x")
     new_burst = service.evaluate_live(row(t0 + timedelta(minutes=7), 151.0))
     assert new_burst["trigger_count"] == 1
+
+
+def test_normalized_source_clock_skew_accepts_high_and_rejects_excess_future_time(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    store = AlarmPolicyStore(security)
+    service = AlarmPolicyService(store, AuditTrail(security))
+    now = datetime.now().replace(microsecond=0)
+    raw_source_time = now + timedelta(seconds=50)
+    sample = {
+        "serid": 5702, "dtom": raw_source_time,
+        "_policy_measured_at": raw_source_time - timedelta(seconds=50),
+        "_source_observed_at": now, "doserate": 99.99,
+        "warnlevel": 23.0, "alarmlevel": 25.0,
+    }
+
+    accepted = service.evaluate_live(sample, source_id="gd52")
+
+    assert accepted["policy_state"] == "ALARM"
+    event = store.get_event(accepted["active_event_id"])
+    assert event.measured_value == 99.99
+    assert event.remote_event_time == raw_source_time
+    assert not service._is_fresh_live_row({**sample, "_policy_measured_at": now + timedelta(seconds=6)}, now + timedelta(seconds=6))
+
+
+def test_normalized_low_threshold_remains_policy_event(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    store = AlarmPolicyStore(security)
+    service = AlarmPolicyService(store, AuditTrail(security))
+    now = datetime.now().replace(microsecond=0)
+    result = service.evaluate_live({
+        "serid": 5703, "dtom": now + timedelta(seconds=50),
+        "_policy_measured_at": now, "_source_observed_at": now,
+        "doserate": 24.0, "warnlevel": 23.0, "alarmlevel": 25.0,
+    }, source_id="gd52")
+    event = store.get_event(result["active_event_id"])
+    assert event.reason == "LOW_THRESHOLD"
+    assert event.status == "ACTIVE"

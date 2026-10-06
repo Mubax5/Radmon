@@ -3,9 +3,13 @@ from __future__ import annotations
 import calendar
 from datetime import datetime
 from pathlib import Path
+import tempfile
 
-from PySide6.QtCore import QDateTime
+from PySide6.QtCore import QDateTime, QSize
+from PySide6.QtGui import QPainter
+from PySide6.QtPdf import QPdfDocument
 from PySide6.QtPrintSupport import QPageSetupDialog, QPrintDialog, QPrintPreviewDialog, QPrinter
+from PySide6.QtPdfWidgets import QPdfView
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -14,7 +18,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -46,6 +49,7 @@ class ReportsPage(QWidget):
         for widget in (self.start, self.end):
             widget.setCalendarPopup(True)
             widget.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+            widget.dateTimeChanged.connect(self._selection_changed)
 
         self.live = QCheckBox("Live")
         self.live.setChecked(False)
@@ -87,13 +91,13 @@ class ReportsPage(QWidget):
         controls.addWidget(csv_button)
         controls.addStretch(1)
 
-        self.preview = QTextBrowser()
-        self.preview.setOpenExternalLinks(False)
+        self.preview_document = QPdfDocument(self)
+        self.preview = QPdfView()
         self.preview.setContentsMargins(0, 0, 0, 0)
-        self.preview.document().setDocumentMargin(2.0)
-        self.preview.setHtml(
-            "<h3 style='text-align:center'>Pilih range waktu lalu klik Preview</h3>"
-        )
+        self.preview.setDocument(self.preview_document)
+        self.preview.setZoomMode(QPdfView.ZoomMode.FitInView)
+        self._preview_pdf_path: Path | None = None
+        self._preview_pdf_bytes: bytes | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -149,6 +153,11 @@ class ReportsPage(QWidget):
     def range(self):
         return self.start.dateTime().toPython(), self.end.dateTime().toPython()
 
+    def _selection_changed(self, *_args) -> None:
+        self.preview_ready = False
+        self.print_button.setEnabled(False)
+        self.pdf_button.setEnabled(False)
+
     def select_period(self) -> None:
         start, end = self.range()
         dialog = PeriodSelectionDialog(start, end, parent=self)
@@ -177,17 +186,21 @@ class ReportsPage(QWidget):
         try:
             start, end = self.range()
             self.report_service.settings = self.settings
-            html = self.report_service.preview_html(start, end)
-            self.preview.setUpdatesEnabled(False)
-            self.preview.setHtml(html)
-            self.preview.document().setDocumentMargin(2.0)
-            self.preview.setUpdatesEnabled(True)
+            payload = self.report_service.pdf_bytes(start, end)
+            with tempfile.NamedTemporaryFile(prefix="radmon-preview-", suffix=".pdf", delete=False) as handle:
+                handle.write(payload)
+                preview_path = Path(handle.name)
+            if self._preview_pdf_path is not None:
+                self.preview_document.close()
+                self._preview_pdf_path.unlink(missing_ok=True)
+            self._preview_pdf_path = preview_path
+            self._preview_pdf_bytes = payload
+            self.preview_document.load(str(preview_path))
             self.preview_ready = True
             self.print_button.setEnabled(True)
             self.pdf_button.setEnabled(True)
             self.last_error = None
         except Exception as exc:
-            self.preview.setUpdatesEnabled(True)
             self.preview_ready = False
             self.print_button.setEnabled(False)
             self.pdf_button.setEnabled(False)
@@ -207,7 +220,7 @@ class ReportsPage(QWidget):
         if not self.preview_ready:
             return
         dialog = QPrintPreviewDialog(self._printer, self)
-        dialog.paintRequested.connect(lambda printer: self.preview.document().print_(printer))
+        dialog.paintRequested.connect(self._print_pdf)
         dialog.exec()
 
     def print_report(self) -> None:
@@ -215,7 +228,18 @@ class ReportsPage(QWidget):
             return
         dialog = QPrintDialog(self._printer, self)
         if dialog.exec():
-            self.preview.document().print_(self._printer)
+            self._print_pdf(self._printer)
+
+    def _print_pdf(self, printer) -> None:
+        painter = QPainter(printer)
+        try:
+            for page in range(self.preview_document.pageCount()):
+                if page and not printer.newPage():
+                    break
+                image = self.preview_document.render(page, QSize(1400, 1980))
+                painter.drawImage(printer.pageRect(QPrinter.Unit.DevicePixel), image)
+        finally:
+            painter.end()
 
     def export_pdf(self) -> None:
         if not self.preview_ready:
@@ -224,7 +248,9 @@ class ReportsPage(QWidget):
         try:
             self.report_service.settings = self.settings
             start, end = self.range()
-            self.report_service.export_pdf(start, end, path)
+            if self._preview_pdf_bytes is None:
+                raise ValueError("Preview the selected report before exporting")
+            path.write_bytes(self._preview_pdf_bytes)
             QMessageBox.information(self, "PDF exported", str(path))
         except Exception as exc:
             QMessageBox.critical(self, "Export error", str(exc))
@@ -241,3 +267,9 @@ class ReportsPage(QWidget):
 
     def save_as(self) -> None:
         self.export_pdf()
+
+    def closeEvent(self, event) -> None:
+        self.preview_document.close()
+        if self._preview_pdf_path is not None:
+            self._preview_pdf_path.unlink(missing_ok=True)
+        super().closeEvent(event)

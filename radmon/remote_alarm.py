@@ -54,7 +54,7 @@ class RemoteAlarmMirror:
 
     @staticmethod
     def _row(row):
-        keys = ('source_id', 'serid', 'remote_serid', 'event_time', 'level', 'measured_value', 'threshold', 'hit_count', 'acknowledged_at', 'pic', 'action', 'note', 'notification_sent_at', 'is_active')
+        keys = ('source_id', 'serid', 'remote_serid', 'event_time', 'level', 'measured_value', 'threshold', 'hit_count', 'acknowledged_at', 'pic', 'action', 'note', 'notification_sent_at', 'is_active', 'source_i_flag')
         item = dict(zip(keys, row))
         for key in ('event_time', 'acknowledged_at', 'notification_sent_at'):
             if item[key]:
@@ -66,19 +66,19 @@ class RemoteAlarmMirror:
         self._ensure_active_schema()
         clause = 'WHERE is_active = 1' if active_only else ''
         with self.store._connection() as connection:
-            rows = connection.execute(f'\nSELECT source_id, serid, remote_serid, event_time, level, measured_value,\n       threshold, hit_count, acknowledged_at, pic, action, note,\n       notification_sent_at, is_active\nFROM remote_alarm_state {clause}\nORDER BY event_time DESC LIMIT ?\n', (max(1, int(limit)),)).fetchall()
+            rows = connection.execute(f'\nSELECT source_id, serid, remote_serid, event_time, level, measured_value,\n       threshold, hit_count, acknowledged_at, pic, action, note,\n       notification_sent_at, is_active, source_i_flag\nFROM remote_alarm_state {clause}\nORDER BY event_time DESC LIMIT ?\n', (max(1, int(limit)),)).fetchall()
         return [self._row(row) for row in rows]
 
     def get(self, source_id: str, serid: int, event_time: datetime):
         self._ensure_active_schema()
         with self.store._connection() as connection:
-            row = connection.execute('\nSELECT source_id, serid, remote_serid, event_time, level, measured_value,\n       threshold, hit_count, acknowledged_at, pic, action, note,\n       notification_sent_at, is_active\nFROM remote_alarm_state\nWHERE source_id = ? AND serid = ? AND event_time = ?\n', (source_id, int(serid), event_time.isoformat())).fetchone()
+            row = connection.execute('\nSELECT source_id, serid, remote_serid, event_time, level, measured_value,\n       threshold, hit_count, acknowledged_at, pic, action, note,\n       notification_sent_at, is_active, source_i_flag\nFROM remote_alarm_state\nWHERE source_id = ? AND serid = ? AND event_time = ?\n', (source_id, int(serid), event_time.isoformat())).fetchone()
         return self._row(row) if row else None
 
     def mark_acknowledged(self, source_id: str, serid: int, event_time: datetime, *, acknowledged_at: datetime, pic: str, action: str, note: str):
         self._ensure_active_schema()
         with self.store._connection() as connection:
-            cursor = connection.execute('\nUPDATE remote_alarm_state\nSET acknowledged_at = ?, pic = ?, action = ?, note = ?, is_active = 0\nWHERE source_id = ? AND serid = ? AND event_time = ? AND is_active = 1\n', (acknowledged_at.isoformat(), pic, action, note, source_id, int(serid), event_time.isoformat()))
+            cursor = connection.execute('\nUPDATE remote_alarm_state\nSET acknowledged_at = ?, pic = ?, action = ?, note = ?, is_active = 0, source_i_flag = 1\nWHERE source_id = ? AND serid = ? AND event_time = ? AND is_active = 1\n', (acknowledged_at.isoformat(), pic, action, note, source_id, int(serid), event_time.isoformat()))
             if cursor.rowcount != 1:
                 raise RuntimeError('alarm sudah ditangani atau tidak ditemukan')
         item = self.get( source_id, serid, event_time)

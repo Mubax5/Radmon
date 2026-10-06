@@ -65,7 +65,8 @@ test("unknown codes use a human fallback and raw lifecycle values remain availab
     "source_reconciliation.reason: EXACT_SOURCE_ALARM_NOT_OBSERVED",
   ]);
   const page = await readFile(new URL("../src/pages/AlarmsPage.tsx", import.meta.url), "utf8");
-  assert.match(page, /<details>/);
-  assert.match(page, /<summary>Rincian teknis<\/summary>/);
+  assert.match(page, /data-testid="alarm-lifecycle-dialog"/);
+  assert.match(page, /showModal\(\)/);
+  assert.doesNotMatch(page, /<details>/);
   assert.match(page, /lifecycle\.raw\.map/);
 });

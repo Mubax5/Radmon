@@ -126,6 +126,7 @@ def attach_web_api_routes(
     source_health: Any | None = None,
     event_broker: Any | None = None,
     alarm_policy: Any | None = None,
+    alarm_mirror: Any | None = None,
 ) -> FastAPI:
     """Authenticated read models and lightweight browser refresh events."""
 
@@ -223,6 +224,74 @@ def attach_web_api_routes(
         identity: UserIdentity = Depends(viewer),
     ):
         return repository.history(serid, limit=limit)
+
+    @app.get("/api/v1/web/alarm-history")
+    def alarm_history(limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0), identity: UserIdentity = Depends(viewer)):
+        """Paginated merged source alarm rows and central policy lifecycle."""
+        source_fields = {"source_id", "serid", "remote_serid", "event_time", "level", "measured_value", "threshold", "hit_count", "is_active", "source_i_flag", "source_observed_at", "source_observation_version"}
+        policy_fields = {"event_id", "source_id", "serid", "remote_serid", "remote_event_time", "surfaced_at", "event_time", "kind", "status", "reason", "resolution_code", "measured_value", "threshold", "hit_count", "policy_decision"}
+
+        def project(raw: dict[str, Any], fields: set[str]) -> dict[str, Any]:
+            return {key: raw[key] for key in fields if key in raw}
+
+        sources = []
+        if alarm_mirror is not None:
+            for raw in alarm_mirror.list_alarms(limit=5000):
+                raw_item = dict(raw)
+                item = project(raw_item, source_fields)
+                if "source_i_flag" not in item and "i_flag" in raw_item:
+                    item["source_i_flag"] = raw_item["i_flag"]
+                item.update({"event_type": "source_alarm", "status": "ACTIVE" if item.get("is_active") else "ACKNOWLEDGED", "acknowledged": bool(raw_item.get("acknowledged_at")) or not bool(item.get("is_active")), "suppressed": False})
+                sources.append(item)
+        policies = []
+        if alarm_policy is not None:
+            for raw in alarm_policy.list_events(limit=5000):
+                item = project(dict(raw), policy_fields)
+                item.update({"event_type": "policy_lifecycle", "event_time": item.get("surfaced_at"), "acknowledged": item.get("status") == "RESPONDED", "suppressed": item.get("kind") == "SUPPRESSED"})
+                policies.append(item)
+
+        def time_key(item):
+            value = item.get("event_time") or item.get("surfaced_at")
+            return value.isoformat() if isinstance(value, datetime) else str(value or "")
+
+        def as_datetime(value):
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, str):
+                try:
+                    return datetime.fromisoformat(value)
+                except ValueError:
+                    return None
+            return None
+
+        merged = list(sources)
+        for item in policies:
+            remote_time = item.get("remote_event_time")
+            policy_time = as_datetime(remote_time)
+            candidates = []
+            if policy_time is not None and item.get("source_id") is not None and item.get("remote_serid") is not None:
+                for source in sources:
+                    source_time = as_datetime(source.get("event_time"))
+                    if (str(source.get("source_id")) == str(item.get("source_id"))
+                            and int(source.get("serid") or -1) == int(item.get("serid") or -1)
+                            and int(source.get("remote_serid") or -1) == int(item.get("remote_serid") or -1)
+                            and source_time is not None):
+                        try:
+                            delta = abs((source_time - policy_time).total_seconds())
+                        except TypeError:
+                            delta = abs((source_time.replace(tzinfo=None) - policy_time.replace(tzinfo=None)).total_seconds())
+                        if delta <= 5:
+                            candidates.append((delta, source))
+            candidates.sort(key=lambda pair: pair[0])
+            source = candidates[0][1] if candidates and (len(candidates) == 1 or candidates[0][0] < candidates[1][0]) else None
+            if source is not None:
+                source["policy_event"] = item
+                source["status"] = item.get("status")
+            else:
+                merged.append(item)
+        merged.sort(key=time_key, reverse=True)
+        total = len(merged)
+        return {"items": merged[offset:offset + limit], "total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total}
 
     @app.get("/api/v1/web/events")
     def web_events(identity: UserIdentity = Depends(viewer)):

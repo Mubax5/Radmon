@@ -4,7 +4,10 @@ import { api, listReportJobs, reportDownloadUrl, reportPreviewUrl, requestReport
 import { ErrorCard, LoadingCard, PageHeading, PageSection, formatTimestamp } from "../ui";
 
 const now = new Date();
-const localDateTime = (date: Date) => date.toISOString().slice(0, 16);
+const localDateTime = (date: Date) => {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
 
 export function ReportsPage() {
   const [jobs, setJobs] = useState<ReportJob[] | null>(null);
@@ -18,6 +21,9 @@ export function ReportsPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const [draftUrl, setDraftUrl] = useState<string | null>(null);
+  const [draftLoading, setDraftLoading] = useState(false);
+  const [draftError, setDraftError] = useState("");
   const previewReady = Boolean(previewJobId && jobs?.some((job) => job.job_id === previewJobId && job.status === "completed"));
 
   const load = () => void Promise.all([listReportJobs(), api<Station[]>("/api/v1/web/stations")]).then(([reportRows, stationRows]) => {
@@ -68,6 +74,40 @@ export function ReportsPage() {
     };
   }, [previewJobId, previewReady]);
 
+  useEffect(() => {
+    if (!serid || !startAt || !endAt) {
+      setDraftUrl(null);
+      return;
+    }
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    const timer = window.setTimeout(() => {
+      setDraftUrl(null);
+      setDraftLoading(true);
+      setDraftError("");
+      const query = new URLSearchParams({ serid, start_at: new Date(startAt).toISOString(), end_at: new Date(endAt).toISOString() });
+      fetch(`/api/v1/control/reports/draft-preview?${query}`, { credentials: "same-origin", signal: controller.signal })
+        .then((response) => {
+          if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+          if (!response.headers.get("content-type")?.toLowerCase().includes("application/pdf")) throw new Error("Pratinjau bukan file PDF");
+          return response.blob();
+        })
+        .then((blob) => {
+          if (!controller.signal.aborted) {
+            objectUrl = URL.createObjectURL(blob);
+            setDraftUrl(objectUrl);
+          }
+        })
+        .catch((reason: unknown) => { if (!controller.signal.aborted) setDraftError(reason instanceof Error ? reason.message : "Pratinjau gagal dimuat"); })
+        .finally(() => { if (!controller.signal.aborted) setDraftLoading(false); });
+    }, 350);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [serid, startAt, endAt]);
+
   async function create(event: React.FormEvent) {
     event.preventDefault();
     setCreating(true);
@@ -85,12 +125,21 @@ export function ReportsPage() {
     <PageHeading title="Laporan" description="PDF dibuat di worker latar belakang dari scope stasiun dan waktu yang eksplisit." />
     {error ? <ErrorCard message={error} /> : null}
     {!jobs ? <LoadingCard /> : <>
-      <LayerCard className="action-card"><form className="action-form" onSubmit={create}>
+      <div className="report-workspace">
+      <LayerCard className="action-card report-form-card"><form className="action-form" onSubmit={create}>
         <label className="native-select-field" htmlFor="report-station"><span>Stasiun</span><select id="report-station" className="native-select" value={serid} onChange={(event) => setSerid(event.target.value)} required>{stations.map((station) => <option key={station.serid} value={station.serid}>{station.name} (SERID {station.serid})</option>)}</select></label>
         <label className="native-input-field" htmlFor="report-start"><span>Mulai</span><input id="report-start" type="datetime-local" value={startAt} onChange={(event) => setStartAt(event.target.value)} required /></label>
         <label className="native-input-field" htmlFor="report-end"><span>Selesai</span><input id="report-end" type="datetime-local" value={endAt} onChange={(event) => setEndAt(event.target.value)} required /></label>
-        <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !serid}>{creating ? "Meminta laporan…" : "Buat laporan"}</Button></div>
+        <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !serid || !draftUrl}>{creating ? "Meminta laporan…" : "Buat laporan"}</Button></div>
       </form></LayerCard>
+      <section className="report-draft-pane" aria-label="Pratinjau PDF laporan saat ini">
+        <h2>Pratinjau PDF</h2>
+        <p>Pratinjau menggunakan stasiun dan rentang yang sedang dipilih.</p>
+        {draftLoading ? <p role="status">Membuat pratinjau PDF…</p> : null}
+        {draftError ? <p role="alert">Pratinjau PDF gagal dimuat: {draftError}</p> : null}
+        {draftUrl ? <iframe title="Pratinjau PDF laporan saat ini" src={draftUrl} /> : null}
+      </section>
+      </div>
       <PageSection title="Job laporan" description="Status diperbarui otomatis setiap 3 detik.">
         <div className="mobile-card-list">
           {jobs.map((job) => <LayerCard className="user-card" key={job.job_id}>

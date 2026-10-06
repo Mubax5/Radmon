@@ -2,16 +2,19 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from html import escape
+from io import BytesIO
 from pathlib import Path
 from statistics import fmean
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .config import Settings
@@ -51,17 +54,26 @@ class ReportSummary:
 
 
 def approximate_dose(rows: list[dict[str, Any]]) -> float:
+    dose_values = [row.get("dose") for row in rows]
+    if any(value is not None for value in dose_values):
+        return sum(float(value or 0.0) for value in dose_values)
     points = [
         (row.get("dtom"), row.get("doserate"))
         for row in rows
         if isinstance(row.get("dtom"), datetime) and row.get("doserate") is not None
     ]
-    points.sort(key=lambda item: item[0])
+    points.sort(key=lambda item: _time_key(item[0]))
     total = 0.0
     for (time_a, rate_a), (time_b, rate_b) in zip(points, points[1:]):
-        hours = max(0.0, (time_b - time_a).total_seconds() / 3600.0)
+        hours = max(0.0, (_time_key(time_b) - _time_key(time_a)).total_seconds() / 3600.0)
         total += ((float(rate_a) + float(rate_b)) / 2.0) * hours
     return total
+
+
+def _time_key(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _summary_from_rows(rows: list[dict[str, Any]]) -> ReportSummary:
@@ -73,8 +85,8 @@ def _summary_from_rows(rows: list[dict[str, Any]]) -> ReportSummary:
         if isinstance(row.get("dtom"), datetime)
     ]
     return ReportSummary(
-        first_measurement=min(times) if times else None,
-        last_measurement=max(times) if times else None,
+        first_measurement=min(times, key=_time_key) if times else None,
+        last_measurement=max(times, key=_time_key) if times else None,
         minimum=min(values) if values else None,
         average=fmean(values) if values else None,
         maximum=max(values) if values else None,
@@ -102,6 +114,9 @@ def _micro_unit(unit: str | None) -> str:
 
 class ReportService:
     PREVIEW_ROW_LIMIT = 250
+    MAX_MEASUREMENT_ROWS = 20_000
+    MAX_ALARM_ROWS = 10_000
+    REPORT_TIMEZONE = ZoneInfo("Asia/Jakarta")
 
     def __init__(
         self,
@@ -118,16 +133,47 @@ class ReportService:
         self,
         start: datetime,
         end: datetime,
-        limit: int = 200_000,
+        limit: int = 2_147_483_647,
     ) -> list[dict[str, Any]]:
         if end <= start:
             raise ValueError("report end must be after start")
-        return self.repository.measurement_history(
+        count = self._count("measurement_count", start, end)
+        if count is not None and count > self.MAX_MEASUREMENT_ROWS:
+            raise ValueError(f"jumlah pengukuran melebihi batas {self.MAX_MEASUREMENT_ROWS:,}; pilih rentang waktu lebih sempit")
+        rows = self.repository.measurement_history(
             start,
             end,
             serid=self.settings.serid,
-            limit=limit,
+            limit=min(limit, self.MAX_MEASUREMENT_ROWS + 1),
         )
+        if len(rows) > self.MAX_MEASUREMENT_ROWS:
+            raise ValueError(f"jumlah pengukuran melebihi batas {self.MAX_MEASUREMENT_ROWS:,}; pilih rentang waktu lebih sempit")
+        return rows
+
+    def _count(self, method_name: str, start: datetime, end: datetime) -> int | None:
+        method = getattr(self.repository, method_name, None)
+        if callable(method):
+            return int(method(start, end, serid=self.settings.serid))
+        return None
+
+    def _checked_alarms(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
+        count = self._count("alarm_count", start, end)
+        if count is not None and count > self.MAX_ALARM_ROWS:
+            raise ValueError(f"jumlah alarm melebihi batas {self.MAX_ALARM_ROWS:,}; pilih rentang waktu lebih sempit")
+        rows = self.repository.alarm_history(start, end, serid=self.settings.serid, limit=self.MAX_ALARM_ROWS + 1)
+        if len(rows) > self.MAX_ALARM_ROWS:
+            raise ValueError(f"jumlah alarm melebihi batas {self.MAX_ALARM_ROWS:,}; pilih rentang waktu lebih sempit")
+        return rows
+
+    def preflight(self, start: datetime, end: datetime) -> None:
+        if end <= start:
+            raise ValueError("report end must be after start")
+        measurements = self._count("measurement_count", start, end)
+        if measurements is not None and measurements > self.MAX_MEASUREMENT_ROWS:
+            raise ValueError(f"jumlah pengukuran melebihi batas {self.MAX_MEASUREMENT_ROWS:,}; pilih rentang waktu lebih sempit")
+        alarms = self._count("alarm_count", start, end)
+        if alarms is not None and alarms > self.MAX_ALARM_ROWS:
+            raise ValueError(f"jumlah alarm melebihi batas {self.MAX_ALARM_ROWS:,}; pilih rentang waktu lebih sempit")
 
     def _summary_for_range(
         self,
@@ -151,9 +197,15 @@ class ReportService:
     def summary(self, start: datetime, end: datetime) -> ReportSummary:
         return self._summary_for_range(start, end)
 
-    @staticmethod
-    def _dt(value: datetime | None) -> str:
-        return "-" if value is None else value.strftime("%Y-%m-%d %H:%M:%S")
+    @classmethod
+    def _dt(cls, value: datetime | None) -> str:
+        if value is None:
+            return "-"
+        if value.tzinfo is None or value.utcoffset() is None:
+            value = value.replace(tzinfo=cls.REPORT_TIMEZONE)
+        else:
+            value = value.astimezone(cls.REPORT_TIMEZONE)
+        return value.strftime("%Y-%m-%d %H:%M:%S WIB")
 
     @staticmethod
     def _fmt(value: float | None, decimals: int = 2) -> str:
@@ -177,11 +229,13 @@ class ReportService:
             measured_at = row.get("dtom")
             raw_rate = row.get("doserate")
             rate = float(raw_rate) if raw_rate is not None else None
-            if previous and isinstance(measured_at, datetime) and rate is not None:
+            if row.get("dose") is not None:
+                running_dose += float(row["dose"])
+            elif previous and isinstance(measured_at, datetime) and rate is not None:
                 previous_time, previous_rate = previous
                 hours = max(
                     0.0,
-                    (measured_at - previous_time).total_seconds() / 3600.0,
+                    (_time_key(measured_at) - _time_key(previous_time)).total_seconds() / 3600.0,
                 )
                 running_dose += ((previous_rate + rate) / 2.0) * hours
             if isinstance(measured_at, datetime) and rate is not None:
@@ -274,73 +328,100 @@ th {{ background: #efefef; font-weight: bold; }}
         end: datetime,
         destination: Path | str,
     ) -> Path:
-        """Programmatic PDF export retained for non-GUI callers and tests."""
         path = Path(destination)
         path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(self.pdf_bytes(start, end))
+        return path
+
+    def pdf_bytes(self, start: datetime, end: datetime) -> bytes:
+        """Generate the canonical, complete portrait PDF for every report surface."""
+        if end <= start:
+            raise ValueError("report end must be after start")
+        self.preflight(start, end)
         station = self.repository.station_config(self.settings.serid)
-        rows = self.rows(start, end, limit=1000)
+        rows = self.rows(start, end)
         summary = self._summary_for_range(start, end, fallback_rows=rows)
-        alarms = self.repository.alarm_history(
-            start,
-            end,
-            serid=self.settings.serid,
-            limit=500,
-        )
+        alarms = self._checked_alarms(start, end)
 
         styles = getSampleStyleSheet()
+        styles["Title"].fontSize = 12
+        styles["Title"].leading = 14
+        styles["Heading2"].fontSize = 11
+        styles["Heading2"].leading = 13
+        styles["BodyText"].fontSize = 8
+        styles["Heading2"].alignment = 1
+        cell_body = ParagraphStyle("ReportCell", parent=styles["BodyText"], fontSize=6.5, leading=8, alignment=1)
+        cell_header = ParagraphStyle("ReportHeader", parent=cell_body, fontName="Helvetica-Bold", textColor=colors.white)
+
+        def wrapped(data):
+            return [
+                [Paragraph(escape(str(value)), cell_header if row_index == 0 else cell_body) for value in row]
+                for row_index, row in enumerate(data)
+            ]
+        output = BytesIO()
         document = SimpleDocTemplate(
-            str(path),
-            pagesize=landscape(A4),
-            leftMargin=12 * mm,
-            rightMargin=12 * mm,
-            topMargin=12 * mm,
-            bottomMargin=12 * mm,
+            output,
+            pagesize=A4,
+            leftMargin=10 * mm,
+            rightMargin=10 * mm,
+            topMargin=10 * mm,
+            bottomMargin=10 * mm,
             title=f"Radmon Report - {station.room}",
+            pageCompression=0,
         )
+        unit = _micro_unit(getattr(station, "unit", None))
+        description = f"Alert {station.warnlevel:g} {unit}, Alarm {station.alarmlevel:g} {unit}"
         story: list[Any] = [
-            Paragraph("LAPORAN PEMANTAUAN RADIASI", styles["Title"]),
-            Paragraph(
-                f"{station.room} · {station.location} · ID {station.serid}",
-                styles["Heading2"],
-            ),
-            Paragraph(
-                f"Periode: {start:%Y-%m-%d %H:%M:%S} s/d {end:%Y-%m-%d %H:%M:%S}",
-                styles["BodyText"],
-            ),
-            Spacer(1, 6 * mm),
+            Paragraph("Instalasi Pengelolaan Limbah Radioaktif", styles["Title"]),
+            Paragraph("Direktorat Pengelolaan Fasilitas Ketenaganukliran", styles["Heading2"]),
+            Spacer(1, 2 * mm),
+            Table([[""]], colWidths=[document.width], rowHeights=[0.5], style=TableStyle([("LINEBELOW", (0, 0), (-1, -1), 0.7, colors.black)])),
+            Spacer(1, 3 * mm),
+            Paragraph("Summary", styles["Heading2"]),
         ]
         summary_data = [
-            ["First", "Last", "Min", "Average", "Max", "Samples", "Approx. Dose"],
+            ["No.", "Name", "Location", "Description", "First Measurement", "Last Measurement", "Dose rate (Average/Max)"],
             [
+                "1",
+                str(station.room),
+                str(station.location),
+                description,
                 self._dt(summary.first_measurement),
                 self._dt(summary.last_measurement),
-                self._fmt(summary.minimum),
-                self._fmt(summary.average),
-                self._fmt(summary.maximum),
-                str(summary.sample_count),
-                self._fmt(summary.approximate_dose, 6),
+                f"{self._fmt(summary.average)} / {self._fmt(summary.maximum)}",
             ],
         ]
-        summary_table = Table(summary_data, repeatRows=1)
+        summary_table = Table(wrapped(summary_data), colWidths=[8*mm, 22*mm, 20*mm, 34*mm, 31*mm, 31*mm, 37*mm], repeatRows=1, hAlign="CENTER")
         summary_table.setStyle(self._table_style())
-        story.extend([summary_table, Spacer(1, 6 * mm)])
+        story.extend([summary_table, Spacer(1, 5 * mm), Paragraph("Dose rate and Approx. Dose", styles["Heading2"]), Paragraph(f"From {self._dt(start)} to {self._dt(end)}", styles["BodyText"]), Spacer(1, 2 * mm)])
 
-        measurement_data = [["No", "Time", "Dose rate (µSv/h)", "Prev interval", "Stat"]]
+        measurement_data = [["No.", "Tag", "Name", "Location", "Measurement", "Dose rate (µSv/h)", "Approx. Dose (µSv)"]]
+        cumulative_dose = 0.0
+        previous: tuple[datetime, float] | None = None
         for index, row in enumerate(rows, start=1):
+            measured_at = row.get("dtom")
+            rate = float(row["doserate"]) if row.get("doserate") is not None else None
+            if row.get("dose") is not None:
+                cumulative_dose += float(row["dose"])
+            elif previous is not None and rate is not None and isinstance(measured_at, datetime):
+                hours = max(0.0, (_time_key(measured_at) - _time_key(previous[0])).total_seconds() / 3600.0)
+                cumulative_dose += ((previous[1] + rate) / 2.0) * hours
+            if rate is not None and isinstance(measured_at, datetime):
+                previous = (measured_at, rate)
             measurement_data.append(
                 [
                     str(index),
-                    self._dt(row.get("dtom")),
-                    self._fmt(float(row["doserate"]))
-                    if row.get("doserate") is not None
-                    else "-",
-                    str(row.get("previnterval", "-")),
-                    str(row.get("stat", "-")),
+                    str(row.get("serid", station.serid)),
+                    str(station.room),
+                    str(station.location),
+                    self._dt(measured_at),
+                    self._fmt(rate, 3),
+                    self._fmt(cumulative_dose, 6),
                 ]
             )
         if len(measurement_data) == 1:
-            measurement_data.append(["-", "No data", "-", "-", "-"])
-        measurements = Table(measurement_data, repeatRows=1)
+            measurement_data.append(["-", "-", "-", "-", "No data", "-", "-"])
+        measurements = Table(wrapped(measurement_data), colWidths=[10*mm, 15*mm, 24*mm, 24*mm, 42*mm, 30*mm, 38*mm], repeatRows=1, hAlign="CENTER")
         measurements.setStyle(self._table_style())
         story.extend([measurements, Spacer(1, 6 * mm)])
 
@@ -349,18 +430,23 @@ th {{ background: #efefef; font-weight: bold; }}
             alarm_data.append(
                 [
                     str(row.get("alarmid", "-")),
-                    self._dt(row.get("dtom")),
+                    self._dt(row.get("dtom") or row.get("dtoa")),
                     str(row.get("type", "-")),
                     str(row.get("msg") or "-"),
                 ]
             )
         if len(alarm_data) == 1:
             alarm_data.append(["-", "-", "-", "No alarms"])
-        alarm_table = Table(alarm_data, repeatRows=1)
+        alarm_table = Table(wrapped(alarm_data), colWidths=[22*mm, 38*mm, 25*mm, document.width - 85*mm], repeatRows=1)
         alarm_table.setStyle(self._table_style())
-        story.append(alarm_table)
-        document.build(story)
-        return path
+        if alarms:
+            story.extend([Paragraph("Alarm history", styles["Heading2"]), alarm_table])
+        def stable_canvas(*args, **kwargs):
+            kwargs["invariant"] = 1
+            return Canvas(*args, **kwargs)
+
+        document.build(story, canvasmaker=stable_canvas)
+        return output.getvalue()
 
     @staticmethod
     def _table_style() -> TableStyle:

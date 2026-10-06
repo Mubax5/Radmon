@@ -70,20 +70,21 @@ def test_report_live_refresh_does_not_rebuild_preview_every_two_seconds():
 
 def test_report_preview_minimizes_document_margin_for_edge_to_edge_layout():
     source = (ROOT / "radmon/admin/reports_page.py").read_text(encoding="utf-8")
-    assert "setDocumentMargin" in source
+    assert 'QPdfView.ZoomMode.FitInView' in source
     assert "setContentsMargins(0, 0, 0, 0)" in source
 
 
 def test_reports_page_is_preview_first_and_prints_same_document():
     source = (ROOT / "radmon/admin/reports_page.py").read_text(encoding="utf-8")
-    assert "QTextBrowser" in source
+    assert "QPdfView" in source
+    assert "QPdfDocument" in source
     assert 'QPushButton("Preview")' in source
     assert "self.print_button.setEnabled(False)" in source
     assert "self.pdf_button.setEnabled(False)" in source
-    assert "self.preview.setHtml" in source
-    assert "self.preview.document()" in source
+    assert "self.report_service.pdf_bytes(start, end)" in source
+    assert "self.preview_document.render(page" in source
     assert "QPrintDialog" in source
-    assert "self.report_service.export_pdf(start, end, path)" in source
+    assert "path.write_bytes(self._preview_pdf_bytes)" in source
 
 
 def test_preview_reuses_one_measurement_snapshot_for_summary_and_detail():

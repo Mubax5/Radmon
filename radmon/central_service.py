@@ -19,6 +19,7 @@ from .hot_path import RealtimeCentralMariaDBRepository
 from .lan_runtime import LanRuntime
 from .recent_read_model import RollingRecentManager
 from .repository import MariaDBRepository
+from .report_queries import DatabaseReportSummaryReader
 from .secure_api import attach_secure_routes
 from .secure_services import build_secure_services
 from .web_api import attach_web_api_routes
@@ -330,7 +331,13 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         )
 
     repository = RealtimeCentralMariaDBRepository(settings)
-    report_jobs = WebReportJobs(services.security, services.audit, MariaDBRepository(settings), settings)
+    report_jobs = WebReportJobs(
+        services.security,
+        services.audit,
+        MariaDBRepository(settings),
+        settings,
+        summary_reader=DatabaseReportSummaryReader(settings),
+    )
     web_events = WebEventBroker(max_queue=32)
     app = create_central_app(repository, settings)
     app.state.radmon_lan_enabled = bool(settings.lan_enabled)
@@ -359,6 +366,7 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         source_health=services.source_health,
         event_broker=web_events,
         alarm_policy=services.alarm_policy,
+        alarm_mirror=services.alarm_mirror,
     )
     attach_web_routes(app, settings=settings)
 

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -98,6 +100,60 @@ def test_station_detail_treats_ambiguous_source_mapping_as_source_owned(tmp_path
     assert detail.status_code == 200
     assert detail.json()["ownership"] == "source"
     assert detail.json()["source_id"] == "gd38, gd52"
+
+
+def test_alarm_history_merges_source_and_policy_rows_with_pagination_without_mutation(tmp_path):
+    security = SecurityStore(tmp_path / "history.db")
+    security.create_user("viewer", "Viewer", Role.VIEWER, "Password123!", "2468")
+    token = security.create_session("viewer", 3600)
+    at = datetime(2026, 10, 1, 12, 0, 0)
+
+    class Mirror:
+        def __init__(self):
+            self.calls = 0
+        def list_alarms(self, *, limit):
+            self.calls += 1
+            return [{"source_id": "gd52", "serid": 5702, "remote_serid": 5702,
+                      "event_time": at, "level": "ALARM", "is_active": True,
+                      "acknowledged_at": None, "pic": "SECRET PIC", "note": "SECRET NOTE",
+                      "action": "SECRET ACTION", "operator": "SECRET OP", "user_id": 91,
+                      "i_flag": 1}]
+
+    class Policy:
+        include_event = True
+        def list_events(self, *, limit):
+            return ([{"event_id": "p1", "source_id": "gd52", "serid": 5702,
+                      "remote_serid": 5702, "remote_event_time": at,
+                      "surfaced_at": at, "kind": "ALARM", "status": "ACTIVE",
+                      "action": "POLICY ACTION SECRET", "resolution_reason": "PRIVATE TEXT",
+                      "operator_id": "private-user", "secret": "token"}] if self.include_event else [])
+
+    mirror = Mirror()
+    policy = Policy()
+    app = FastAPI()
+    attach_web_api_routes(app, security=security, repository=FakeRepository(), alarm_mirror=mirror, alarm_policy=policy)
+    client = TestClient(app)
+    client.cookies.set(SESSION_COOKIE, token)
+
+    response = client.get("/api/v1/web/alarm-history?limit=1&offset=0")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["event_type"] == "source_alarm"
+    assert body["items"][0]["policy_event"]["event_id"] == "p1"
+    assert body["items"][0]["acknowledged"] is False
+    assert not {"pic", "note", "action", "operator", "user_id", "i_flag"} & body["items"][0].keys()
+    assert body["items"][0]["source_i_flag"] == 1
+    assert not {"action", "resolution_reason", "operator_id", "secret"} & body["items"][0]["policy_event"].keys()
+    assert body["items"][0]["suppressed"] is False
+    assert mirror.calls == 1
+
+    policy.include_event = False
+    source_only = client.get("/api/v1/web/alarm-history?limit=1&offset=0").json()
+    assert source_only["total"] == 1
+    assert source_only["items"][0]["event_type"] == "source_alarm"
+    assert "policy_event" not in source_only["items"][0]
 
 
 def test_system_diagnostics_are_administrator_only(tmp_path):

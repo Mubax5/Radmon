@@ -1413,22 +1413,28 @@ class _DetectorTransaction:
 
     def create_alarm_event(self, *, event_key: str, trigger_index: int, surfaced_at: datetime,
                            measured_value: float | None, threshold: float | None,
-                           source_id: str | None = None, reason: str | None = None) -> PolicyEvent:
+                           source_id: str | None = None, reason: str | None = None,
+                           remote_serid: int | None = None,
+                           remote_event_time: datetime | None = None) -> PolicyEvent:
         return self.store.create_policy_event(
             event_key=event_key, serid=self.serid, kind="ALARM", origin="central_policy",
             surfaced_at=surfaced_at, measured_value=measured_value, threshold=threshold,
             status="ACTIVE", trigger_index=trigger_index, source_id=source_id, reason=reason,
+            remote_serid=remote_serid, remote_event_time=remote_event_time,
             connection=self.connection,
         )
 
     def create_suppressed_event(self, suppression: SuppressionRecord, *, surfaced_at: datetime,
                                 measured_value: float | None, threshold: float | None,
-                                source_id: str | None = None) -> PolicyEvent:
+                                source_id: str | None = None,
+                                remote_serid: int | None = None,
+                                remote_event_time: datetime | None = None) -> PolicyEvent:
         event = self.store.create_policy_event(
             event_key=f"suppressed:{suppression.suppression_id}", serid=self.serid,
             kind="SUPPRESSED", origin="central_policy", surfaced_at=surfaced_at,
             measured_value=measured_value, threshold=threshold, status="AUTO_SILENCED",
             suppression_id=suppression.suppression_id, source_id=source_id,
+            remote_serid=remote_serid, remote_event_time=remote_event_time,
             connection=self.connection,
         )
         self.connection.execute(

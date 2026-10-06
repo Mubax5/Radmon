@@ -15,7 +15,7 @@ class AlarmPolicyService:
 
     @staticmethod
     def _measurement_time(row: dict[str, Any]) -> datetime:
-        value = row.get("dtom", row.get("dtoa"))
+        value = row.get("_policy_measured_at", row.get("dtom", row.get("dtoa")))
         if isinstance(value, datetime):
             return value
         if isinstance(value, str) and value:
@@ -107,6 +107,8 @@ class AlarmPolicyService:
                     measured_value=dose_rate,
                     threshold=threshold,
                     source_id=source_id,
+                    remote_serid=row.get("_remote_serid"),
+                    remote_event_time=row.get("dtom") if source_id else None,
                 )
                 tx.save_state(at=measured_at)
                 return self._snapshot(
@@ -141,6 +143,8 @@ class AlarmPolicyService:
                 threshold=threshold,
                 source_id=source_id,
                 reason="LOW_THRESHOLD" if underlying == "ALERT" else "HIGH_THRESHOLD",
+                remote_serid=row.get("_remote_serid"),
+                remote_event_time=row.get("dtom") if source_id else None,
             )
             state.trigger_count = next_index
             state.active_event_id = event.event_id
@@ -282,6 +286,9 @@ class AlarmPolicyService:
         if decision not in {"SUPPRESSED", "RETRIGGER_LOCKED", "COALESCED_DUPLICATE"}:
             return result
         event_time = self._measurement_time(row)
+        raw_event_time = row.get("dtoa", event_time)
+        if isinstance(raw_event_time, str):
+            raw_event_time = datetime.fromisoformat(raw_event_time)
         suppression = self.store.active_suppression(int(row["serid"]))
         policy_event_id = result.get("policy_event_id")
         if policy_event_id is None and suppression is not None:
@@ -292,7 +299,7 @@ class AlarmPolicyService:
         self.store.annotate_raw_alarm(
             source_id,
             int(row["serid"]),
-            event_time,
+            raw_event_time,
             policy_decision=decision,
             suppression_id=suppression.suppression_id if suppression else None,
             operator_visible=False,
@@ -303,7 +310,7 @@ class AlarmPolicyService:
             if callable(hook):
                 hook()
             self.store.bind_source_silence_if_active(
-                source_id, int(row["serid"]), event_time, suppression.suppression_id,
+                source_id, int(row["serid"]), raw_event_time, suppression.suppression_id,
                 retry_at=self.now(),
             )
         result["policy_event_id"] = policy_event_id
@@ -375,14 +382,30 @@ class AlarmPolicyService:
     def _observe_source_alarm_base(self, source_id: str, row: dict[str, Any]) -> dict[str, Any]:
         serid = int(row['serid'])
         event_time = self._measurement_time(row)
+        raw_event_time = row.get('dtoa', event_time)
+        if isinstance(raw_event_time, str):
+            raw_event_time = datetime.fromisoformat(raw_event_time)
         historical = bool(row.get('_historical_seed'))
         state = self.store.get_state(serid)
         suppression = self.store.active_suppression(serid)
         event = self.store.get_event(state.active_event_id) if state.active_event_id else None
+        remote_serid = int(row.get('_remote_serid', serid))
+        if event is not None:
+            # Compare normalized event occurrence times, while requiring source
+            # and remote detector identity before coalescing the mirrored row.
+            same_source_sample = event.source_id == source_id and abs((self._naive(event.surfaced_at) - self._naive(event_time)).total_seconds()) <= 5
+            if event.remote_serid is not None:
+                same_source_sample = same_source_sample and event.remote_serid == remote_serid
+            if not same_source_sample:
+                event = None
         if event is None and suppression is not None:
             # Starting suppression resets the burst state, so retain the
             # original active event as the durable correlation for late rows.
-            event = self.store.active_suppression_event(serid, suppression.suppression_id, source_id)
+            candidate = self.store.active_suppression_event(serid, suppression.suppression_id, source_id)
+            if candidate is not None:
+                time_matches = abs((self._naive(candidate.surfaced_at) - self._naive(event_time)).total_seconds()) <= 5
+                if time_matches and candidate.remote_serid in (None, remote_serid):
+                    event = candidate
         if historical:
             decision = 'HISTORICAL_SEED'
             visible = False
@@ -398,5 +421,5 @@ class AlarmPolicyService:
         else:
             decision = 'COALESCED_DUPLICATE'
             visible = False
-        self.store.annotate_raw_alarm(source_id, serid, event_time, policy_decision=decision, suppression_id=suppression.suppression_id if suppression else None, operator_visible=visible, policy_event_id=event.event_id if event else None)
+        self.store.annotate_raw_alarm(source_id, serid, raw_event_time, policy_decision=decision, suppression_id=suppression.suppression_id if suppression else None, operator_visible=visible, policy_event_id=event.event_id if event else None)
         return {'serid': serid, 'source_id': source_id, 'decision': decision, 'policy_event_id': event.event_id if event else None, 'operator_visible': visible}

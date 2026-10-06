@@ -22,11 +22,12 @@ class WebReportJobs:
     MAX_RANGE = timedelta(days=366)
     _JOB_ID = re.compile(r"[0-9a-f]{32}\Z")
 
-    def __init__(self, security, audit: AuditTrail, repository: Any, settings) -> None:
+    def __init__(self, security, audit: AuditTrail, repository: Any, settings, *, summary_reader=None) -> None:
         self.security = security
         self.audit = audit
         self.repository = repository
         self.settings = settings
+        self.summary_reader = summary_reader
         self.report_root = Path(settings.report_dir).resolve()
         self.artifact_dir = self.report_root / "web"
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="radmon-report")
@@ -114,6 +115,7 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
             raise ValueError("rentang report terlalu panjang")
         if not self._station_exists(int(serid)):
             raise ValueError("station tidak ditemukan")
+        ReportService(self.repository, replace(self.settings, serid=int(serid)), summary_reader=self.summary_reader).preflight(start, end)
         job_id = uuid.uuid4().hex
         created_at = datetime.now(timezone.utc).isoformat()
         with self.security._connection() as connection:
@@ -127,6 +129,21 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
         self.audit.record("REPORT_REQUEST", identity, "report", job_id, after={"serid": int(serid), "start_at": start, "end_at": end})
         self._executor.submit(self._generate, job_id, int(serid), start, end)
         return item
+
+    def preview_pdf(self, *, serid: int, start: datetime, end: datetime) -> bytes:
+        start = self._as_utc(start)
+        end = self._as_utc(end)
+        if end <= start:
+            raise ValueError("report end must be after start")
+        if end - start > self.MAX_RANGE:
+            raise ValueError("rentang report terlalu panjang")
+        if not self._station_exists(int(serid)):
+            raise ValueError("station tidak ditemukan")
+        return ReportService(
+            self.repository,
+            replace(self.settings, serid=int(serid)),
+            summary_reader=self.summary_reader,
+        ).pdf_bytes(start, end)
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
@@ -166,7 +183,11 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
             name = f"radmon-{job_id}.pdf"
             destination = (artifact_dir / name).resolve()
             destination.relative_to(artifact_dir)
-            ReportService(self.repository, replace(self.settings, serid=serid)).export_pdf(start, end, destination)
+            ReportService(
+                self.repository,
+                replace(self.settings, serid=serid),
+                summary_reader=self.summary_reader,
+            ).export_pdf(start, end, destination)
         except Exception as exc:
             LOG.exception("web report generation failed job_id=%s", job_id)
             self._set_status(job_id, "failed", error="pembuatan report gagal")

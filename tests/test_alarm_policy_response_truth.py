@@ -57,6 +57,40 @@ def test_operator_response_dispatches_production_surfaced_source_alarm(tmp_path)
         ).fetchone()[0] == "CONFIRMED"
 
 
+def test_direct_source_alarm_ack_requires_operator_pin_and_returns_confirmed_i_flag(tmp_path):
+    at = datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc)
+    security = SecurityStore(tmp_path / "security.db")
+    security.create_user("operator", "Operator", Role.OPERATOR, "Password123!", "1357")
+    security.create_user("viewer", "Viewer", Role.VIEWER, "Password123!", "2468")
+    operator = security.authenticate("operator", "Password123!")
+    viewer = security.authenticate("viewer", "Password123!")
+    mirror = RemoteAlarmMirror(security)
+    mirror.mirror("source-a", [{"serid": 5201, "_remote_serid": 1, "dtoa": at, "lvl": 2, "i_flag": 0}])
+
+    class Remote:
+        def __init__(self):
+            self.calls = 0
+
+        def respond_alarm(self, serid, event_time, **kwargs):
+            self.calls += 1
+            assert serid == 1 and event_time == at
+            return True
+
+    remote = Remote()
+    control = AlarmControlService(security, mirror, AuditTrail(security), remote_factory=lambda source: remote, now=lambda: at)
+    with pytest.raises(SecurityError):
+        control.ack(viewer, "2468", "source-a", 5201, at, action="Konfirmasi", pic="Budi", note="")
+    with pytest.raises(SecurityError):
+        control.ack(operator, "0000", "source-a", 5201, at, action="Konfirmasi", pic="Budi", note="")
+    assert remote.calls == 0
+
+    result = control.ack(operator, "1357", "source-a", 5201, at, action="Konfirmasi", pic="Budi", note="")
+    assert remote.calls == 1
+    assert result["is_active"] is False
+    assert result["source_i_flag"] == 1
+    assert result["acknowledged_at"] == at
+
+
 def test_failed_remote_response_keeps_production_surfaced_event_active(tmp_path):
     at = datetime(2026, 9, 11, 10, 0, tzinfo=timezone.utc)
     security = SecurityStore(tmp_path / "security.db")

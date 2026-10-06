@@ -465,6 +465,25 @@ def attach_secure_routes(
         except Exception as exc:
             raise HTTPException(status_code=409, detail="pembuatan report tidak dapat dimulai") from exc
 
+    @app.get("/api/v1/control/reports/draft-preview")
+    def draft_report_preview(
+        serid: int,
+        start_at: datetime,
+        end_at: datetime,
+        identity: UserIdentity = Depends(require_operator),
+    ):
+        if report_jobs is None:
+            raise HTTPException(status_code=404, detail="report service unavailable")
+        try:
+            payload = ReportCreateRequest(serid=serid, start_at=start_at, end_at=end_at)
+            content = report_jobs.preview_pdf(serid=payload.serid, start=payload.start_at, end=payload.end_at)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail="pratinjau report gagal dibuat") from exc
+        audit.record("REPORT_PREVIEW", identity, "report", f"draft-{serid}", after={"start_at": start_at, "end_at": end_at})
+        return Response(content=content, media_type="application/pdf", headers={"Content-Disposition": 'inline; filename="radmon-report-preview.pdf"', "Cache-Control": "private, no-store"})
+
     def authorised_report(job_id: str, identity: UserIdentity) -> dict[str, Any]:
         item = report_jobs.get(job_id)
         if item is None:

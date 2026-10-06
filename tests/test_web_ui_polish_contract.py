@@ -127,9 +127,9 @@ def test_alarms_page_renders_full_content_on_suppression_partial_success():
     # Partial-success: event + suppression dimuat lewat allSettled, suppression
     # gagal tidak boleh mengosongkan items atau menyembunyikan operasi.
     assert "Promise.allSettled" in alarms
-    assert "/api/v1/control/alarm-events" in alarms
+    assert "/api/v1/web/alarm-history?limit=500" in alarms
     assert "/api/v1/control/suppressions?active_only=true" in alarms
-    assert "<AlarmOperations events={items} suppressions={suppressions}" in alarms
+    assert '<AlarmOperations events={items.filter((event) => event.event_type !== "source_alarm")' in alarms
     # Event gagal pada load awal harus tampilkan error + retry eksplisit,
     # bukan skeleton/blank putih selamanya.
     assert "Muat ulang alarm" in alarms

@@ -8,6 +8,7 @@
     "dev": "vite --host 0.0.0.0",
     "check": "tsc -b --pretty false",
     "test:ui": "node --test test/alarms-lifecycle.test.mjs",
+    "test:dialogs": "node --test test/ui-dialogs.test.mjs",
     "test:format": "node --test test/format.test.mjs",
     "test:notifications": "node --test test/alarm-notifications.test.mjs"
   },

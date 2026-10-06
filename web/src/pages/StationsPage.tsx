@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Input, LayerCard, Select } from "@cloudflare/kumo";
 import { api, type Station } from "../api";
 import { useSession } from "../auth";
@@ -28,6 +28,7 @@ const STATUS_ITEMS = {
 };
 
 export function StationsPage() {
+  const createDialog = useRef<HTMLDialogElement>(null);
   const { user } = useSession();
   const [overview, setOverview] = useState<Overview | null>(null);
   const [query, setQuery] = useState("");
@@ -61,15 +62,22 @@ export function StationsPage() {
     event.preventDefault();
     const serid = Number(newSerid);
     if (!Number.isInteger(serid) || serid <= 0) { setError("SERID harus berupa angka positif"); return; }
-    setCreating(true); setError("");
+    setError("");
     const warnlevel = Number(newWarnlevel);
     const alarmlevel = Number(newAlarmlevel);
     const maxidlemin = Number(newMaxidlemin);
     if (![warnlevel, alarmlevel, maxidlemin].every(Number.isFinite) || warnlevel < 0 || alarmlevel < warnlevel || maxidlemin < 1 || !Number.isInteger(maxidlemin)) { setError("Threshold dan batas idle tidak valid"); return; }
+    setCreating(true);
     try {
       await api("/api/v1/control/stations", { method: "POST", body: JSON.stringify({ pin: newPin, serid, values: { name: newName, location: newLocation, description: newDescription, warnlevel, alarmlevel, maxidlemin } }) });
-      setNewSerid(""); setNewName(""); setNewLocation(""); setNewDescription(""); setNewWarnlevel(""); setNewAlarmlevel(""); setNewMaxidlemin("30"); setNewPin(""); load();
+      setNewSerid(""); setNewName(""); setNewLocation(""); setNewDescription(""); setNewWarnlevel(""); setNewAlarmlevel(""); setNewMaxidlemin("30"); setNewPin(""); createDialog.current?.close(); load();
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Pembuatan stasiun gagal"); } finally { setCreating(false); }
+  }
+
+  function fillExample() {
+    setNewSerid("12345"); setNewName("Stasiun Contoh"); setNewLocation("Ruang pemantauan");
+    setNewDescription("Detektor RadMon contoh"); setNewWarnlevel("0.5"); setNewAlarmlevel("1");
+    setNewMaxidlemin("30"); setNewPin(""); setError("");
   }
 
   const filtered = useMemo(() => {
@@ -141,18 +149,25 @@ export function StationsPage() {
               />
             </div>
           </PageSection>
-          {user && user.role !== "Viewer" ? <PageSection title="Tambah stasiun pusat" description="Hanya membuat stasiun yang dikelola pusat. Stasiun detector milik sumber LAN tidak dibuat, diubah, atau dihapus dari sini.">
-            <LayerCard className="action-card"><form className="action-form" onSubmit={createStation}>
-              <Input label="SERID" type="number" min="1" value={newSerid} onChange={(event) => setNewSerid(event.target.value)} disabled={creating} />
-              <Input label="Nama" value={newName} onChange={(event) => setNewName(event.target.value)} disabled={creating} />
-              <Input label="Lokasi" value={newLocation} onChange={(event) => setNewLocation(event.target.value)} disabled={creating} />
-              <Input label="Deskripsi perangkat" value={newDescription} onChange={(event) => setNewDescription(event.target.value)} disabled={creating} />
-              <Input label="Threshold peringatan" type="number" min="0" value={newWarnlevel} onChange={(event) => setNewWarnlevel(event.target.value)} disabled={creating} />
-              <Input label="Threshold alarm" type="number" min="0" value={newAlarmlevel} onChange={(event) => setNewAlarmlevel(event.target.value)} disabled={creating} />
-              <Input label="Batas idle (menit)" type="number" min="1" value={newMaxidlemin} onChange={(event) => setNewMaxidlemin(event.target.value)} disabled={creating} />
-              <Input label="PIN" type="password" value={newPin} onChange={(event) => setNewPin(event.target.value)} disabled={creating} />
-              <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !newSerid || !newName || !newLocation || !newWarnlevel || !newAlarmlevel || !newPin}>{creating ? "Membuat…" : "Tambah stasiun"}</Button></div>
-            </form></LayerCard>
+          {user && user.role !== "Viewer" ? <PageSection title="Stasiun pusat" description="Stasiun pusat dikelola administrator/operator. Detektor milik sumber LAN tetap dikelola pemilik sumber dan tidak dapat diubah dari sini." action={<Button type="button" variant="primary" onClick={() => createDialog.current?.showModal()}>Tambah station</Button>}>
+            <dialog ref={createDialog} className="native-user-dialog" aria-labelledby="station-create-title" data-testid="station-create-dialog">
+              <div className="native-user-dialog-content"><h2 id="station-create-title">Tambah station pusat</h2>
+                <p>Form ini hanya mendaftarkan konfigurasi yang dikelola pusat. Data dan konfigurasi detector sumber LAN dimiliki sumber tersebut; akses perubahan mengikuti role dan izin yang berlaku.</p>
+                <div className="form-actions"><Button type="button" variant="secondary" onClick={fillExample}>Contoh</Button><span className="cell-subtle">Mengisi nilai contoh tanpa menyimpan.</span></div>
+                <form className="action-form" onSubmit={createStation}>
+                  <Input label="SERID" type="number" min="1" value={newSerid} onChange={(event) => setNewSerid(event.target.value)} disabled={creating} />
+                  <Input label="Nama" value={newName} onChange={(event) => setNewName(event.target.value)} disabled={creating} />
+                  <Input label="Lokasi" value={newLocation} onChange={(event) => setNewLocation(event.target.value)} disabled={creating} />
+                  <Input label="Deskripsi perangkat" value={newDescription} onChange={(event) => setNewDescription(event.target.value)} disabled={creating} />
+                  <Input label="Threshold peringatan" type="number" min="0" value={newWarnlevel} onChange={(event) => setNewWarnlevel(event.target.value)} disabled={creating} />
+                  <Input label="Threshold alarm" type="number" min="0" value={newAlarmlevel} onChange={(event) => setNewAlarmlevel(event.target.value)} disabled={creating} />
+                  <Input label="Batas idle (menit)" type="number" min="1" value={newMaxidlemin} onChange={(event) => setNewMaxidlemin(event.target.value)} disabled={creating} />
+                  <Input label="PIN" type="password" value={newPin} onChange={(event) => setNewPin(event.target.value)} disabled={creating} />
+                  {error ? <div className="form-error" role="alert">{error}</div> : null}
+                  <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !newSerid || !newName || !newLocation || !newWarnlevel || !newAlarmlevel || !newPin}>{creating ? "Membuat…" : "Tambah station"}</Button><Button type="button" variant="secondary" disabled={creating} onClick={() => createDialog.current?.close()}>Batal</Button></div>
+                </form>
+              </div>
+            </dialog>
           </PageSection> : null}
         </>
       ) : null}

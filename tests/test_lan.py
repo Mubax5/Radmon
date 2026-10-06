@@ -1,8 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from radmon.lan import LanAggregator, LanCheckpointStore, LanSource, parse_lan_sources
 from radmon.lan_runtime import LanRuntime
+from radmon.alarm_policy import AlarmPolicyService
+from radmon.alarm_policy_store import AlarmPolicyStore
+from radmon.audit import AuditTrail
 from radmon.remote_alarm import RemoteAlarmMirror
 from radmon.security import SecurityStore
 
@@ -234,6 +237,42 @@ def test_live_poll_never_imports_measurement_history(tmp_path):
     assert 5201 in central.live
     assert central.measurements == {}
     assert checkpoints.load("gd52", 5201) is None
+
+
+def test_live_high_sample_with_measured_fifty_second_source_skew_triggers_policy(tmp_path):
+    store = SecurityStore(tmp_path / "skew.db")
+    checkpoints = LanCheckpointStore(store)
+    mirror = RemoteAlarmMirror(store)
+    central = FakeCentral()
+    now = datetime.now().replace(microsecond=0)
+    raw_time = now + timedelta(seconds=50)
+
+    class SkewedRemote(FakeRemote):
+        def clock_offset(self):
+            return timedelta(seconds=50)
+        def live_rows(self):
+            return [{
+                "serid": 5201, "name": "IS-1", "location": "Gd.52",
+                "warnlevel": 23.0, "alarmlevel": 25.0, "maxidlemin": 30,
+                "dtom": raw_time, "doserate": 99.99, "dose": 0.1,
+                "lastmeasec": 2,
+            }]
+
+    source = LanSource("gd52", "test", 3306, "u", "p", "ipradmon")
+    aggregator = LanAggregator(central, checkpoints, remote_factory=lambda value: SkewedRemote(value, []), alarm_mirror=mirror)
+    policy = AlarmPolicyService(AlarmPolicyStore(store), AuditTrail(store))
+    aggregator.alarm_policy = policy
+
+    result = aggregator.run_live_once(source)
+
+    assert result.error is None
+    assert result.mapped_live_rows[0]["dtom"] == raw_time  # raw source history timestamp remains unchanged
+    assert result.mapped_live_rows[0]["_policy_measured_at"] == now
+    events = policy.list_events()
+    assert len(events) == 1
+    assert events[0]["kind"] == "ALARM"
+    assert events[0]["reason"] == "HIGH_THRESHOLD"
+    assert events[0]["measured_value"] == 99.99
 
 
 class MultiStationRemote:

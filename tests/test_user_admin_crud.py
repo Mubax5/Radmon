@@ -191,5 +191,6 @@ def test_user_management_ui_uses_native_dialog_forms_and_controls():
     assert "<select className=\"native-select\"" in users
     assert "Nonaktifkan (dapat dipulihkan)" in users
     assert "Hapus permanen…" in users
-    assert "window.confirm" in users
+    assert 'data-testid="user-delete-dialog"' in users
+    assert "window.confirm" not in users
     assert "<input type=\"password\"" in create_form

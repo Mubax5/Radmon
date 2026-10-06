@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import importlib
+import logging
 import os
 from typing import Any, Callable, Iterable
 
@@ -14,6 +15,8 @@ from .formatting import format_dose_value
 _SILENCE_DECISIONS = {'SUPPRESSED', 'RETRIGGER_LOCKED', 'COALESCED_DUPLICATE'}
 
 _BACKOFF_SECONDS = (5, 15, 30, 60)
+_MAX_SOURCE_CLOCK_SKEW_SECONDS = max(1, int(os.getenv("RADMON_MAX_SOURCE_CLOCK_SKEW_SECONDS", "300")))
+_LOG = logging.getLogger(__name__)
 
 def _parse_dtom(value: Any) -> datetime | None:
     if isinstance(value, datetime):
@@ -34,7 +37,7 @@ def _parse_dtom(value: Any) -> datetime | None:
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
-def _pending_alarm_rows(alarm_mirror, source_id: str, *, limit: int=500) -> list[dict[str, Any]]:
+def _pending_alarm_rows(alarm_mirror, source_id: str, *, limit: int=500, clock_offset: timedelta = timedelta(0)) -> list[dict[str, Any]]:
     """Return mirrored source rows that policy has not classified yet."""
     if alarm_mirror is None:
         return []
@@ -42,7 +45,8 @@ def _pending_alarm_rows(alarm_mirror, source_id: str, *, limit: int=500) -> list
         rows = db.execute('\nSELECT serid, remote_serid, event_time, level, measured_value, threshold,\n       hit_count, notification_sent_at, source_i_flag\nFROM remote_alarm_state\nWHERE source_id = ? AND policy_decision IS NULL\nORDER BY event_time ASC, serid ASC\nLIMIT ?\n', (str(source_id), max(1, int(limit)))).fetchall()
     result: list[dict[str, Any]] = []
     for row in rows:
-        result.append({'serid': int(row[0]), '_remote_serid': int(row[1]) if row[1] is not None else int(row[0]), 'dtoa': datetime.fromisoformat(str(row[2])), 'lvl': 2 if str(row[3]).upper() == 'ALARM' else 1, 'mvalue': row[4], 'thvalue': row[5], 'nhit': row[6], 'i_flag': int(row[8] or 0), '_historical_seed': row[7] is not None})
+        event_time = datetime.fromisoformat(str(row[2]))
+        result.append({'serid': int(row[0]), '_remote_serid': int(row[1]) if row[1] is not None else int(row[0]), 'dtoa': event_time, '_policy_measured_at': event_time - clock_offset, 'lvl': 2 if str(row[3]).upper() == 'ALARM' else 1, 'mvalue': row[4], 'thvalue': row[5], 'nhit': row[6], 'i_flag': int(row[8] or 0), '_historical_seed': row[7] is not None})
     return result
 
 def _mapped_live_rows(aggregator, source) -> list[dict[str, Any]]:
@@ -187,6 +191,7 @@ class LivePullResult:
     mirrored_alarms: int = 0
     error: str | None = None
     mapped_live_rows: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    source_clock_offset: timedelta = field(default=timedelta(0), repr=False)
 
 
 @dataclass(slots=True)
@@ -296,6 +301,29 @@ class RemoteMariaDBSource:
 
     def _connection(self):
         return self._connection_factory()
+
+    def clock_offset(self) -> timedelta:
+        """Measure source DB clock minus central clock, bounded before use."""
+        before = datetime.now()
+        connection = self._connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT NOW()")
+                row = cursor.fetchone()
+            after = datetime.now()
+        finally:
+            connection.close()
+        source_now = row.get("NOW()") if isinstance(row, dict) else row[0]
+        if not isinstance(source_now, datetime):
+            raise RuntimeError("source database did not return a datetime for NOW()")
+        central_midpoint = before + (after - before) / 2
+        offset = source_now - central_midpoint
+        bound = timedelta(seconds=_MAX_SOURCE_CLOCK_SKEW_SECONDS)
+        if abs(offset) > bound:
+            _LOG.warning("source clock offset rejected source=%s measured_seconds=%.3f max_seconds=%d", self.source.source_id, offset.total_seconds(), _MAX_SOURCE_CLOCK_SKEW_SECONDS)
+            return timedelta(0)
+        _LOG.info("source clock offset measured source=%s offset_seconds=%.3f", self.source.source_id, offset.total_seconds())
+        return offset
 
     @staticmethod
     def _dict_rows(rows, keys):
@@ -830,6 +858,9 @@ class LanAggregator:
         result = LivePullResult(source.source_id)
         try:
             remote = self.remote_factory(source)
+            clock_offset_fn = getattr(remote, "clock_offset", None)
+            clock_offset = clock_offset_fn() if callable(clock_offset_fn) else timedelta(0)
+            result.source_clock_offset = clock_offset
             raw_live = remote.live_rows()
             mapped_live: list[dict[str, Any]] = []
             for row in raw_live:
@@ -841,7 +872,9 @@ class LanAggregator:
                 measured_at = _parse_dtom(item.get('dtom')) or item.get('dtom')
                 if isinstance(measured_at, datetime):
                     item['dtom'] = measured_at
-                    item['_source_observed_at'] = datetime.now(measured_at.tzinfo) if measured_at.tzinfo else datetime.now()
+                    item['_policy_measured_at'] = measured_at - clock_offset
+                    item['_source_observed_at'] = datetime.now(item['_policy_measured_at'].tzinfo) if item['_policy_measured_at'].tzinfo else datetime.now()
+                    item['_source_clock_offset_seconds'] = clock_offset.total_seconds()
                 else:
                     item['_source_observed_at'] = datetime.now()
                 mapped_live.append(item)
@@ -883,7 +916,8 @@ class LanAggregator:
                 suppression.expire_due()
             mapped_live = result.mapped_live_rows
             mapped_alarms = _pending_alarm_rows(
-                getattr(self, "alarm_mirror", None), source.source_id, limit=500
+                getattr(self, "alarm_mirror", None), source.source_id, limit=500,
+                clock_offset=result.source_clock_offset,
             )
             alarm_policy.process_cycle(source.source_id, mapped_live, mapped_alarms)
             _retry_source_silences(self, source, alarm_policy)
@@ -898,6 +932,9 @@ class LanAggregator:
         result = LivePullResult(source.source_id)
         try:
             remote = self.remote_factory(source)
+            clock_offset_fn = getattr(remote, "clock_offset", None)
+            clock_offset = clock_offset_fn() if callable(clock_offset_fn) else timedelta(0)
+            result.source_clock_offset = clock_offset
             try:
                 devices = remote.devices()
             except Exception as exc:
@@ -974,7 +1011,12 @@ class LanAggregator:
                 if item.get("lastmeasec") is None:
                     item["lastmeasec"] = 2
                 measured_at = _parse_dtom(item.get("dtom"))
-                item["_source_observed_at"] = datetime.now(measured_at.tzinfo) if isinstance(measured_at, datetime) and measured_at.tzinfo else datetime.now()
+                if isinstance(measured_at, datetime):
+                    item["_policy_measured_at"] = measured_at - clock_offset
+                    item["_source_clock_offset_seconds"] = clock_offset.total_seconds()
+                    item["_source_observed_at"] = datetime.now(item["_policy_measured_at"].tzinfo) if item["_policy_measured_at"].tzinfo else datetime.now()
+                else:
+                    item["_source_observed_at"] = datetime.now()
                 mapped_live.append(item)
             if not mapped_live:
                 result.error = "fallback produced no live rows"

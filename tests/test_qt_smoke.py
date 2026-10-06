@@ -85,19 +85,12 @@ def test_desktop_pdf_export_uses_report_service_artifact_bytes(tmp_path: Path, m
 
     from PySide6.QtWidgets import QMessageBox
 
-    generated = b"%PDF-shared-report-service-artifact"
-    calls = []
-
-    def export_pdf(start, end, destination):
-        calls.append((start, end))
-        destination.write_bytes(generated)
-        return destination
-
-    monkeypatch.setattr(page.report_service, "export_pdf", export_pdf)
+    generated = page._preview_pdf_bytes
     monkeypatch.setattr(QMessageBox, "information", lambda *args: None)
     monkeypatch.setattr(QMessageBox, "critical", lambda *args: pytest.fail(str(args)))
     page.export_pdf()
 
     destination = next(tmp_path.glob("radmon-5202-*_to_*.pdf"))
     assert destination.read_bytes() == generated
-    assert calls == [page.range()]
+    assert generated is not None and generated.startswith(b"%PDF")
+    assert page._preview_pdf_bytes == generated

@@ -70,6 +70,25 @@ def test_report_request_validates_station_and_range_and_audits_only_requests(tmp
     jobs.shutdown()
 
 
+def test_oversized_report_is_rejected_before_job_or_artifact_state_is_created(tmp_path):
+    class OversizedRepository(ReportRepository):
+        def measurement_count(self, start, end, *, serid=None):
+            return 20_001
+
+    security = SecurityStore(tmp_path / "security.db")
+    identity = security.create_user("operator", "Operator", Role.OPERATOR, "Password123!", "2468")
+    jobs = WebReportJobs(security, AuditTrail(security), OversizedRepository(), Settings(report_dir=tmp_path / "reports"))
+    start = datetime(2026, 9, 1, 0, 0)
+
+    with pytest.raises(ValueError, match="pengukuran.*rentang waktu lebih sempit"):
+        jobs.create(identity, serid=5201, start=start, end=start + timedelta(hours=1))
+    with pytest.raises(ValueError, match="pengukuran.*rentang waktu lebih sempit"):
+        jobs.preview_pdf(serid=5201, start=start, end=start + timedelta(hours=1))
+    assert jobs.list() == []
+    assert not (tmp_path / "reports" / "web").exists()
+    jobs.shutdown()
+
+
 def test_report_artifact_cannot_be_redirected_outside_generated_directory(tmp_path):
     security = SecurityStore(tmp_path / "security.db")
     jobs = WebReportJobs(security, AuditTrail(security), ReportRepository(), Settings(report_dir=tmp_path / "reports"))
@@ -196,12 +215,45 @@ def test_report_control_api_validates_rbac_status_download_and_audit(tmp_path):
     assert {event["action"] for event in audit.list_events()} >= {"REPORT_DOWNLOAD", "REPORT_PREVIEW"}
 
 
+def test_draft_preview_is_authorized_and_matches_generated_job_pdf(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    security.create_user("operator", "Operator", Role.OPERATOR, "Password123!", "2468")
+    security.create_user("viewer", "Viewer", Role.VIEWER, "Password123!", "2468")
+    audit = AuditTrail(security)
+    jobs = WebReportJobs(security, audit, ReportRepository(), Settings(report_dir=tmp_path / "reports"))
+    app = FastAPI()
+    attach_secure_routes(app, security=security, audit=audit, alarm_mirror=RemoteAlarmMirror(security), alarm_control=AlarmControl(), device_admin=DeviceAdmin(), report_jobs=jobs)
+    web = TestClient(app)
+    query = "serid=5201&start_at=2026-09-01T00%3A00%3A00Z&end_at=2026-09-01T01%3A00%3A00Z"
+
+    assert web.get(f"/api/v1/control/reports/draft-preview?{query}").status_code == 401
+    web.post("/auth/login", json={"username": "viewer", "password": "Password123!"})
+    assert web.get(f"/api/v1/control/reports/draft-preview?{query}").status_code == 403
+    web.post("/auth/logout")
+    web.post("/auth/login", json={"username": "operator", "password": "Password123!"})
+    preview = web.get(f"/api/v1/control/reports/draft-preview?{query}")
+    assert preview.status_code == 200
+    assert preview.headers["content-type"] == "application/pdf"
+    assert web.get(f"/api/v1/control/reports/draft-preview?{query.replace('5201', '../security.db')}").status_code == 422
+    created = web.post("/api/v1/control/reports", json={"serid": 5201, "start_at": "2026-09-01T00:00:00Z", "end_at": "2026-09-01T01:00:00Z"}).json()
+    for _ in range(100):
+        item = jobs.get(created["job_id"])
+        if item and item["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.02)
+    assert item["status"] == "completed", item.get("error")
+    assert preview.content == jobs.artifact(created["job_id"])[1].read_bytes()
+    assert any(event["action"] == "REPORT_PREVIEW" for event in audit.list_events())
+    jobs.shutdown()
+
+
 def test_reports_frontend_contract_uses_native_controls_and_safe_download_url():
     root = Path(__file__).resolve().parents[1]
     page = (root / "web/src/pages/ReportsPage.tsx").read_text(encoding="utf-8")
     api = (root / "web/src/api.ts").read_text(encoding="utf-8")
     navigation = (root / "web/src/navigation.ts").read_text(encoding="utf-8")
     navigation_icon = (root / "web/src/layout/NavigationIcon.tsx").read_text(encoding="utf-8")
+    styles = (root / "web/src/ui-polish.css").read_text(encoding="utf-8")
 
     assert 'id="report-station"' in page
     assert 'type="datetime-local"' in page
@@ -212,5 +264,9 @@ def test_reports_frontend_contract_uses_native_controls_and_safe_download_url():
     assert 'FilePdf' in navigation_icon and 'case "reports"' in navigation_icon
     assert "window.location" not in page
     assert "<Dialog" not in page
+    assert "draft-preview?${query}" in page
+    assert "disabled={creating || !serid || !draftUrl}" in page
+    assert 'grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr)' in styles
+    assert "@media (max-width: 767px)" in styles and ".report-workspace { grid-template-columns: minmax(0, 1fr); }" in styles
     assert "listReportJobs" in api and "requestReport" in api and "reportDownloadUrl" in api and "reportPreviewUrl" in api
     assert '{ id: "reports", label: "Laporan", minimum: "Operator" }' in navigation

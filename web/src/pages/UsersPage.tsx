@@ -83,6 +83,8 @@ function UserTable({ users }: { users: UserRecord[] }) {
 }
 
 function UserManagementForm({ users, onChanged }: { users: UserRecord[]; onChanged: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const deleteDialog = useRef<HTMLDialogElement>(null);
   const [username, setUsername] = useState(users[0]?.username ?? "");
   const selected = users.find((item) => item.username === username);
   const [displayName, setDisplayName] = useState("");
@@ -101,7 +103,6 @@ function UserManagementForm({ users, onChanged }: { users: UserRecord[]; onChang
 
   async function mutate(action: "update" | "enabled" | "password" | "pin" | "deactivate" | "delete") {
     if (!username || pending) return;
-    if (action === "delete" && !window.confirm(`HAPUS PERMANEN akun @${username}? Akun dan login-nya akan dihapus. Riwayat audit tetap disimpan. Tindakan ini tidak dapat dibatalkan.`)) return;
     setPending(true); setFeedback(null);
     try {
       if (action === "update") await api(`/api/v1/control/users/${encodeURIComponent(username)}`, { method: "PATCH", body: JSON.stringify({ pin: adminPin, display_name: displayName, role }) });
@@ -110,12 +111,15 @@ function UserManagementForm({ users, onChanged }: { users: UserRecord[]; onChang
       if (action === "pin") await api(`/api/v1/control/users/${encodeURIComponent(username)}/pin`, { method: "POST", body: JSON.stringify({ pin: adminPin, new_pin: newPin }) });
       if (action === "deactivate") await api(`/api/v1/control/users/${encodeURIComponent(username)}/enabled`, { method: "POST", body: JSON.stringify({ pin: adminPin, enabled: false }) });
       if (action === "delete") await api(`/api/v1/control/users/${encodeURIComponent(username)}`, { method: "DELETE", body: JSON.stringify({ pin: adminPin }) });
+      if (action === "delete") deleteDialog.current?.close();
       setFeedback({ kind: "ok", text: action === "delete" ? "Akun dihapus permanen. Riwayat audit tetap tersimpan." : action === "deactivate" ? "Akun dinonaktifkan. Akun dapat diaktifkan kembali." : "Perubahan pengguna tersimpan." }); setAdminPin(""); setPassword(""); setNewPin(""); onChanged();
     } catch (reason) { setFeedback({ kind: "error", text: reason instanceof Error ? reason.message : "Perubahan pengguna gagal" }); } finally { setPending(false); }
   }
 
   if (!users.length) return null;
-  return <LayerCard className="action-card"><h2>Kelola pengguna</h2><p>Setiap perubahan administratif memerlukan PIN administrator dan akan mencabut sesi serta otorisasi sensitif pengguna target.</p>
+  return <>
+    <Button type="button" variant="secondary" onClick={() => dialog.current?.showModal()}>Edit pengguna</Button>
+    <dialog ref={dialog} className="native-user-dialog" aria-labelledby="user-edit-title" data-testid="user-edit-dialog"><div className="native-user-dialog-content"><h2 id="user-edit-title">Kelola pengguna</h2><p>Setiap perubahan administratif memerlukan PIN administrator dan akan mencabut sesi serta otorisasi sensitif pengguna target.</p>
     <form className="action-form" onSubmit={(event) => { event.preventDefault(); void mutate("update"); }}>
       <label className="native-select-field"><span>Pengguna</span><select className="native-select" value={username} onChange={(event) => setUsername(event.target.value)}>{users.map((user) => <option key={user.username} value={user.username}>{user.display_name} (@{user.username})</option>)}</select></label>
       <NativeInput label="Nama tampilan" value={displayName} onChange={(event) => setDisplayName(event.target.value)} disabled={pending} required autoComplete="name" />
@@ -124,10 +128,12 @@ function UserManagementForm({ users, onChanged }: { users: UserRecord[]; onChang
       <NativeInput label="Password baru" type="password" value={password} onChange={(event) => setPassword(event.target.value)} disabled={pending} minLength={8} autoComplete="new-password" />
       <NativeInput label="PIN pengguna baru" type="password" inputMode="numeric" value={newPin} onChange={(event) => setNewPin(event.target.value)} disabled={pending} minLength={4} maxLength={8} autoComplete="new-password" />
       <NativeInput label="PIN Administrator saat ini" type="password" inputMode="numeric" value={adminPin} onChange={(event) => setAdminPin(event.target.value)} disabled={pending} required minLength={4} maxLength={8} autoComplete="current-password" />
-      <div className="form-actions"><Button type="submit" variant="primary" disabled={pending || !adminPin}>Simpan profil/role</Button><Button type="button" variant="secondary" disabled={pending || !adminPin} onClick={() => void mutate("enabled")}>Simpan status</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !password} onClick={() => void mutate("password")}>Reset password</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !newPin} onClick={() => void mutate("pin")}>Reset PIN</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !selected?.enabled} onClick={() => void mutate("deactivate")}>Nonaktifkan (dapat dipulihkan)</Button><Button type="button" variant="secondary" disabled={pending || !adminPin} onClick={() => void mutate("delete")}>Hapus permanen…</Button></div>
+      <div className="form-actions"><Button type="submit" variant="primary" disabled={pending || !adminPin}>Simpan profil/role</Button><Button type="button" variant="secondary" disabled={pending || !adminPin} onClick={() => void mutate("enabled")}>Simpan status</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !password} onClick={() => void mutate("password")}>Reset password</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !newPin} onClick={() => void mutate("pin")}>Reset PIN</Button><Button type="button" variant="secondary" disabled={pending || !adminPin || !selected?.enabled} onClick={() => void mutate("deactivate")}>Nonaktifkan (dapat dipulihkan)</Button><Button type="button" variant="secondary" disabled={pending} onClick={() => deleteDialog.current?.showModal()}>Hapus permanen…</Button><Button type="button" variant="secondary" disabled={pending} onClick={() => dialog.current?.close()}>Tutup</Button></div>
       {feedback ? <div className={feedback.kind === "ok" ? "form-success" : "form-error"} role={feedback.kind === "ok" ? "status" : "alert"}>{feedback.text}</div> : null}
     </form>
-  </LayerCard>;
+    </div></dialog>
+    <dialog ref={deleteDialog} className="native-user-dialog" aria-labelledby="user-delete-title" data-testid="user-delete-dialog"><div className="native-user-dialog-content"><h2 id="user-delete-title">Konfirmasi hapus permanen</h2><p>HAPUS PERMANEN akun @{username}? Akun dan login akan dihapus. Riwayat audit tetap disimpan. Tindakan ini tidak dapat dibatalkan.</p>{feedback?.kind === "error" ? <div className="form-error" role="alert">{feedback.text}</div> : null}<div className="form-actions"><Button type="button" variant="secondary" onClick={() => deleteDialog.current?.close()}>Batal</Button><Button type="button" variant="primary" disabled={pending || !adminPin} onClick={() => void mutate("delete")}>Hapus permanen</Button></div></div></dialog>
+  </>;
 }
 
 function CreateUserDialog({ onCreated }: { onCreated: () => void }) {

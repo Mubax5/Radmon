@@ -374,6 +374,16 @@ LIMIT ?
         finally:
             connection.close()
 
+    def measurement_count(self, start: datetime, end: datetime, *, serid: int | None = None) -> int:
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT COUNT(*) FROM measurement WHERE serid = ? AND dtom >= ? AND dtom <= ?", (serid or self.settings.serid, start, end))
+                row = cursor.fetchone()
+            return int(row[0] if not isinstance(row, dict) else next(iter(row.values())))
+        finally:
+            connection.close()
+
     def measurements_after(self, after: datetime, *, serid: int | None = None, limit: int = 100) -> list[dict[str, Any]]:
         station_id = serid or self.settings.serid
         connection = self._connect()
@@ -505,3 +515,21 @@ ORDER BY v.serid
             "suppression_expires_at", "suppression_pic", "suppression_reason",
         )
         return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
+
+    def alarm_count(self, start: datetime | None = None, end: datetime | None = None, *, serid: int | None = None) -> int:
+        clauses = ["serid = ?"]
+        params: list[Any] = [serid or self.settings.serid]
+        if start is not None:
+            clauses.append("dtoa >= ?")
+            params.append(start)
+        if end is not None:
+            clauses.append("dtoa <= ?")
+            params.append(end)
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) FROM alarm WHERE {' AND '.join(clauses)}", tuple(params))
+                row = cursor.fetchone()
+            return int(row[0] if not isinstance(row, dict) else next(iter(row.values())))
+        finally:
+            connection.close()

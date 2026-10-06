@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
-import { Badge, Button, LayerCard, Table } from "@cloudflare/kumo";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Badge, Button, Input, LayerCard, Table } from "@cloudflare/kumo";
 import { api } from "../api";
 import { AlarmOperations, type Suppression } from "../Actions";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
 import { formatDoseValue, formatPolicyMeasurement } from "../format";
 import { describeLifecycle, kindLabel, statusLabel } from "./alarmLifecycle";
 import { useWebRefresh } from "../live";
+import { useSession } from "../auth";
 import {
   ErrorCard,
   LoadingCard,
@@ -16,7 +17,7 @@ import {
 } from "../ui";
 
 export type PolicyEvent = Record<string, unknown> & {
-  event_id: string;
+  event_id?: string;
   serid: number;
   status: string;
   kind: string;
@@ -28,24 +29,106 @@ export type PolicyEvent = Record<string, unknown> & {
   resolution_code?: string | null;
   resolution_reason?: string | null;
   source_reconciliation?: { status?: string; reason?: string } | null;
+  event_type?: "source_alarm" | "policy_lifecycle";
+  event_time?: string;
+  level?: string;
+  source_id?: string;
+  policy_event?: PolicyEvent;
 };
 
+type AlarmHistoryResponse = { items: PolicyEvent[]; total: number };
+
+function normalizeHistory(items: PolicyEvent[]): PolicyEvent[] {
+  return items.map((item) => {
+    if (item.event_type === "policy_lifecycle") return item;
+    if (item.policy_event) return { ...item.policy_event, source_alarm: item, event_type: "policy_lifecycle" };
+    return {
+      ...item,
+      event_id: `source:${item.source_id}:${item.serid}:${item.event_time}`,
+      kind: "SOURCE_ALARM",
+      reason: item.level === "ALARM" ? "HIGH_THRESHOLD" : "LOW_THRESHOLD",
+      surfaced_at: item.event_time,
+      measured_value: item.measured_value,
+      threshold: item.threshold,
+      event_type: "source_alarm",
+    };
+  });
+}
+
 function LifecycleDescription({ event }: { event: PolicyEvent }) {
+  const dialog = useRef<HTMLDialogElement>(null);
   const lifecycle = describeLifecycle(event);
   if (!lifecycle) return <>—</>;
   return (
     <span className="alarm-lifecycle">
       <span>{lifecycle.label}</span>
-      <details>
-        <summary>Rincian teknis</summary>
-        <ul>{lifecycle.raw.map((detail) => <li key={detail}><code>{detail}</code></li>)}</ul>
-      </details>
+      <Button type="button" variant="secondary" onClick={() => dialog.current?.showModal()}>Rincian teknis</Button>
+      <dialog ref={dialog} className="native-user-dialog" aria-label={`Rincian teknis lifecycle SERID ${event.serid}`} data-testid="alarm-lifecycle-dialog">
+        <div className="native-user-dialog-content"><h2>Rincian teknis lifecycle</h2><p>SERID {event.serid} · {eventLabel(event)} · {statusLabel(event.status, event.kind)}</p>
+          <ul>{lifecycle.raw.map((detail) => <li key={detail}><code>{detail}</code></li>)}</ul>
+          <div className="form-actions"><Button type="button" variant="secondary" onClick={() => dialog.current?.close()}>Tutup</Button></div>
+        </div>
+      </dialog>
     </span>
   );
 }
 
+function EventOrigin({ event }: { event: PolicyEvent }) {
+  const sourceOwned = event.event_type === "source_alarm" || Boolean(event.source_alarm) || Boolean(event.source_reconciliation) || event.status === "SOURCE_HANDLED";
+  return <Badge variant={sourceOwned ? "secondary" : "success"}>{sourceOwned ? "Sumber" : "Policy pusat"}</Badge>;
+}
+
+function SourceAlarmResponse({ event, onChanged }: { event: PolicyEvent; onChanged: () => void }) {
+  const { user } = useSession();
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [action, setAction] = useState("Konfirmasi");
+  const [pic, setPic] = useState("");
+  const [note, setNote] = useState("");
+  const [pin, setPin] = useState("");
+  const [pending, setPending] = useState(false);
+  const [feedback, setFeedback] = useState("");
+  if (!user || user.role === "Viewer" || event.event_type !== "source_alarm" || event.status !== "ACTIVE" || !event.source_id || !event.event_time) return null;
+  async function submit(formEvent: React.FormEvent) {
+    formEvent.preventDefault();
+    if (pending || !event.source_id || !event.event_time) return;
+    setPending(true);
+    setFeedback("");
+    try {
+      const result = await api<{ is_active?: boolean; source_i_flag?: number; acknowledged_at?: string }>(`/api/v1/control/alarms/${encodeURIComponent(event.source_id)}/${event.serid}/ack`, {
+        method: "POST",
+        body: JSON.stringify({ event_time: event.event_time, action, pic, note, pin }),
+      });
+      if (result.is_active !== false || result.source_i_flag !== 1 || !result.acknowledged_at) throw new Error("Sumber belum mengonfirmasi perubahan i_flag; alarm tetap aktif.");
+      setFeedback("Sumber mengonfirmasi alarm ditangani (i_flag diperbarui).");
+      dialog.current?.close();
+      onChanged();
+    } catch (error) {
+      setFeedback(error instanceof Error ? error.message : "Respons sumber gagal");
+    } finally {
+      setPin("");
+      setPending(false);
+    }
+  }
+  return <>
+    <Button type="button" variant="secondary" onClick={() => dialog.current?.showModal()}>Tindak lanjuti sumber</Button>
+    {feedback ? <span role="status">{feedback}</span> : null}
+    <dialog ref={dialog} className="native-user-dialog" aria-label={`Respons alarm sumber SERID ${event.serid}`}>
+      <form className="native-user-dialog-content action-form" onSubmit={(e) => void submit(e)}>
+        <h2>Respons alarm di sumber</h2>
+        <p>Operasi ini memperbarui flag alarm pada sumber LAN dan memerlukan PIN operator.</p>
+        <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} disabled={pending} required />
+        <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} disabled={pending} required />
+        <Input label="Catatan" value={note} onChange={(e) => setNote(e.target.value)} disabled={pending} />
+        <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending} required />
+        {feedback ? <p role="alert">{feedback}</p> : null}
+        <div className="form-actions"><Button type="submit" variant="primary" disabled={pending || !pic || !pin}>{pending ? "Memperbarui sumber…" : "Kirim respons sumber"}</Button><Button type="button" variant="secondary" disabled={pending} onClick={() => dialog.current?.close()}>Batal</Button></div>
+      </form>
+    </dialog>
+  </>;
+}
+
 function eventVariant(event: PolicyEvent): "success" | "warning" | "error" | "secondary" {
-  if (event.kind === "ALARM" && event.status === "ACTIVE") return event.reason === "LOW_THRESHOLD" ? "warning" : "error";
+  if (["ALARM", "SOURCE_ALARM"].includes(event.kind) && event.status === "ACTIVE") return event.reason === "LOW_THRESHOLD" ? "warning" : "error";
   if (["RESPONDED", "AUTO_RESOLVED_NORMAL", "SOURCE_HANDLED", "RESOLVED", "NORMAL", "ENDED"].includes(event.status)) return "success";
   if (event.kind === "RETRIGGER_LOCKED") return "warning";
   if (event.kind === "SUPPRESSED") return "warning";
@@ -58,7 +141,7 @@ function eventLabel(event: PolicyEvent): string {
   return kindLabel(event.kind);
 }
 
-function EventCards({ events }: { events: PolicyEvent[] }) {
+function EventCards({ events, onChanged }: { events: PolicyEvent[]; onChanged: () => void }) {
   if (!events.length) return <LayerCard className="empty-card">Tidak ada event alarm.</LayerCard>;
   return (
     <div className="mobile-card-list">
@@ -67,7 +150,7 @@ function EventCards({ events }: { events: PolicyEvent[] }) {
           <div className="alarm-card-header">
             <div>
               <h3>SERID {event.serid}</h3>
-              <div className="cell-subtle">{eventLabel(event)}</div>
+              <div className="cell-subtle">{eventLabel(event)} · <EventOrigin event={event} /></div>
             </div>
             <Badge variant={eventVariant(event)}>{statusLabel(event.status, event.kind)}</Badge>
           </div>
@@ -76,6 +159,7 @@ function EventCards({ events }: { events: PolicyEvent[] }) {
             <span>Threshold: {formatDoseValue(event.threshold)}</span>
             <span>Muncul: {formatTimestamp(event.surfaced_at)}</span>
             {describeLifecycle(event) ? <span>Lifecycle: <LifecycleDescription event={event} /></span> : null}
+            <SourceAlarmResponse event={event} onChanged={onChanged} />
           </div>
         </LayerCard>
       ))}
@@ -83,7 +167,7 @@ function EventCards({ events }: { events: PolicyEvent[] }) {
   );
 }
 
-function EventTable({ events }: { events: PolicyEvent[] }) {
+function EventTable({ events, onChanged }: { events: PolicyEvent[]; onChanged: () => void }) {
   if (!events.length) return <LayerCard className="empty-card">Tidak ada event alarm.</LayerCard>;
   return (
     <LayerCard className="table-card">
@@ -91,24 +175,24 @@ function EventTable({ events }: { events: PolicyEvent[] }) {
         <Table.Header>
           <Table.Row>
             <Table.Head>Stasiun</Table.Head>
-            <Table.Head>Jenis</Table.Head>
+            <Table.Head>Sumber / jenis</Table.Head>
             <Table.Head>Status</Table.Head>
             <Table.Head>Measurement</Table.Head>
             <Table.Head>Threshold</Table.Head>
               <Table.Head>Muncul</Table.Head>
-              <Table.Head>Lifecycle</Table.Head>
+              <Table.Head>Lifecycle / tindakan</Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
           {events.map((event) => (
-            <Table.Row key={event.event_id}>
+            <Table.Row key={event.event_id ?? `${event.source_id}:${event.serid}:${event.event_time}`}>
               <Table.Cell><strong>SERID {event.serid}</strong></Table.Cell>
-              <Table.Cell>{eventLabel(event)}</Table.Cell>
+              <Table.Cell><div className="alarm-event-origin"><EventOrigin event={event} />{eventLabel(event)}</div></Table.Cell>
               <Table.Cell><Badge variant={eventVariant(event)}>{statusLabel(event.status, event.kind)}</Badge></Table.Cell>
               <Table.Cell>{formatPolicyMeasurement(event)}</Table.Cell>
               <Table.Cell>{formatDoseValue(event.threshold)}</Table.Cell>
               <Table.Cell>{formatTimestamp(event.surfaced_at)}</Table.Cell>
-              <Table.Cell><LifecycleDescription event={event} /></Table.Cell>
+              <Table.Cell><LifecycleDescription event={event} /> <SourceAlarmResponse event={event} onChanged={onChanged} /></Table.Cell>
             </Table.Row>
           ))}
         </Table.Body>
@@ -118,6 +202,7 @@ function EventTable({ events }: { events: PolicyEvent[] }) {
 }
 
 export function AlarmsPage() {
+  const { user } = useSession();
   const requestedEventId = new URLSearchParams(window.location.search).get("event");
   const [soundOn, setSoundOn] = useState(false);
   const [items, setItems] = useState<PolicyEvent[] | null>(null);
@@ -131,12 +216,12 @@ export function AlarmsPage() {
     })
     .catch((e) => setSuppressionError(e instanceof Error ? e.message : "Tidak dapat memuat suppression"));
   const load = () => Promise.allSettled([
-    api<PolicyEvent[]>("/api/v1/control/alarm-events"),
+    api<AlarmHistoryResponse>("/api/v1/web/alarm-history?limit=500"),
     api<Suppression[]>("/api/v1/control/suppressions?active_only=true"),
   ])
     .then(([events, activeSuppressions]) => {
       if (events.status === "fulfilled") {
-        setItems(events.value);
+        setItems(normalizeHistory(events.value.items));
         setError("");
       } else {
         setError(events.reason instanceof Error ? events.reason.message : "Tidak dapat memuat alarm");
@@ -155,7 +240,7 @@ export function AlarmsPage() {
   const summary = useMemo(() => {
     const events = items ?? [];
     const active = events.filter(
-      (event) => String(event.kind).toUpperCase() === "ALARM" && String(event.status).toUpperCase() === "ACTIVE",
+      (event) => ["ALARM", "SOURCE_ALARM"].includes(String(event.kind).toUpperCase()) && String(event.status).toUpperCase() === "ACTIVE",
     );
     const retriggerLocked = events.filter((event) => event.kind === "RETRIGGER_LOCKED").length;
     const suppressed = events.filter((event) => event.kind === "SUPPRESSED").length;
@@ -210,11 +295,11 @@ export function AlarmsPage() {
         <>
           <PageSection
             title="Alarm aktif"
-            description="Event yang memerlukan perhatian operator segera."
+            description="Event aktif yang perlu ditinjau. Gunakan notifikasi suara/desktop di bagian atas; respons operator dan suppression tersedia pada kontrol tindakan di bawah."
             className="active-alarm-section"
           >
             <div className="active-alarm-list" aria-live="polite">
-              <EventCards events={summary.active} />
+              <EventCards events={summary.active} onChanged={() => void load()} />
             </div>
           </PageSection>
 
@@ -225,20 +310,20 @@ export function AlarmsPage() {
             <MetricCard label="Event terbaru" value={summary.total} badge={<span className="cell-subtle">Rekaman dimuat</span>} />
           </div>
 
-          <PageSection title="Tindakan operator" description="Respons alarm dan timed suppression memerlukan konfirmasi PIN yang terotorisasi.">
+          <PageSection title="Tindakan operator" description="Respons alarm: pilih event aktif, action, PIC, alasan, dan PIN operator. Suppression: pilih stasiun dan durasi; setiap perubahan memerlukan PIN terotorisasi.">
             {suppressionError ? (
               <div className="alarm-suppression-error">
                 <ErrorCard message={`Daftar suppression tidak tersedia: ${suppressionError}`} />
                 <Button variant="secondary" onClick={() => void loadSuppressions()}>Muat ulang suppression</Button>
               </div>
             ) : null}
-            <AlarmOperations events={items} suppressions={suppressions} onChanged={() => void load()} initialEventId={requestedEventId} />
+            <AlarmOperations events={items.filter((event) => event.event_type !== "source_alarm") as (PolicyEvent & { event_id: string })[]} suppressions={suppressions} onChanged={() => void load()} initialEventId={requestedEventId} />
           </PageSection>
 
-          <PageSection title="Riwayat event" description="Event alarm-policy yang tersimpan di central, dengan urutan terbaru sesuai backend.">
+          <PageSection title="Riwayat event" description="Riwayat alarm sumber dan lifecycle policy pusat, digabungkan dan diurutkan dari backend.">
             <ResponsiveDataView
-              desktop={<EventTable events={items} />}
-              mobile={<EventCards events={items} />}
+              desktop={<EventTable events={items} onChanged={() => void load()} />}
+              mobile={<EventCards events={items} onChanged={() => void load()} />}
             />
           </PageSection>
         </>
