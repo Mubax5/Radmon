@@ -8,8 +8,9 @@
   width: min(25rem, calc(100vw - 2rem));
   display: grid;
   gap: .5rem;
+  pointer-events: none;
 }
-.policy-alarm-controls, .policy-alarm-toast {
+.policy-alarm-toast {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -19,6 +20,7 @@
   border-radius: .75rem;
   background: #fff;
   box-shadow: 0 8px 28px #10182833;
+  pointer-events: auto;
 }
 .policy-alarm-toast { justify-content: space-between; }
 .policy-alarm-toast strong { color: #b42318; }

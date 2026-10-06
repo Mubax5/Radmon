@@ -119,6 +119,7 @@ function EventTable({ events }: { events: PolicyEvent[] }) {
 
 export function AlarmsPage() {
   const requestedEventId = new URLSearchParams(window.location.search).get("event");
+  const [soundOn, setSoundOn] = useState(false);
   const [items, setItems] = useState<PolicyEvent[] | null>(null);
   const [suppressions, setSuppressions] = useState<Suppression[]>([]);
   const [error, setError] = useState("");
@@ -163,14 +164,38 @@ export function AlarmsPage() {
 
   const isInitialLoading = items === null && !error;
   const eventsFailedOnFirstLoad = items === null && Boolean(error);
+  const enableAlarmAlerts = async () => {
+    // Explicit click grants autoplay eligibility before later alarm beeps.
+    if (window.AudioContext) {
+      const context = new window.AudioContext();
+      await context.resume();
+      await context.close();
+    }
+    setSoundOn(true);
+    window.dispatchEvent(new Event("radmon:alarm-sound-enabled"));
+    if ("Notification" in window && Notification.permission === "default") await Notification.requestPermission();
+  };
 
   return (
     <div className="page-stack">
       <PageHeading
         title="Alarm"
         description="Alarm aktif diprioritaskan; suppression dan riwayat event tetap dilindungi oleh role dan policy PIN operator."
-        action={<Button variant="secondary" onClick={() => void load()}>Muat ulang</Button>}
+        action={<div className="form-actions">
+          <Button variant="secondary" onClick={() => void load()}>Muat ulang</Button>
+          <Button variant={soundOn ? "secondary" : "primary"} onClick={() => {
+            if (soundOn) {
+              setSoundOn(false);
+              window.dispatchEvent(new Event("radmon:alarm-sound-disabled"));
+            } else void enableAlarmAlerts();
+          }}>{soundOn ? "Suara alarm aktif · Matikan" : "Aktifkan suara alarm"}</Button>
+        </div>}
       />
+      <p className="cell-subtle alarm-notification-permission">
+        {"Notification" in window
+          ? Notification.permission === "granted" ? "Notifikasi desktop diizinkan." : Notification.permission === "denied" ? "Notifikasi desktop diblokir di pengaturan browser; notifikasi dalam aplikasi tetap aktif." : "Klik Aktifkan suara alarm untuk suara dan izin notifikasi desktop."
+          : "Suara memerlukan aktivasi operator; notifikasi dalam aplikasi tetap aktif."}
+      </p>
       {error && items !== null ? <ErrorCard message={`Data alarm mungkin usang: ${error}`} /> : null}
       {isInitialLoading ? <LoadingCard label="Memuat alarm…" /> : null}
       {eventsFailedOnFirstLoad ? (

@@ -31,7 +31,6 @@ test("offline or stale policy event does not fire", () => {
 
 test("audio is only constructed after the explicit sound toggle is enabled", () => {
   let constructed = 0;
-  globalThis.localStorage = { getItem: () => "disabled" };
   globalThis.window = { AudioContext: class {
     currentTime = 0;
     destination = {};
@@ -40,9 +39,8 @@ test("audio is only constructed after the explicit sound toggle is enabled", () 
     createGain() { return { connect() {}, gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} } }; }
     close() { return Promise.resolve(); }
   } };
-  playAlarmSignal();
+  playAlarmSignal(false);
   assert.equal(constructed, 0);
-  globalThis.localStorage = { getItem: () => "enabled" };
-  playAlarmSignal();
+  playAlarmSignal(true);
   assert.equal(constructed, 1);
 });

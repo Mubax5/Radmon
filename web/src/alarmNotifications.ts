@@ -22,12 +22,8 @@ export function freshUndeliveredEvents(
   return fresh;
 }
 
-export function alarmSoundEnabled(): boolean {
-  return localStorage.getItem("radmon-alarm-sound") === "enabled";
-}
-
-export function playAlarmSignal(): void {
-  if (!alarmSoundEnabled()) return;
+export function playAlarmSignal(enabled: boolean): void {
+  if (!enabled) return;
   const AudioContextClass = window.AudioContext;
   if (!AudioContextClass) return;
   const context = new AudioContextClass();
