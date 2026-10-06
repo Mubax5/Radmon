@@ -29,7 +29,7 @@ class LoginRequest(BaseModel):
 class AckRequest(BaseModel):
     event_time: datetime
     action: str = Field(min_length=1, max_length=128)
-    pic: str = Field(min_length=1, max_length=128)
+    pic: str | None = Field(default=None, max_length=128)
     note: str = Field(default="", max_length=1000)
     pin: str = Field(min_length=4, max_length=8)
 
@@ -37,7 +37,7 @@ class AckRequest(BaseModel):
 class SuppressionRequest(BaseModel):
     pin: str = Field(min_length=4, max_length=8)
     duration_seconds: int = Field(ge=60, le=86400)
-    pic: str = Field(min_length=1, max_length=128)
+    pic: str | None = Field(default=None, max_length=128)
     reason: str = Field(min_length=1, max_length=1000)
     auto_resume_on_normal: bool = True
 
@@ -50,7 +50,7 @@ class SuppressionCancelRequest(BaseModel):
 class PolicyResponseRequest(BaseModel):
     pin: str = Field(min_length=4, max_length=8)
     action: str = Field(min_length=1, max_length=128)
-    pic: str = Field(min_length=1, max_length=128)
+    pic: str | None = Field(default=None, max_length=128)
     reason: str = Field(default="", max_length=1000)
 
 
@@ -119,6 +119,11 @@ class ArchiveRetryRequest(BaseModel):
     pin: str = Field(min_length=4, max_length=8)
 
 
+class ArchiveExportRequest(BaseModel):
+    selection: str = Field(pattern="^(single|year|all)$")
+    value: str | None = Field(default=None, max_length=16)
+
+
 def _report_response(item: dict[str, Any]) -> dict[str, Any]:
     """Return only browser-safe persisted job metadata, never owner internals."""
     fields = (
@@ -141,6 +146,7 @@ def attach_secure_routes(
     cookie_secure: bool = False,
     archive_catalog: Any | None = None,
     archive_service: Any | None = None,
+    archive_exports: Any | None = None,
     source_health: Any | None = None,
     alarm_policy: Any | None = None,
     alarm_suppression: Any | None = None,
@@ -175,7 +181,7 @@ def attach_secure_routes(
             detail = str(exc)
             if detail == "user tidak ditemukan":
                 return HTTPException(status_code=404, detail=detail)
-            if "terakhir" in detail or "sedang dipakai" in detail:
+            if "terakhir" in detail or "sedang dipakai" in detail or "administrator aktif" in detail:
                 return HTTPException(status_code=409, detail=detail)
             return HTTPException(status_code=422, detail=detail)
         return HTTPException(status_code=409, detail="perubahan pengguna tidak dapat disimpan")
@@ -268,7 +274,7 @@ def attach_secure_routes(
         try:
             return alarm_control.respond_policy_event(
                 identity, payload.pin, event_id,
-                action=payload.action, pic=payload.pic, reason=payload.reason,
+                action=payload.action, pic=(payload.pic or "").strip() or identity.display_name, reason=payload.reason,
             )
         except SecurityError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -296,7 +302,7 @@ def attach_secure_routes(
                 payload.pin,
                 serid,
                 payload.duration_seconds,
-                payload.pic,
+                (payload.pic or "").strip() or identity.display_name,
                 payload.reason,
                 payload.auto_resume_on_normal,
             )
@@ -339,7 +345,7 @@ def attach_secure_routes(
         try:
             return alarm_control.ack(
                 identity, payload.pin, source_id, serid, payload.event_time,
-                action=payload.action, pic=payload.pic, note=payload.note,
+                action=payload.action, pic=(payload.pic or "").strip() or identity.display_name, note=payload.note,
             )
         except (PermissionError, SecurityError) as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -539,9 +545,56 @@ def attach_secure_routes(
 
     @app.get("/api/v1/control/archives")
     def archives(identity: UserIdentity = Depends(current_user)):
+        if archive_exports is not None:
+            return archive_exports.inventory()
         if archive_catalog is None:
             return []
         return archive_catalog.list_archives(limit=1000)
+
+    def authorised_archive_export(job_id: str, identity: UserIdentity) -> dict[str, Any]:
+        item = archive_exports.get(job_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="archive export tidak ditemukan")
+        if item.get("username") != identity.username and identity.role is not Role.ADMINISTRATOR:
+            raise HTTPException(status_code=403, detail="archive export milik pengguna lain")
+        return item
+
+    @app.post("/api/v1/control/archive-exports")
+    def create_archive_export(payload: ArchiveExportRequest, identity: UserIdentity = Depends(require_operator)):
+        if archive_exports is None:
+            raise HTTPException(status_code=404, detail="archive export service unavailable")
+        try:
+            return archive_exports.create(identity, selection=payload.selection, value=payload.value)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/control/archive-exports")
+    def list_archive_exports(identity: UserIdentity = Depends(require_operator)):
+        if archive_exports is None:
+            raise HTTPException(status_code=404, detail="archive export service unavailable")
+        username = None if identity.role is Role.ADMINISTRATOR else identity.username
+        return [{key: item.get(key) for key in ("job_id", "selection", "selection_value", "status", "phase", "partitions_total", "partitions_read", "rows_read", "bytes_written", "error", "created_at", "completed_at")} for item in archive_exports.list(username=username)]
+
+    @app.get("/api/v1/control/archive-exports/{job_id}")
+    def archive_export_status(job_id: str, identity: UserIdentity = Depends(require_operator)):
+        if archive_exports is None:
+            raise HTTPException(status_code=404, detail="archive export service unavailable")
+        item = authorised_archive_export(job_id, identity)
+        return {key: item.get(key) for key in ("job_id", "selection", "selection_value", "status", "phase", "partitions_total", "partitions_read", "rows_read", "bytes_written", "error", "created_at", "completed_at")}
+
+    @app.get("/api/v1/control/archive-exports/{job_id}/download")
+    def download_archive_export(job_id: str, identity: UserIdentity = Depends(require_operator)):
+        if archive_exports is None:
+            raise HTTPException(status_code=404, detail="archive export service unavailable")
+        authorised_archive_export(job_id, identity)
+        try:
+            _item, path = archive_exports.artifact(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        audit.record("ARCHIVE_EXPORT_DOWNLOAD", identity, "archive-export", job_id)
+        return FileResponse(path, media_type="application/sql", filename=f"radmon-archive-{job_id}.sql")
 
     @app.get("/api/v1/control/archives/{quarter_id}/recap")
     def archive_recap(quarter_id: str, identity: UserIdentity = Depends(current_user)):

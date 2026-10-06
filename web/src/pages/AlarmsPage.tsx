@@ -82,11 +82,12 @@ function SourceAlarmResponse({ event, onChanged }: { event: PolicyEvent; onChang
   const { user } = useSession();
   const dialog = useRef<HTMLDialogElement>(null);
   const [action, setAction] = useState("Konfirmasi");
-  const [pic, setPic] = useState("");
+  const [pic, setPic] = useState(user?.display_name ?? "");
   const [note, setNote] = useState("");
   const [pin, setPin] = useState("");
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState("");
+  useEffect(() => { setPic(user?.display_name ?? ""); }, [user?.display_name]);
   if (!user || user.role === "Viewer" || event.event_type !== "source_alarm" || event.status !== "ACTIVE" || !event.source_id || !event.event_time) return null;
   async function submit(formEvent: React.FormEvent) {
     formEvent.preventDefault();
@@ -117,7 +118,7 @@ function SourceAlarmResponse({ event, onChanged }: { event: PolicyEvent; onChang
         <h2>Respons alarm di sumber</h2>
         <p>Operasi ini memperbarui flag alarm pada sumber LAN dan memerlukan PIN operator.</p>
         <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} disabled={pending} required />
-        <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} disabled={pending} required />
+        <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} readOnly={user.role !== "Administrator"} disabled={pending} required />
         <Input label="Catatan" value={note} onChange={(e) => setNote(e.target.value)} disabled={pending} />
         <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending} required />
         {feedback ? <p role="alert">{feedback}</p> : null}

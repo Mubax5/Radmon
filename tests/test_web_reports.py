@@ -224,7 +224,8 @@ def test_draft_preview_is_authorized_and_matches_generated_job_pdf(tmp_path):
     app = FastAPI()
     attach_secure_routes(app, security=security, audit=audit, alarm_mirror=RemoteAlarmMirror(security), alarm_control=AlarmControl(), device_admin=DeviceAdmin(), report_jobs=jobs)
     web = TestClient(app)
-    query = "serid=5201&start_at=2026-09-01T00%3A00%3A00Z&end_at=2026-09-01T01%3A00%3A00Z"
+    # Match datetime-local values before the browser adds its local offset.
+    query = "serid=5201&start_at=2026-09-01T00%3A00&end_at=2026-09-01T01%3A00"
 
     assert web.get(f"/api/v1/control/reports/draft-preview?{query}").status_code == 401
     web.post("/auth/login", json={"username": "viewer", "password": "Password123!"})
@@ -234,6 +235,7 @@ def test_draft_preview_is_authorized_and_matches_generated_job_pdf(tmp_path):
     preview = web.get(f"/api/v1/control/reports/draft-preview?{query}")
     assert preview.status_code == 200
     assert preview.headers["content-type"] == "application/pdf"
+    assert preview.content.startswith(b"%PDF")
     assert web.get(f"/api/v1/control/reports/draft-preview?{query.replace('5201', '../security.db')}").status_code == 422
     created = web.post("/api/v1/control/reports", json={"serid": 5201, "start_at": "2026-09-01T00:00:00Z", "end_at": "2026-09-01T01:00:00Z"}).json()
     for _ in range(100):
@@ -265,8 +267,21 @@ def test_reports_frontend_contract_uses_native_controls_and_safe_download_url():
     assert "window.location" not in page
     assert "<Dialog" not in page
     assert "draft-preview?${query}" in page
-    assert "disabled={creating || !serid || !draftUrl}" in page
-    assert 'grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr)' in styles
+    assert "disabled={creating || !serid || !selectedRange || !draftUrl}" in page
+    assert 'grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr)' in styles
     assert "@media (max-width: 767px)" in styles and ".report-workspace { grid-template-columns: minmax(0, 1fr); }" in styles
+    assert page.index('className="report-preview-pane"') < page.index('className="action-card report-form-card"')
+    assert '<section className="report-preview"' not in page
+    assert "report-preview-pane iframe" in styles
+    assert "const displayedPreviewUrl = (draftLoading || draftError) && previewUrl ? previewUrl" in page
+    assert 'reportRows.find((job) => job.status === "completed")?.job_id ?? null' in page
+    assert "setPreviewJobId(created.job_id)" in page
+    pdf_source = (root / "radmon/reports.py").read_text(encoding="utf-8")
+    assert 'pagesize=A4' in pdf_source
+    assert 'Paragraph("Instalasi Pengelolaan Limbah Radioaktif"' in pdf_source
+    assert 'Paragraph("Direktorat Pengelolaan Fasilitas Ketenaganukliran"' in pdf_source
+    for heading in ("No.", "Name", "Location", "Description", "First", "Last", "Dose Average", "Max", "Approx. Dose (µSv)"):
+        assert heading in pdf_source
+    assert "self.MAX_MEASUREMENT_ROWS" in pdf_source and "self.MAX_ALARM_ROWS" in pdf_source
     assert "listReportJobs" in api and "requestReport" in api and "reportDownloadUrl" in api and "reportPreviewUrl" in api
     assert '{ id: "reports", label: "Laporan", minimum: "Operator" }' in navigation

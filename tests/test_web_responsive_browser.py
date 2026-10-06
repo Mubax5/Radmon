@@ -434,14 +434,13 @@ def test_history_station_toolbar_order_and_compact_viewport_layout(chrome_driver
                 "const arrows=buttons.map(button=>{const b=button.getBoundingClientRect();const icon=button.querySelector('svg')?.getBoundingClientRect();"
                 "return {width:b.width,height:b.height,centerX:icon&&(icon.left+icon.width/2)-(b.left+b.width/2),centerY:icon&&(icon.top+icon.height/2)-(b.top+b.height/2),bottom:b.bottom};});"
                 "const toolbar=document.querySelector('.history-toolbar');"
-                "const rangeNode=[...toolbar.children].find(node=>!node.matches('.history-carousel,.history-toolbar-meta'));"
-                "const range=rangeNode?.getBoundingClientRect();"
+                "const carouselRect=carousel.getBoundingClientRect();"
                 "const cardRects=cards.map(card=>card.getBoundingClientRect());"
                 "const r=chart.getBoundingClientRect();"
                 "return {filter:filter.getBoundingClientRect(),summary:summary.getBoundingClientRect(),meta:meta.getBoundingClientRect(),"
                 "chart:r,rowHeight:rowBottom-rowTop,controlTops:controls.map(x=>x.top),"
                 "comboHeight:controls[2].height,comboBottom:controls[2].bottom,arrows,"
-                "range:range&&{top:range.top,bottom:range.bottom},cards:cardRects.map(x=>({left:x.left,right:x.right,top:x.top,bottom:x.bottom})),"
+                "carousel:{top:carouselRect.top,bottom:carouselRect.bottom},cards:cardRects.map(x=>({left:x.left,right:x.right,top:x.top,bottom:x.bottom})),"
                 "viewport:innerHeight,documentOrder:filter.compareDocumentPosition(summary)&Node.DOCUMENT_POSITION_FOLLOWING};",
             )
             assert not geometry.get("missingControls"), geometry
@@ -455,7 +454,7 @@ def test_history_station_toolbar_order_and_compact_viewport_layout(chrome_driver
                 assert abs(arrow["centerX"]) <= 1 and abs(arrow["centerY"]) <= 1, geometry
                 assert abs(arrow["bottom"] - geometry["comboBottom"]) <= 1, geometry
             assert geometry["filter"]["top"] < geometry["summary"]["top"] < geometry["chart"]["top"]
-            assert geometry["meta"]["top"] >= geometry["range"]["bottom"] - 1, geometry
+            assert geometry["meta"]["top"] >= geometry["carousel"]["bottom"] - 1, geometry
             assert len(geometry["cards"]) == 4, geometry
             card_tops = {round(card["top"]) for card in geometry["cards"]}
             card_bottoms = {round(card["bottom"]) for card in geometry["cards"]}

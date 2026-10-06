@@ -46,7 +46,7 @@ class ReportJobs:
 def client(tmp_path):
     store = SecurityStore(tmp_path / "security.db")
     store.create_user("admin", "Admin", Role.ADMINISTRATOR, "Password123!", "2468")
-    store.create_user("admin2", "Admin Two", Role.ADMINISTRATOR, "Password123!", "1357")
+    store.create_user("admin2", "User Two", Role.VIEWER, "Password123!", "1357")
     store.create_user("operator", "Operator", Role.OPERATOR, "Password123!", "9999")
     app = FastAPI()
     attach_secure_routes(app, security=store, audit=AuditTrail(store), alarm_mirror=RemoteAlarmMirror(store), alarm_control=AlarmControl(), device_admin=DeviceAdmin(), report_jobs=ReportJobs(tmp_path / "safe.pdf"))

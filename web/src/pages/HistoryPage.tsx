@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { Button, LayerCard, Select, Table } from "@cloudflare/kumo";
+import { Button, LayerCard, Table } from "@cloudflare/kumo";
 import { CaretLeft, CaretRight } from "@phosphor-icons/react";
 import { api, type Station } from "../api";
 import { TrendChart, type TrendPoint } from "../components/TrendChart";
@@ -33,13 +33,8 @@ function numericDoseRate(row: HistoryRow): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-const LIMIT_ITEMS: Record<string, string> = {
-  "60": "1 jam — 60",
-  "240": "4 jam — 240",
-  "720": "12 jam — 720",
-  "1440": "24 jam — 1440",
-  "2000": "Maks — 2000",
-};
+// Match the station-history API default and retain its limit/pagination contract.
+const HISTORY_LIMIT = 240;
 
 export function HistoryPage() {
   const { user } = useSession();
@@ -53,15 +48,14 @@ export function HistoryPage() {
   const [stationMenuOpen, setStationMenuOpen] = useState(false);
   const [activeStationIndex, setActiveStationIndex] = useState(0);
   const [stationMenuStyle, setStationMenuStyle] = useState<CSSProperties>({});
-  const [limit, setLimit] = useState(240);
   const stationInputRef = useRef<HTMLInputElement>(null);
   const rowsRef = useRef<HistoryRow[]>(rows);
   const requestIdRef = useRef(0);
   rowsRef.current = rows;
 
-  // cache for instant station switch and prefetch: key = `${serid}:${limit}`
+  // cache for instant station switch and prefetch: key = `${serid}:${HISTORY_LIMIT}`
   const cacheRef = useRef<Map<string, HistoryRow[]>>(new Map());
-  const cacheKey = useCallback((serid: number, lim: number) => `${serid}:${lim}`, []);
+  const cacheKey = useCallback((serid: number) => `${serid}:${HISTORY_LIMIT}`, []);
 
   const selectedIndex = useMemo(() => {
     if (selected == null) return -1;
@@ -201,10 +195,10 @@ export function HistoryPage() {
     if (nextSerid != null) changeStation(String(nextSerid));
   }, [hasStations, selectedIndex, stations]);
 
-  const prefetchStation = useCallback((serid: number, lim: number) => {
-    const key = cacheKey(serid, lim);
+  const prefetchStation = useCallback((serid: number) => {
+    const key = cacheKey(serid);
     if (cacheRef.current.has(key)) return;
-    void api<HistoryRow[]>(`/api/v1/web/stations/${serid}/history?limit=${lim}`)
+    void api<HistoryRow[]>(`/api/v1/web/stations/${serid}/history?limit=${HISTORY_LIMIT}`)
       .then((items) => cacheRef.current.set(key, items))
       .catch(() => {/* prefetch best effort */});
   }, [cacheKey]);
@@ -216,14 +210,14 @@ export function HistoryPage() {
     if (idx < 0) return;
     const prev = stations[(idx - 1 + stations.length) % stations.length];
     const next = stations[(idx + 1) % stations.length];
-    if (prev) prefetchStation(prev.serid, limit);
-    if (next) prefetchStation(next.serid, limit);
-  }, [selected, selectedIndex, stations, limit, prefetchStation]);
+    if (prev) prefetchStation(prev.serid);
+    if (next) prefetchStation(next.serid);
+  }, [selected, selectedIndex, stations, prefetchStation]);
 
   const loadHistory = useCallback((initial: boolean) => {
     if (!selected) return Promise.resolve();
     const requestId = ++requestIdRef.current;
-    const key = cacheKey(selected, limit);
+    const key = cacheKey(selected);
     const cached = cacheRef.current.get(key);
     // instant station switch if cached and not initial hard load
     if (cached && !initial) {
@@ -237,7 +231,7 @@ export function HistoryPage() {
     if (shouldShowLoading) setLoading(true);
     else if (!shouldShowLoading) setRefreshing(true);
 
-    return api<HistoryRow[]>(`/api/v1/web/stations/${selected}/history?limit=${limit}`)
+    return api<HistoryRow[]>(`/api/v1/web/stations/${selected}/history?limit=${HISTORY_LIMIT}`)
       .then((items) => {
         cacheRef.current.set(key, items);
         if (requestId === requestIdRef.current) {
@@ -254,15 +248,15 @@ export function HistoryPage() {
           else setRefreshing(false);
         }
       });
-  }, [selected, limit, cacheKey]);
+  }, [selected, cacheKey]);
 
   // maintain contract literals for tests: explicit calls
-  // station switch is instant - load when selected or limit changes
+  // station switch is instant - load when selected station changes
   useEffect(() => {
     if (selected == null) return;
     // keep previous chart visible: do not clear rows; use refreshing path for seamless
     void loadHistory(true);
-  }, [selected, limit, loadHistory]);
+  }, [selected, loadHistory]);
 
   // also support live refresh keeps existing content mounted
   useWebRefresh(() => { void loadHistory(false); });
@@ -345,18 +339,11 @@ export function HistoryPage() {
     setActiveStationIndex(0);
     setStationMenuOpen(true);
   };
-  const handleLimitChange = (value: string | number | null | undefined) => {
-    const next = Number(value ?? 240);
-    const bounded = Number.isFinite(next) ? Math.max(1, Math.min(2000, Math.trunc(next))) : 240;
-    setLimit(bounded);
-    // prefetch for new limit as well
-  };
-
   return (
     <div className="page-stack history-page">
       <PageHeading
         title="Riwayat"
-        description="Measurement terbaru, tren, dan statistik rentang untuk stasiun yang dipilih."
+        description="Tren menampilkan hingga 240 measurement terbaru untuk stasiun yang dipilih."
         action={<span className={`refresh-indicator${refreshing ? " is-visible" : ""}`}>Memperbarui…</span>}
       />
       <LayerCard className="filter-card history-filter">
@@ -416,13 +403,6 @@ export function HistoryPage() {
               <CaretRight aria-hidden="true" size={18} weight="bold" />
             </Button>
           </div>
-          <Select
-            label="Rentang"
-            items={LIMIT_ITEMS}
-            value={String(limit)}
-            onValueChange={handleLimitChange}
-            data-testid="history-range-select"
-          />
           <div className="history-toolbar-meta">
             {selectedStation ? (
               <div className="history-selected-meta cell-subtle" aria-live="polite">

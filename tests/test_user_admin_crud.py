@@ -18,7 +18,6 @@ class AlarmControl:
 def make_client(tmp_path):
     store = SecurityStore(tmp_path / "security.db")
     store.create_user("admin", "Admin", Role.ADMINISTRATOR, "Password123!", "2468")
-    store.create_user("admin2", "Admin Two", Role.ADMINISTRATOR, "Password123!", "1357")
     store.create_user("operator", "Operator", Role.OPERATOR, "Password123!", "9999")
     audit = AuditTrail(store)
     app = FastAPI()
@@ -64,16 +63,6 @@ def test_user_mutations_revoke_target_sessions_and_sensitive_leases(tmp_path):
     }).status_code == 200
     assert store.session_user(operator_session) is None
 
-    admin2 = UserIdentity("admin2", "Admin Two", Role.ADMINISTRATOR)
-    admin2_session = store.create_session("admin2")
-    store.require_sensitive(admin2, "manage_users", "1357")
-    assert store.sensitive_lease_active(admin2)
-    assert client.patch("/api/v1/control/users/admin2", json={
-        "pin": "2468", "display_name": "Admin Dua", "role": "Administrator",
-    }).status_code == 200
-    assert store.session_user(admin2_session) is None
-    assert not store.sensitive_lease_active(admin2)
-
     for path, payload in (
         ("/api/v1/control/users/operator/enabled", {"pin": "2468", "enabled": False}),
         ("/api/v1/control/users/operator/password", {"pin": "2468", "password": "Changed123!"}),
@@ -101,14 +90,12 @@ def test_final_admin_and_self_lockout_are_conflicts_and_delete_is_permanent(tmp_
     assert client.request("DELETE", "/api/v1/control/users/admin", json={"pin": "2468"}).status_code == 409
 
     target_session = store.create_session("operator")
-    admin_session = store.create_session("admin2")
     response = client.request("DELETE", "/api/v1/control/users/operator", json={"pin": "2468"})
     assert response.status_code == 200
     assert response.json()["status"] == "deleted"
     assert response.json()["user"] == {"username": "operator", "deleted": True}
     assert "operator" not in {row["username"] for row in store.list_users()}
     assert store.session_user(target_session) is None
-    assert store.session_user(admin_session) is not None
     assert client.post("/auth/login", json={"username": "operator", "password": "Password123!"}).status_code == 401
     event = next(event for event in audit.list_events() if event["action"] == "USER_DELETE")
     assert event["action"] == "USER_DELETE" and event["target_id"] == "operator"
@@ -127,7 +114,7 @@ def test_hard_delete_rejects_wrong_pin_operator_and_self_delete(tmp_path):
     assert client.request("DELETE", "/api/v1/control/users/admin", json={"pin": "2468"}).status_code == 409
 
 
-def test_concurrent_hard_deletes_cannot_remove_both_enabled_administrators(tmp_path):
+def test_concurrent_admin_role_changes_cannot_lock_out_last_active_admin(tmp_path):
     import threading
 
     from radmon.user_admin import UserAdminService
@@ -135,29 +122,25 @@ def test_concurrent_hard_deletes_cannot_remove_both_enabled_administrators(tmp_p
     db_path = tmp_path / "race.db"
     stores = [SecurityStore(db_path), SecurityStore(db_path)]
     stores[0].create_user("admin-a", "Admin A", Role.ADMINISTRATOR, "Password123!", "1111")
-    stores[0].create_user("admin-b", "Admin B", Role.ADMINISTRATOR, "Password123!", "2222")
     audits = [AuditTrail(store) for store in stores]
     services = [UserAdminService(stores[index], audits[index]) for index in range(2)]
-    identities = [
-        UserIdentity("admin-a", "Admin A", Role.ADMINISTRATOR),
-        UserIdentity("admin-b", "Admin B", Role.ADMINISTRATOR),
-    ]
+    identities = [UserIdentity("admin-a", "Admin A", Role.ADMINISTRATOR)] * 2
     barrier = threading.Barrier(2)
     outcomes = []
 
-    def remove_other(index):
+    def remove_last_admin(index):
         barrier.wait()
         try:
-            services[index].delete_user(identities[index], ("1111", "2222")[index], identities[1-index].username)
-            outcomes.append("deleted")
+            services[0].update_user(identities[index], "1111", "admin-a", role=Role.VIEWER)
+            outcomes.append("changed")
         except Exception as exc:
             outcomes.append(str(exc))
 
-    threads = [threading.Thread(target=remove_other, args=(index,)) for index in range(2)]
+    threads = [threading.Thread(target=remove_last_admin, args=(index,)) for index in range(2)]
     for thread in threads: thread.start()
     for thread in threads: thread.join(timeout=10)
     assert all(not thread.is_alive() for thread in threads)
-    assert outcomes.count("deleted") == 1
+    assert outcomes.count("changed") == 0
     assert sum(user["enabled"] and user["role"] == "Administrator" for user in stores[0].list_users()) == 1
 
 

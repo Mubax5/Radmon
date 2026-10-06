@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button, Dialog, Input, LayerCard } from "@cloudflare/kumo";
 import { api, type Role } from "./api";
 import { formatDoseValue } from "./format";
+import { useSession } from "./auth";
 
 type AlarmEvent = {
   event_id: string;
@@ -95,6 +96,8 @@ function NativeSelect({
 }
 
 export function AlarmOperations({ events, suppressions, onChanged, initialEventId }: { events: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void; initialEventId?: string | null }) {
+  const { user } = useSession();
+  const canEditPic = user?.role === "Administrator";
   const active = useMemo(
     () => events.filter((event) => String(event.kind).toUpperCase() === "ALARM" && String(event.status).toUpperCase() === "ACTIVE"),
     [events],
@@ -108,18 +111,20 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
   const [cancelOpen, setCancelOpen] = useState("");
   const [eventId, setEventId] = useState("");
   const [action, setAction] = useState("Konfirmasi");
-  const [pic, setPic] = useState("");
+  const [pic, setPic] = useState(user?.display_name ?? "");
   const [reason, setReason] = useState("");
   const [pin, setPin] = useState("");
   const [serid, setSerid] = useState("");
   const [minutes, setMinutes] = useState("15");
-  const [suppressPic, setSuppressPic] = useState("");
+  const [suppressPic, setSuppressPic] = useState(user?.display_name ?? "");
   const [suppressReason, setSuppressReason] = useState("");
   const [suppressPin, setSuppressPin] = useState("");
   const [cancelReason, setCancelReason] = useState("");
   const [cancelPin, setCancelPin] = useState("");
   const [pending, setPending] = useState<"respond" | "suppress" | "cancel" | null>(null);
   const [feedback, setFeedback] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+
+  useEffect(() => { setPic(user?.display_name ?? ""); setSuppressPic(user?.display_name ?? ""); }, [user?.display_name]);
 
   useEffect(() => {
     if (!initialEventId || !active.some((item) => item.event_id === initialEventId)) return;
@@ -143,7 +148,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
   function resetResponse() {
     setEventId("");
     setAction("Konfirmasi");
-    setPic("");
+    setPic(user?.display_name ?? "");
     setReason("");
     setPin("");
   }
@@ -151,7 +156,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
   function resetSuppression() {
     setSerid("");
     setMinutes("15");
-    setSuppressPic("");
+    setSuppressPic(user?.display_name ?? "");
     setSuppressReason("");
     setSuppressPin("");
   }
@@ -302,7 +307,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
                     <option key={value} value={value}>{label}</option>
                   ))}
                 </NativeSelect>
-                <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} disabled={pending === "respond"} />
+                <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} readOnly={!canEditPic} disabled={pending === "respond"} />
                 <Input label="Alasan" value={reason} onChange={(e) => setReason(e.target.value)} disabled={pending === "respond"} />
                 <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending === "respond"} />
                 <div className="form-actions">
@@ -344,7 +349,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
                     <option key={value} value={value}>{label}</option>
                   ))}
                 </NativeSelect>
-                <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} disabled={pending === "suppress"} />
+                <Input label="PIC" value={suppressPic} onChange={(e) => setSuppressPic(e.target.value)} readOnly={!canEditPic} disabled={pending === "suppress"} />
                 <Input label="Alasan" value={suppressReason} onChange={(e) => setSuppressReason(e.target.value)} disabled={pending === "suppress"} />
                 <Input label="PIN" type="password" value={suppressPin} onChange={(e) => setSuppressPin(e.target.value)} disabled={pending === "suppress"} />
                 <div className="form-actions">
@@ -400,9 +405,11 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
 export function CreateUserForm({
   onCreated,
   onDone,
+  administratorExists = false,
 }: {
   onCreated: () => void;
   onDone?: () => void;
+  administratorExists?: boolean;
 }) {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -473,13 +480,14 @@ export function CreateUserForm({
       >
         <option value="Viewer">Viewer</option>
         <option value="Operator">Operator</option>
-        <option value="Administrator">Administrator</option>
+        <option value="Administrator" disabled={administratorExists}>Administrator</option>
       </NativeSelect>
+      {administratorExists ? <p className="cell-subtle" role="status">Administrator aktif sudah ada. Nonaktifkan atau ubah role administrator tersebut sebelum membuat administrator lain.</p> : null}
       <label className="native-input-field"><span>Password awal</span><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} disabled={pending} required minLength={8} autoComplete="new-password" /></label>
       <label className="native-input-field"><span>PIN pengguna</span><input type="password" inputMode="numeric" value={userPin} onChange={(e) => setUserPin(e.target.value)} disabled={pending} required minLength={4} maxLength={8} autoComplete="new-password" /></label>
       <label className="native-input-field"><span>PIN Administrator</span><input type="password" inputMode="numeric" value={adminPin} onChange={(e) => setAdminPin(e.target.value)} disabled={pending} required minLength={4} maxLength={8} autoComplete="current-password" /></label>
       <div className="form-actions">
-        <Button type="submit" variant="primary" disabled={pending || !username || !displayName || !password || !userPin || !adminPin}>
+        <Button type="submit" variant="primary" disabled={pending || !username || !displayName || !password || !userPin || !adminPin || (administratorExists && role === "Administrator")}>
           {pending ? "Membuat…" : "Buat pengguna"}
         </Button>
         <Button type="button" variant="secondary" onClick={reset} disabled={pending}>Bersihkan</Button>

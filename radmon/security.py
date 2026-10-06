@@ -226,6 +226,12 @@ CREATE TABLE IF NOT EXISTS archive_quarters (
         selected_role = role if isinstance(role, Role) else Role(role)
         now = self._now().isoformat()
         with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if selected_role is Role.ADMINISTRATOR and int(connection.execute(
+                "SELECT COUNT(*) FROM users WHERE enabled = 1 AND role = ?",
+                (Role.ADMINISTRATOR.value,),
+            ).fetchone()[0]):
+                raise ValueError("administrator aktif sudah ada")
             connection.execute(
                 """
 INSERT INTO users
@@ -303,12 +309,25 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
                 raise ValueError("nama tampilan tidak valid")
             assignments.append("display_name = ?")
             values.append(cleaned)
+        selected_role = None
         if role is not None:
-            selected = role if isinstance(role, Role) else Role(role)
+            selected_role = role if isinstance(role, Role) else Role(role)
             assignments.append("role = ?")
-            values.append(selected.value)
+            values.append(selected_role.value)
         values.append(name)
         with self._connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT role, enabled FROM users WHERE username = ?", (name,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("user tidak ditemukan")
+            resulting_role = selected_role.value if selected_role is not None else str(row[0])
+            if bool(row[1]) and resulting_role == Role.ADMINISTRATOR.value and int(connection.execute(
+                "SELECT COUNT(*) FROM users WHERE enabled = 1 AND role = ? AND username != ?",
+                (Role.ADMINISTRATOR.value, name),
+            ).fetchone()[0]):
+                raise ValueError("administrator aktif sudah ada")
             cursor = connection.execute(
                 f"UPDATE users SET {', '.join(assignments)} WHERE username = ?", tuple(values)
             )
@@ -631,7 +650,17 @@ ON CONFLICT(quarter_id) DO UPDATE SET
 
     def _set_user_enabled_base(self, username: str, enabled: bool) -> None:
         with self._connection() as connection:
-            connection.execute('UPDATE users SET enabled = ?, updated_at = ? WHERE username = ?', (1 if enabled else 0, self._now().isoformat(), username.strip().lower()))
+            name = username.strip().lower()
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT role FROM users WHERE username = ?", (name,)).fetchone()
+            if row is None:
+                raise ValueError("user tidak ditemukan")
+            if enabled and row[0] == Role.ADMINISTRATOR.value and int(connection.execute(
+                "SELECT COUNT(*) FROM users WHERE enabled = 1 AND role = ? AND username != ?",
+                (Role.ADMINISTRATOR.value, name),
+            ).fetchone()[0]):
+                raise ValueError("administrator aktif sudah ada")
+            connection.execute('UPDATE users SET enabled = ?, updated_at = ? WHERE username = ?', (1 if enabled else 0, self._now().isoformat(), name))
 
     def _reset_pin_base(self, username: str, pin: str) -> None:
         if not pin.isdigit() or not 4 <= len(pin) <= 8:

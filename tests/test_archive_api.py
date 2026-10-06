@@ -36,10 +36,12 @@ class FakeDeviceAdmin:
     pass
 
 
-def make_client(tmp_path):
+def make_client(tmp_path, archive_exports=None):
     security = SecurityStore(tmp_path / "security.db")
     security.create_user("admin", "Admin", Role.ADMINISTRATOR, "Password123!", "2468")
     security.create_user("view", "Viewer", Role.VIEWER, "Password123!", "9999")
+    security.create_user("operator", "Operator", Role.OPERATOR, "Password123!", "7777")
+    security.create_user("other", "Other Operator", Role.OPERATOR, "Password123!", "5555")
     audit = AuditTrail(security)
     service = ArchiveService()
     app = FastAPI()
@@ -52,6 +54,7 @@ def make_client(tmp_path):
         device_admin=FakeDeviceAdmin(),
         archive_catalog=ArchiveCatalog(),
         archive_service=service,
+        archive_exports=archive_exports,
     )
     return TestClient(app), audit, service
 
@@ -97,3 +100,38 @@ def test_archive_retry_requires_administrator_pin_and_is_audited(tmp_path):
     assert ok.status_code == 200
     assert service.calls == ["2026-Q3"]
     assert any(event["action"] == "ARCHIVE_MANUAL_RETRY" for event in audit.list_events())
+
+
+class ExportJobs:
+    def __init__(self):
+        self.artifact_calls = 0
+
+    def get(self, job_id):
+        return {"job_id": job_id, "username": "operator", "status": "completed", "artifact_name": f"radmon-archive-{job_id}.sql"} if job_id == "a" * 32 else None
+
+    def list(self, username=None):
+        return []
+
+    def artifact(self, job_id):
+        self.artifact_calls += 1
+        raise AssertionError("artifact must not be resolved before ownership authorization")
+
+    def create(self, identity, *, selection, value):
+        return {"job_id": "a" * 32, "username": identity.username, "selection": selection, "status": "queued"}
+
+
+def test_archive_export_status_and_download_are_operator_owned(tmp_path):
+    exports = ExportJobs()
+    client, _, _ = make_client(tmp_path, exports)
+    login(client, "operator")
+    created = client.post("/api/v1/control/archive-exports", json={"selection": "all", "value": None})
+    assert created.status_code == 200
+    client.post("/auth/logout")
+    login(client, "other")
+    job_id = "a" * 32
+    assert client.get(f"/api/v1/control/archive-exports/{job_id}").status_code == 403
+    assert client.get(f"/api/v1/control/archive-exports/{job_id}/download").status_code == 403
+    assert exports.artifact_calls == 0
+    client.post("/auth/logout")
+    login(client, "view")
+    assert client.get("/api/v1/control/archive-exports").status_code == 403

@@ -380,7 +380,7 @@ th {{ background: #efefef; font-weight: bold; }}
             Paragraph("Summary", styles["Heading2"]),
         ]
         summary_data = [
-            ["No.", "Name", "Location", "Description", "First Measurement", "Last Measurement", "Dose rate (Average/Max)"],
+            ["No.", "Name", "Location", "Description", "First", "Last", "Dose Average", "Max"],
             [
                 "1",
                 str(station.room),
@@ -388,10 +388,11 @@ th {{ background: #efefef; font-weight: bold; }}
                 description,
                 self._dt(summary.first_measurement),
                 self._dt(summary.last_measurement),
-                f"{self._fmt(summary.average)} / {self._fmt(summary.maximum)}",
+                self._fmt(summary.average),
+                self._fmt(summary.maximum),
             ],
         ]
-        summary_table = Table(wrapped(summary_data), colWidths=[8*mm, 22*mm, 20*mm, 34*mm, 31*mm, 31*mm, 37*mm], repeatRows=1, hAlign="CENTER")
+        summary_table = Table(wrapped(summary_data), colWidths=[8*mm, 18*mm, 19*mm, 29*mm, 28*mm, 28*mm, 30*mm, 30*mm], repeatRows=1, hAlign="CENTER")
         summary_table.setStyle(self._table_style())
         story.extend([summary_table, Spacer(1, 5 * mm), Paragraph("Dose rate and Approx. Dose", styles["Heading2"]), Paragraph(f"From {self._dt(start)} to {self._dt(end)}", styles["BodyText"]), Spacer(1, 2 * mm)])
 

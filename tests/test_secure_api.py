@@ -130,6 +130,33 @@ def test_operator_can_ack_via_pin_gated_endpoint(tmp_path):
     assert control.calls[0][1] == "1357"
 
 
+def test_missing_pic_defaults_to_authenticated_display_name(tmp_path):
+    client, _, control = make_client(tmp_path)
+    login(client, "op")
+    payload = ack_payload("1357")
+    payload.pop("pic")
+
+    response = client.post(
+        "/api/v1/control/alarms/gd52/5201/ack",
+        json=payload,
+    )
+
+    assert response.status_code == 200
+    assert control.calls[0][6] == "Operator"
+
+
+def test_active_administrator_cannot_be_created_while_one_exists(tmp_path):
+    client, _, _ = make_client(tmp_path)
+    login(client, "admin")
+    payload = user_payload("2468")
+    payload["role"] = "Administrator"
+
+    response = client.post("/api/v1/control/users", json=payload)
+
+    assert response.status_code == 409
+    assert "administrator aktif" in response.json()["detail"]
+
+
 def test_viewer_cannot_ack_or_use_admin_mutations(tmp_path):
     client, _, _ = make_client(tmp_path)
     login(client, "view")

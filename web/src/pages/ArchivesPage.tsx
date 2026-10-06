@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { LayerCard, Select, Table } from "@cloudflare/kumo";
-import { api } from "../api";
+import { Button, LayerCard, Select, Table } from "@cloudflare/kumo";
+import { api, archiveExportDownloadUrl, requestArchiveExport, type ArchiveExportJob } from "../api";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
 import { useWebRefresh } from "../live";
 import {
@@ -30,13 +30,42 @@ export function ArchivesPage() {
   const [items, setItems] = useState<ArchiveRecord[] | null>(null);
   const [year, setYear] = useState("all");
   const [error, setError] = useState("");
+  const [jobs, setJobs] = useState<ArchiveExportJob[]>([]);
+  const [creating, setCreating] = useState(false);
 
-  const load = () => api<ArchiveRecord[]>("/api/v1/control/archives")
-    .then((rows) => { setItems(rows); setError(""); })
+  const load = () => api<ArchiveRecord[] | { archives: ArchiveRecord[] }>("/api/v1/control/archives")
+    .then((payload) => { setItems(Array.isArray(payload) ? payload : payload.archives); setError(""); })
     .catch((e) => setError(e instanceof Error ? e.message : "Tidak dapat memuat arsip"));
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    void api<ArchiveExportJob[]>("/api/v1/control/archive-exports").then(setJobs).catch(() => undefined);
+  }, []);
   useWebRefresh(() => { void load(); }, ["archive_update"]);
+
+  useEffect(() => {
+    const pending = jobs.filter((job) => job.status === "queued" || job.status === "running");
+    if (!pending.length) return;
+    const timer = window.setInterval(() => {
+      void Promise.all(pending.map((job) => api<ArchiveExportJob>(`/api/v1/control/archive-exports/${encodeURIComponent(job.job_id)}`)))
+        .then((updates) => setJobs((current) => current.map((job) => updates.find((update) => update.job_id === job.job_id) ?? job)))
+        .catch((reason) => setError(reason instanceof Error ? reason.message : "Status unduhan gagal dimuat"));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [jobs]);
+
+  const startExport = async (selection: "single" | "year" | "all", value: string | null) => {
+    setCreating(true);
+    setError("");
+    try {
+      const job = await requestArchiveExport(selection, value);
+      setJobs((current) => [job, ...current]);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Unduhan arsip gagal dimulai");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const derived = useMemo(() => {
     const records = items ?? [];
@@ -52,8 +81,8 @@ export function ArchivesPage() {
   }, [items, year]);
 
   const yearItems = useMemo(
-    () => Object.fromEntries([["all", "Semua tahun"], ...derived.years.map((value) => [value, value])]),
-    [derived.years],
+    () => Object.fromEntries([["all", `Semua tahun (${(items ?? []).length} arsip)`], ...derived.years.map((value) => [value, `${value} (${(items ?? []).filter((item) => quarterYear(item.quarter_id) === value).length} arsip)`])]),
+    [derived.years, derived.filtered.length, items],
   );
 
   return (
@@ -79,7 +108,23 @@ export function ArchivesPage() {
               value={year}
               onValueChange={(value) => setYear(String(value ?? "all"))}
             />
+            <Button disabled={creating || !derived.filtered.some((item) => String(item.state).toUpperCase() === "COMPLETE")} onClick={() => void startExport(year === "all" ? "all" : "year", year === "all" ? null : year)}>
+              {year === "all" ? "Unduh semua arsip" : `Unduh tahun ${year}`}
+            </Button>
           </LayerCard>
+
+          {jobs.length ? <PageSection title="Unduhan database" description="Gabungkan bundle yang dipilih menjadi satu dump SQL portabel.">
+            <div className="archive-export-jobs">
+              {jobs.map((job) => <LayerCard className="archive-export-job" key={job.job_id}>
+                <strong>{job.selection === "single" ? job.selection_value : job.selection === "year" ? `Tahun ${job.selection_value}` : "Semua arsip"}</strong>
+                <span>{job.status === "queued" ? "Menunggu" : job.status === "running" ? (job.phase?.startsWith("verifying:") ? `Memverifikasi ${job.phase.slice("verifying:".length)}` : job.phase?.startsWith("merging:") ? `Menggabungkan ${job.phase.slice("merging:".length)}` : "Menggabungkan") : job.status === "completed" ? "Selesai" : "Gagal"}</span>
+                <progress max={Math.max(job.partitions_total, 1)} value={job.partitions_read} aria-label="Progres bundle" />
+                <small>{job.partitions_read}/{job.partitions_total} bundle · {job.rows_read.toLocaleString()} baris · {job.bytes_written.toLocaleString()} byte</small>
+                {job.error ? <span role="alert">{job.error}</span> : null}
+                {job.status === "completed" ? <a href={archiveExportDownloadUrl(job.job_id)}>Unduh file database SQL</a> : null}
+              </LayerCard>)}
+            </div>
+          </PageSection> : null}
 
           <PageSection
             title="Detail arsip"
@@ -96,6 +141,7 @@ export function ArchivesPage() {
                         <Table.Head>Mulai</Table.Head>
                         <Table.Head>Selesai</Table.Head>
                         <Table.Head>Diperbarui</Table.Head>
+                        <Table.Head>Database</Table.Head>
                       </Table.Row>
                     </Table.Header>
                     <Table.Body>
@@ -106,6 +152,7 @@ export function ArchivesPage() {
                           <Table.Cell>{formatTimestamp(item.start_at)}</Table.Cell>
                           <Table.Cell>{formatTimestamp(item.end_at)}</Table.Cell>
                           <Table.Cell>{formatTimestamp(item.updated_at ?? item.created_at)}</Table.Cell>
+                          <Table.Cell><Button disabled={creating || String(item.state).toUpperCase() !== "COMPLETE"} onClick={() => void startExport("single", String(item.quarter_id))}>Unduh</Button></Table.Cell>
                         </Table.Row>
                       ))}
                     </Table.Body>
@@ -127,6 +174,7 @@ export function ArchivesPage() {
                         {item.end_at ? <span>Selesai: {formatTimestamp(item.end_at)}</span> : null}
                         {(item.updated_at || item.created_at) ? <span>Diperbarui: {formatTimestamp(item.updated_at ?? item.created_at)}</span> : null}
                       </div>
+                      <Button disabled={creating || String(item.state).toUpperCase() !== "COMPLETE"} onClick={() => void startExport("single", String(item.quarter_id))}>Unduh database</Button>
                     </LayerCard>
                   ))}
                 </div>

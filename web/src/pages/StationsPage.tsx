@@ -134,6 +134,7 @@ export function StationsPage() {
           <PageSection
             title="Detail stasiun"
             description={`${filtered.length} dari ${overview.stations.length} stasiun ditampilkan.`}
+            action={user && user.role !== "Viewer" ? <Button type="button" variant="primary" onClick={() => createDialog.current?.showModal()}>Tambah stasiun</Button> : undefined}
           >
             <div className="station-workspace">
               <ResponsiveStationView
@@ -149,10 +150,10 @@ export function StationsPage() {
               />
             </div>
           </PageSection>
-          {user && user.role !== "Viewer" ? <PageSection title="Stasiun pusat" description="Stasiun pusat dikelola administrator/operator. Detektor milik sumber LAN tetap dikelola pemilik sumber dan tidak dapat diubah dari sini." action={<Button type="button" variant="primary" onClick={() => createDialog.current?.showModal()}>Tambah station</Button>}>
+          {user && user.role !== "Viewer" ? <>
             <dialog ref={createDialog} className="native-user-dialog" aria-labelledby="station-create-title" data-testid="station-create-dialog">
-              <div className="native-user-dialog-content"><h2 id="station-create-title">Tambah station pusat</h2>
-                <p>Form ini hanya mendaftarkan konfigurasi yang dikelola pusat. Data dan konfigurasi detector sumber LAN dimiliki sumber tersebut; akses perubahan mengikuti role dan izin yang berlaku.</p>
+              <div className="native-user-dialog-content"><h2 id="station-create-title">Tambah stasiun</h2>
+                <p>Daftarkan konfigurasi stasiun. Akses perubahan mengikuti role dan izin yang berlaku.</p>
                 <div className="form-actions"><Button type="button" variant="secondary" onClick={fillExample}>Contoh</Button><span className="cell-subtle">Mengisi nilai contoh tanpa menyimpan.</span></div>
                 <form className="action-form" onSubmit={createStation}>
                   <Input label="SERID" type="number" min="1" value={newSerid} onChange={(event) => setNewSerid(event.target.value)} disabled={creating} />
@@ -164,11 +165,11 @@ export function StationsPage() {
                   <Input label="Batas idle (menit)" type="number" min="1" value={newMaxidlemin} onChange={(event) => setNewMaxidlemin(event.target.value)} disabled={creating} />
                   <Input label="PIN" type="password" value={newPin} onChange={(event) => setNewPin(event.target.value)} disabled={creating} />
                   {error ? <div className="form-error" role="alert">{error}</div> : null}
-                  <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !newSerid || !newName || !newLocation || !newWarnlevel || !newAlarmlevel || !newPin}>{creating ? "Membuat…" : "Tambah station"}</Button><Button type="button" variant="secondary" disabled={creating} onClick={() => createDialog.current?.close()}>Batal</Button></div>
+                  <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !newSerid || !newName || !newLocation || !newWarnlevel || !newAlarmlevel || !newPin}>{creating ? "Membuat…" : "Tambah stasiun"}</Button><Button type="button" variant="secondary" disabled={creating} onClick={() => createDialog.current?.close()}>Batal</Button></div>
                 </form>
               </div>
             </dialog>
-          </PageSection> : null}
+          </> : null}
         </>
       ) : null}
     </div>

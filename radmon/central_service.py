@@ -13,6 +13,7 @@ import uvicorn
 
 from .archive import ArchiveCatalog, QuarterArchiveService
 from .archive_store import CentralArchiveStore
+from .archive_exports import ArchiveExportJobs
 from .central_api import create_central_app
 from .config import Settings
 from .hot_path import RealtimeCentralMariaDBRepository
@@ -330,6 +331,8 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
             timezone_name=settings.archive_timezone,
         )
 
+    archive_exports = ArchiveExportJobs(services.security, archive_catalog, settings.archive_dir)
+
     repository = RealtimeCentralMariaDBRepository(settings)
     report_jobs = WebReportJobs(
         services.security,
@@ -355,6 +358,7 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         cookie_secure=_enabled("RADMON_WEB_COOKIE_SECURE"),
         archive_catalog=archive_catalog,
         archive_service=archive_service,
+        archive_exports=archive_exports,
         source_health=services.source_health,
         alarm_policy=services.alarm_policy,
         alarm_suppression=services.alarm_suppression,
@@ -373,6 +377,7 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
     @app.on_event("shutdown")
     async def stop_report_jobs() -> None:
         report_jobs.shutdown()
+        archive_exports.shutdown()
 
     whatsapp = None
     if _enabled("RADMON_WHATSAPP_ENABLED"):

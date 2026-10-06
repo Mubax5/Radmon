@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -46,6 +47,31 @@ def test_role_permission_matrix(tmp_path):
     assert store.role_allows(Role.OPERATOR, "edit_station")
     assert not store.role_allows(Role.VIEWER, "ack_alarm")
     assert store.role_allows(Role.VIEWER, "view")
+
+
+def test_concurrent_admin_creation_keeps_only_one_active_administrator(tmp_path):
+    path = tmp_path / "security.db"
+    store = SecurityStore(path)
+    store.create_user("viewer", "Viewer", Role.VIEWER, "Password123!", "9999")
+
+    def create(username):
+        try:
+            SecurityStore(path).create_user(
+                username, username, Role.ADMINISTRATOR, "Password123!", "2468"
+            )
+            return "created"
+        except ValueError as error:
+            assert "administrator aktif" in str(error)
+            return "rejected"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = list(executor.map(create, ("admin-one", "admin-two")))
+
+    assert outcomes.count("created") == 1
+    assert sum(
+        user["enabled"] and user["role"] == Role.ADMINISTRATOR.value
+        for user in store.list_users()
+    ) == 1
 
 
 def test_suppress_alarm_permission_matrix(tmp_path):

@@ -25,7 +25,7 @@ function NativeInput({ label, ...props }: React.InputHTMLAttributes<HTMLInputEle
   return <label className="native-input-field"><span>{label}</span><input {...props} /></label>;
 }
 
-function UserCards({ users }: { users: UserRecord[] }) {
+function UserCards({ users, onChanged }: { users: UserRecord[]; onChanged: () => void }) {
   if (!users.length) return <LayerCard className="empty-card">Tidak ada pengguna.</LayerCard>;
   return (
     <div className="mobile-card-list">
@@ -41,6 +41,7 @@ function UserCards({ users }: { users: UserRecord[] }) {
           <div className="card-meta">
             <span>Peran: {user.role}</span>
             <span>Diperbarui: {formatTimestamp(user.updated_at ?? user.created_at)}</span>
+            <UserManagementForm user={user} users={users} onChanged={onChanged} />
           </div>
         </LayerCard>
       ))}
@@ -48,7 +49,7 @@ function UserCards({ users }: { users: UserRecord[] }) {
   );
 }
 
-function UserTable({ users }: { users: UserRecord[] }) {
+function UserTable({ users, onChanged }: { users: UserRecord[]; onChanged: () => void }) {
   if (!users.length) return <LayerCard className="empty-card">Tidak ada pengguna.</LayerCard>;
   return (
     <LayerCard className="table-card">
@@ -59,7 +60,7 @@ function UserTable({ users }: { users: UserRecord[] }) {
             <Table.Head>Nama tampilan</Table.Head>
             <Table.Head>Peran</Table.Head>
             <Table.Head>Status</Table.Head>
-            <Table.Head>Diperbarui</Table.Head>
+            <Table.Head>Aksi</Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -73,7 +74,7 @@ function UserTable({ users }: { users: UserRecord[] }) {
                   {user.enabled ? "Aktif" : "Nonaktif"}
                 </Badge>
               </Table.Cell>
-              <Table.Cell>{formatTimestamp(user.updated_at ?? user.created_at)}</Table.Cell>
+              <Table.Cell><UserManagementForm user={user} users={users} onChanged={onChanged} /></Table.Cell>
             </Table.Row>
           ))}
         </Table.Body>
@@ -82,14 +83,14 @@ function UserTable({ users }: { users: UserRecord[] }) {
   );
 }
 
-function UserManagementForm({ users, onChanged }: { users: UserRecord[]; onChanged: () => void }) {
+function UserManagementForm({ user, users, onChanged }: { user: UserRecord; users: UserRecord[]; onChanged: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const deleteDialog = useRef<HTMLDialogElement>(null);
-  const [username, setUsername] = useState(users[0]?.username ?? "");
-  const selected = users.find((item) => item.username === username);
-  const [displayName, setDisplayName] = useState("");
-  const [role, setRole] = useState<Role>("Viewer");
-  const [enabled, setEnabled] = useState(true);
+  const username = user.username;
+  const selected = user;
+  const [displayName, setDisplayName] = useState(user.display_name);
+  const [role, setRole] = useState<Role>(user.role);
+  const [enabled, setEnabled] = useState(user.enabled);
   const [password, setPassword] = useState("");
   const [newPin, setNewPin] = useState("");
   const [adminPin, setAdminPin] = useState("");
@@ -97,9 +98,8 @@ function UserManagementForm({ users, onChanged }: { users: UserRecord[]; onChang
   const [pending, setPending] = useState(false);
 
   useEffect(() => {
-    if (!selected) return;
-    setDisplayName(selected.display_name); setRole(selected.role); setEnabled(selected.enabled); setPassword(""); setNewPin(""); setFeedback(null);
-  }, [selected?.username]);
+    setDisplayName(user.display_name); setRole(user.role); setEnabled(user.enabled); setPassword(""); setNewPin(""); setFeedback(null);
+  }, [user]);
 
   async function mutate(action: "update" | "enabled" | "password" | "pin" | "deactivate" | "delete") {
     if (!username || pending) return;
@@ -118,12 +118,11 @@ function UserManagementForm({ users, onChanged }: { users: UserRecord[]; onChang
 
   if (!users.length) return null;
   return <>
-    <Button type="button" variant="secondary" onClick={() => dialog.current?.showModal()}>Edit pengguna</Button>
-    <dialog ref={dialog} className="native-user-dialog" aria-labelledby="user-edit-title" data-testid="user-edit-dialog"><div className="native-user-dialog-content"><h2 id="user-edit-title">Kelola pengguna</h2><p>Setiap perubahan administratif memerlukan PIN administrator dan akan mencabut sesi serta otorisasi sensitif pengguna target.</p>
+    <Button type="button" variant="secondary" onClick={() => dialog.current?.showModal()}>Edit</Button>
+    <dialog ref={dialog} className="native-user-dialog" aria-labelledby={`user-edit-title-${username}`} data-testid="user-edit-dialog"><div className="native-user-dialog-content"><h2 id={`user-edit-title-${username}`}>Kelola pengguna @{username}</h2><p>Setiap perubahan administratif memerlukan PIN administrator dan akan mencabut sesi serta otorisasi sensitif pengguna target.</p>
     <form className="action-form" onSubmit={(event) => { event.preventDefault(); void mutate("update"); }}>
-      <label className="native-select-field"><span>Pengguna</span><select className="native-select" value={username} onChange={(event) => setUsername(event.target.value)}>{users.map((user) => <option key={user.username} value={user.username}>{user.display_name} (@{user.username})</option>)}</select></label>
       <NativeInput label="Nama tampilan" value={displayName} onChange={(event) => setDisplayName(event.target.value)} disabled={pending} required autoComplete="name" />
-      <label className="native-select-field"><span>Role</span><select className="native-select" value={role} onChange={(event) => setRole(event.target.value as Role)} disabled={pending}><option value="Viewer">Viewer</option><option value="Operator">Operator</option><option value="Administrator">Administrator</option></select></label>
+      <label className="native-select-field"><span>Role</span><select className="native-select" value={role} onChange={(event) => setRole(event.target.value as Role)} disabled={pending}><option value="Viewer">Viewer</option><option value="Operator">Operator</option><option value="Administrator" disabled={users.some((item) => item.enabled && item.role === "Administrator" && item.username !== username)}>Administrator</option></select></label>
       <label className="native-select-field"><span>Status</span><select className="native-select" value={enabled ? "enabled" : "disabled"} onChange={(event) => setEnabled(event.target.value === "enabled")} disabled={pending}><option value="enabled">Aktif</option><option value="disabled">Nonaktif</option></select></label>
       <NativeInput label="Password baru" type="password" value={password} onChange={(event) => setPassword(event.target.value)} disabled={pending} minLength={8} autoComplete="new-password" />
       <NativeInput label="PIN pengguna baru" type="password" inputMode="numeric" value={newPin} onChange={(event) => setNewPin(event.target.value)} disabled={pending} minLength={4} maxLength={8} autoComplete="new-password" />
@@ -136,7 +135,7 @@ function UserManagementForm({ users, onChanged }: { users: UserRecord[]; onChang
   </>;
 }
 
-function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
+function CreateUserDialog({ onCreated, administratorExists }: { onCreated: () => void; administratorExists: boolean }) {
   const dialog = useRef<HTMLDialogElement>(null);
   return <>
     <Button type="button" variant="primary" onClick={() => dialog.current?.showModal()}>Buat pengguna</Button>
@@ -144,7 +143,7 @@ function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
       <div className="native-user-dialog-content">
         <h2 id="user-create-title">Buat pengguna</h2>
         <p>Buat identitas RadMon terautentikasi. Viewer hanya dapat membaca; izin Operator dan Administrator tetap ditegakkan oleh backend.</p>
-        <CreateUserForm onCreated={onCreated} onDone={() => dialog.current?.close()} />
+         <CreateUserForm onCreated={onCreated} onDone={() => dialog.current?.close()} administratorExists={administratorExists} />
         <form method="dialog" className="form-actions dialog-close-row"><button type="submit" className="native-dialog-close">Tutup</button></form>
       </div>
     </dialog>
@@ -174,7 +173,8 @@ export function UsersPage() {
     };
   }, [items]);
 
-  const createUserAction = <CreateUserDialog onCreated={() => void load()} />;
+  const activeAdministratorExists = Boolean(items?.some((user) => user.enabled && user.role === "Administrator"));
+  const createUserAction = <CreateUserDialog onCreated={() => void load()} administratorExists={activeAdministratorExists} />;
 
   return (
     <div className="page-stack">
@@ -195,12 +195,9 @@ export function UsersPage() {
 
           <PageSection title="Direktori pengguna" description="Role dan status akun ditampilkan tanpa material password atau PIN.">
             <ResponsiveDataView
-              desktop={<UserTable users={items} />}
-              mobile={<UserCards users={items} />}
+              desktop={<UserTable users={items} onChanged={() => void load()} />}
+              mobile={<UserCards users={items} onChanged={() => void load()} />}
             />
-          </PageSection>
-          <PageSection title="Administrasi pengguna" description="Akun administrator aktif terakhir dan akun yang sedang dipakai dilindungi dari lockout.">
-            <UserManagementForm users={items} onChanged={() => void load()} />
           </PageSection>
         </>
       )}

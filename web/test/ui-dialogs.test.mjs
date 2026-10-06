@@ -6,7 +6,7 @@ const read = (path) => readFile(new URL(path, import.meta.url), "utf8");
 
 test("station create is permission gated in a dialog and sample values never submit", async () => {
   const page = await read("../src/pages/StationsPage.tsx");
-  assert.match(page, /user\.role !== "Viewer"[\s\S]*?Tambah station/);
+  assert.match(page, /user\.role !== "Viewer"[\s\S]*?Tambah stasiun/);
   assert.match(page, /data-testid="station-create-dialog"/);
   assert.match(page, /createDialog\.current\?\.showModal\(\)/);
   assert.match(page, /onClick=\{fillExample\}/);
@@ -28,6 +28,34 @@ test("user create, edit, and destructive delete confirmation use separate dialog
   assert.match(actions, /role,\s*password,/);
   assert.match(page, /display_name: displayName, role \}\)/);
   assert.match(page, /method: "PATCH"/);
+  assert.match(page, /<Table.Head>Aksi<\/Table.Head>/);
+  assert.doesNotMatch(page, /PageSection title="Administrasi pengguna"/);
+  assert.match(page, /<Button type="button" variant="secondary" onClick=\{\(\) => dialog\.current\?\.showModal\(\)\}>Edit<\/Button>/);
+  assert.match(page, /users\.some\(\(item\) => item\.enabled && item\.role === "Administrator"/);
+  assert.match(actions, /administratorExists && role === "Administrator"/);
+});
+
+test("stations header owns the create dialog and history uses one fixed searchable station selector", async () => {
+  const [stations, history] = await Promise.all([read("../src/pages/StationsPage.tsx"), read("../src/pages/HistoryPage.tsx")]);
+  assert.match(stations, /title="Detail stasiun"[\s\S]*?action=\{user && user\.role !== "Viewer" \? <Button[\s\S]*?Tambah stasiun/);
+  assert.doesNotMatch(stations, /Stasiun pusat/);
+  assert.match(stations, /data-testid="station-create-dialog"/);
+  assert.doesNotMatch(history, /Rentang|history-range-select|<Select/);
+  assert.match(history, /const HISTORY_LIMIT = 240/);
+  assert.match(history, /history-station-combobox/);
+  assert.match(history, /history-prev[\s\S]*?history-next/);
+});
+
+test("operator PIC is display-name based and read-only while Administrator can edit", async () => {
+  const [actions, alarms, api] = await Promise.all([
+    read("../src/Actions.tsx"),
+    read("../src/pages/AlarmsPage.tsx"),
+    read("../../radmon/secure_api.py"),
+  ]);
+  assert.match(actions, /useSession\(\)/);
+  assert.match(actions, /readOnly=\{!canEditPic\}/);
+  assert.match(alarms, /readOnly=\{user\.role !== "Administrator"\}/);
+  assert.match(api, /payload\.pic or ""\)\.strip\(\) or identity\.display_name/);
 });
 
 test("page routes for alarms, stations, and users remain wired to their UI", async () => {

@@ -58,6 +58,19 @@ export type ReportRequest = {
   end_at: string;
 };
 
+export type ArchiveExportJob = {
+  job_id: string;
+  selection: string;
+  selection_value: string | null;
+  status: "queued" | "running" | "completed" | "failed";
+  phase?: string;
+  partitions_total: number;
+  partitions_read: number;
+  rows_read: number;
+  bytes_written: number;
+  error: string | null;
+};
+
 const inFlightReads = new Map<string, Promise<unknown>>();
 
 async function performApi<T>(path: string, init?: RequestInit): Promise<T> {
@@ -140,6 +153,17 @@ export function reportDownloadUrl(jobId: string): string {
 
 export function reportPreviewUrl(jobId: string): string {
   return `/api/v1/control/reports/${encodeURIComponent(jobId)}/preview`;
+}
+
+export function requestArchiveExport(selection: "single" | "year" | "all", value: string | null): Promise<ArchiveExportJob> {
+  return api<ArchiveExportJob>("/api/v1/control/archive-exports", {
+    method: "POST",
+    body: JSON.stringify({ selection, value }),
+  });
+}
+
+export function archiveExportDownloadUrl(jobId: string): string {
+  return `/api/v1/control/archive-exports/${encodeURIComponent(jobId)}/download`;
 }
 
 export function subscribeWebEvents(onEvent: (event: WebEvent) => void): () => void {
