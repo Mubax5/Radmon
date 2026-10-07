@@ -176,6 +176,19 @@ class AlarmControlService:
             if not ok:
                 raise RuntimeError('source menolak response; alarm mungkin sudah ditangani')
             after = self.mirror.mark_acknowledged(source_id, serid, event_time, acknowledged_at=at, pic=pic.strip(), action=action.strip(), note=note.strip())
+            policy = getattr(self, "policy", None)
+            if policy is not None:
+                try:
+                    # A source-only UI row may have an exact policy match that
+                    # has not been linked by the collector yet. Reconcile from
+                    # the confirmed local i_flag evidence now so the policy
+                    # cannot reappear as a second active action after reload.
+                    policy.reconcile_source_handled(source_id)
+                except Exception as exc:
+                    self.audit.record(
+                        'ALARM_POLICY_SOURCE_RECONCILIATION_PENDING', identity,
+                        'alarm', target_id, success=False, reason=str(exc), source=source_id,
+                    )
         except Exception as exc:
             self.audit.record('ALARM_ACK', identity, 'alarm', target_id, before=before, success=False, reason=str(exc), source=source_id)
             raise

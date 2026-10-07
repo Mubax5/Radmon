@@ -26,6 +26,8 @@ def setup(tmp_path):
             return True
 
     control = AlarmControlService(security, mirror, AuditTrail(security), remote_factory=lambda _: Remote())
+    control.policy_store = policy.store
+    control.policy = policy
     app = FastAPI()
     attach_secure_routes(app, security=security, audit=AuditTrail(security), alarm_mirror=mirror, alarm_control=control, device_admin=None, alarm_policy=policy)
     attach_web_api_routes(app, security=security, repository=None, alarm_mirror=mirror, alarm_policy=policy)
@@ -104,6 +106,13 @@ def test_exact_correlation_without_dispatch_link_keeps_source_route(tmp_path):
     policy.evaluate_live({'serid': 5702, '_remote_serid': 52, 'dtom': at, 'doserate': 76.82, 'warnlevel': 23, 'alarmlevel': 25}, source_id='gd52')
     rows = client.get('/api/v1/web/active-alarms').json()['items']
     assert len(rows) == 1 and rows[0]['event_type'] == 'source_alarm'
+    result = client.post('/api/v1/control/alarms/gd52/5702/ack', json={
+        'event_time': at.isoformat(), 'pin': '1357', 'action': 'Konfirmasi',
+        'pic': 'Operator', 'note': 'checked',
+    })
+    assert result.status_code == 200
+    assert policy.list_events(active_only=True) == []
+    assert client.get('/api/v1/web/active-alarms').json()['items'] == []
 
 
 def test_unlinked_policy_source_correlation_normalizes_source_clock_format(tmp_path):
