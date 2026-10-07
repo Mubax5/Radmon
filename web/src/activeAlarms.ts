@@ -27,6 +27,7 @@ export function alarmResponseRequest(event: ActiveAlarm, fields: { pin: string; 
 
 export function confirmAlarmResponse(event: ActiveAlarm, result: { status?: string; is_active?: boolean; source_i_flag?: number; acknowledged_at?: string }) {
   if (event.event_type === "source_alarm") {
-    if (result.is_active !== false || result.source_i_flag !== 1 || !result.acknowledged_at) throw new Error("Sumber belum mengonfirmasi alarm tidak aktif; muat ulang status.");
+    const alreadyHandled = result.status === "ALREADY_HANDLED";
+    if (result.is_active !== false || result.source_i_flag !== 1 || (!result.acknowledged_at && !alreadyHandled)) throw new Error("Sumber belum mengonfirmasi alarm tidak aktif; muat ulang status.");
   } else if (result.status !== "RESPONDED") throw new Error("Respons policy belum terkonfirmasi; muat ulang status.");
 }

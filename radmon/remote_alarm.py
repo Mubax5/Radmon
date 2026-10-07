@@ -75,15 +75,58 @@ class RemoteAlarmMirror:
             row = connection.execute('\nSELECT source_id, serid, remote_serid, event_time, level, measured_value,\n       threshold, hit_count, acknowledged_at, pic, action, note,\n       notification_sent_at, is_active, source_i_flag\nFROM remote_alarm_state\nWHERE source_id = ? AND serid = ? AND event_time = ?\n', (source_id, int(serid), event_time.isoformat())).fetchone()
         return self._row(row) if row else None
 
-    def mark_acknowledged(self, source_id: str, serid: int, event_time: datetime, *, acknowledged_at: datetime, pic: str, action: str, note: str):
+    def mark_acknowledged(self, source_id: str, serid: int, event_time: datetime, *, acknowledged_at: datetime, pic: str, action: str, note: str, allow_inactive: bool = False):
         self._ensure_active_schema()
         with self.store._connection() as connection:
-            cursor = connection.execute('\nUPDATE remote_alarm_state\nSET acknowledged_at = ?, pic = ?, action = ?, note = ?, is_active = 0, source_i_flag = 1\nWHERE source_id = ? AND serid = ? AND event_time = ? AND is_active = 1\n', (acknowledged_at.isoformat(), pic, action, note, source_id, int(serid), event_time.isoformat()))
+            active_clause = '' if allow_inactive else ' AND is_active = 1'
+            cursor = connection.execute('\nUPDATE remote_alarm_state\nSET acknowledged_at = ?, pic = ?, action = ?, note = ?, is_active = 0, source_i_flag = 1\nWHERE source_id = ? AND serid = ? AND event_time = ?' + active_clause + '\n', (acknowledged_at.isoformat(), pic, action, note, source_id, int(serid), event_time.isoformat()))
             if cursor.rowcount != 1:
                 raise RuntimeError('alarm sudah ditangani atau tidak ditemukan')
         item = self.get( source_id, serid, event_time)
         if item is None:
             raise RuntimeError('alarm tidak ditemukan setelah response')
+        return item
+
+    def mark_source_handled(
+        self,
+        source_id: str,
+        serid: int,
+        event_time: datetime,
+        *,
+        acknowledged_at: datetime | None,
+        pic: str | None,
+        note: str | None,
+    ):
+        """Record exact source evidence without claiming a new local write.
+
+        This is used for an idempotent response when the source row was already
+        ``i_flag=1``. Existing operator metadata is preserved unless the source
+        read-back supplies the corresponding field.
+        """
+        self._ensure_active_schema()
+        with self.store._connection() as connection:
+            cursor = connection.execute(
+                """UPDATE remote_alarm_state
+SET acknowledged_at = COALESCE(?, acknowledged_at),
+    pic = COALESCE(?, pic),
+    note = COALESCE(?, note),
+    is_active = 0,
+    source_i_flag = 1
+WHERE source_id = ? AND serid = ? AND event_time = ?""",
+                (
+                    acknowledged_at.isoformat() if isinstance(acknowledged_at, datetime) else None,
+                    pic,
+                    note,
+                    source_id,
+                    int(serid),
+                    event_time.isoformat(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError('alarm tidak ditemukan setelah response sumber')
+        item = self.get(source_id, serid, event_time)
+        if item is None or item.get('is_active') or item.get('source_i_flag') != 1:
+            raise RuntimeError('status source alarm tidak terkonfirmasi di central')
         return item
 
     def mark_notification_sent(self, source_id: str, serid: int, event_time: datetime, at: datetime) -> None:
@@ -159,23 +202,52 @@ class AlarmControlService:
         before = self.mirror.get(source_id, serid, event_time)
         if before is None:
             raise RuntimeError('alarm tidak ditemukan')
-        if before.get('is_active') is False:
+        if before.get('is_active') is False and before.get('source_i_flag') != 1:
             raise RuntimeError('alarm sudah ditangani')
         remote_serid = int(before.get('remote_serid') or serid)
         at = self.now()
         target_id = f'{source_id}:{serid}:{event_time.isoformat()}'
         try:
             remote = self.remote_factory(source_id)
-            responder = getattr(remote, 'respond_alarm', None)
-            if callable(responder):
-                ok = bool(responder(remote_serid, event_time, action=action.strip(), pic=pic.strip(), note=note.strip(), at=at))
-            elif not isinstance(remote, RemoteMariaDBSource) and callable(getattr(remote, 'ack_legacy', None)):
-                ok = bool(remote.ack_legacy(remote_serid, event_time, action=action.strip(), pic=pic.strip(), note=note.strip(), at=at))
+            detailed_responder = getattr(remote, 'respond_alarm_result', None)
+            source_response = None
+            if callable(detailed_responder):
+                source_response = detailed_responder(
+                    remote_serid, event_time, action=action.strip(), pic=pic.strip(), note=note.strip(), at=at,
+                )
+                ok = bool(source_response)
             else:
-                raise RuntimeError('source tidak mendukung response i_flag')
+                responder = getattr(remote, 'respond_alarm', None)
+                if callable(responder):
+                    ok = bool(responder(remote_serid, event_time, action=action.strip(), pic=pic.strip(), note=note.strip(), at=at))
+                elif not isinstance(remote, RemoteMariaDBSource) and callable(getattr(remote, 'ack_legacy', None)):
+                    ok = bool(remote.ack_legacy(remote_serid, event_time, action=action.strip(), pic=pic.strip(), note=note.strip(), at=at))
+                else:
+                    raise RuntimeError('source tidak mendukung response i_flag')
             if not ok:
-                raise RuntimeError('source menolak response; alarm mungkin sudah ditangani')
-            after = self.mirror.mark_acknowledged(source_id, serid, event_time, acknowledged_at=at, pic=pic.strip(), action=action.strip(), note=note.strip())
+                status = getattr(source_response, 'status', 'ROW_MISMATCH')
+                raise RuntimeError(f'source menolak response ({status}); alarm tetap aktif')
+            source_status = getattr(source_response, 'status', 'CONFIRMED')
+            source_acknowledged_at = getattr(source_response, 'source_i_op', None) or at
+            if source_status == 'ALREADY_HANDLED':
+                after = self.mirror.mark_source_handled(
+                    source_id, serid, event_time,
+                    acknowledged_at=getattr(source_response, 'source_i_op', None),
+                    pic=getattr(source_response, 'source_pic', None),
+                    note=getattr(source_response, 'source_note', None),
+                )
+            elif not isinstance(remote, RemoteMariaDBSource) and callable(getattr(remote, 'ack_legacy', None)):
+                # Kept for non-production compatibility adapters. The production
+                # RemoteMariaDBSource always takes the i_flag read-back path.
+                after = self.mirror.mark_acknowledged(source_id, serid, event_time, acknowledged_at=at, pic=pic.strip(), action=action.strip(), note=note.strip())
+            else:
+                after = self.mirror.mark_acknowledged(
+                    source_id, serid, event_time,
+                    acknowledged_at=source_acknowledged_at,
+                    pic=pic.strip(), action=action.strip(), note=note.strip(),
+                    allow_inactive=source_response is not None,
+                )
+            after['source_response_status'] = source_status
             policy = getattr(self, "policy", None)
             if policy is not None:
                 try:
@@ -205,6 +277,11 @@ class AlarmControlService:
 
     def silence_source_row(self, source_id: str, serid: int, event_time: datetime, *, action: str, pic: str, reason: str) -> bool:
         remote = self.remote_factory(str(source_id))
+        detailed_responder = getattr(remote, "respond_alarm_result", None)
+        if callable(detailed_responder):
+            return bool(detailed_responder(
+                int(serid), event_time, action=action, pic=pic, note=reason, at=self.now(),
+            ))
         responder = getattr(remote, "respond_alarm", None)
         if not callable(responder):
             raise RuntimeError("source tidak mendukung alarm response")

@@ -13,10 +13,25 @@ from radmon.security import SecurityStore
 
 def test_source_silence_sql_sets_i_flag_and_preserves_ack():
     class Cursor:
-        rowcount = 1
+        def __init__(self):
+            self.rowcount = 0
+            self.sqls = []
+            self.row = [5201, datetime(2026, 9, 11, 10, 0), 0, 0, None, None, None]
+            self.result = None
         def __enter__(self): return self
         def __exit__(self, *args): return False
-        def execute(self, sql, params=()): self.sql, self.params = sql, params
+        def execute(self, sql, params=()):
+            self.sqls.append(sql)
+            normalized = " ".join(sql.lower().split())
+            if normalized.startswith("select"):
+                self.result = tuple(self.row)
+            elif normalized.startswith("update"):
+                self.row[3] = 1
+                self.row[4] = params[0]
+                self.row[5] = params[1]
+                self.row[6] = params[2]
+                self.rowcount = 1
+        def fetchone(self): return self.result
 
     class Connection:
         def __init__(self): self.c = Cursor()
@@ -38,7 +53,7 @@ def test_source_silence_sql_sets_i_flag_and_preserves_ack():
         note="Calibration",
         at=datetime(2026, 9, 11, 10, 1),
     )
-    sql = " ".join(db.c.sql.lower().split())
+    sql = " ".join(next(item for item in db.c.sqls if item.lower().lstrip().startswith("update")).lower().split())
     assert "i_flag = 1" in sql
     assert "ack =" not in sql
 

@@ -73,7 +73,7 @@ Workflow operasional:
 4. Isi Action, PIC, Reason/Note, dan PIN.
 5. Backend memvalidasi session, role, PIN, serta state event sebelum source write-through.
 
-Source response mengisi `i_op`, `pic`, `note`, dan `i_flag=1`; legacy `ack` tidak diubah RadMon. Bila source offline, central menyimpan retry dengan backoff terbatas dan operator tidak perlu membuat response duplikat.
+Source response memilih exact row `(serid, dtoa)`, mengisi `i_op`, `pic`, `note`, dan `i_flag=1`; legacy `ack` tidak diubah RadMon. Central membaca kembali row source yang sama setelah commit sebelum menampilkan sukses. Bila row sudah `i_flag=1`, hasilnya diberi label sudah ditangani sebelumnya; bila source offline, timeout, row berubah, atau read-back gagal, alarm tetap ditampilkan sebagai error aktif. Central menyimpan retry dengan backoff terbatas dan operator tidak perlu membuat response duplikat. SQL tidak membuktikan bunyi buzzer fisik sudah berhenti; acceptance hardware harus dilakukan saat commissioning.
 
 ## Alarm Policy
 

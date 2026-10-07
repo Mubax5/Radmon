@@ -96,12 +96,14 @@ function SourceAlarmResponse({ event, onChanged }: { event: PolicyEvent; onChang
     setPending(true);
     setFeedback("");
     try {
-      const result = await api<{ is_active?: boolean; source_i_flag?: number; acknowledged_at?: string }>(`/api/v1/control/alarms/${encodeURIComponent(event.source_id)}/${event.serid}/ack`, {
+      const result = await api<{ status?: string; is_active?: boolean; source_i_flag?: number; acknowledged_at?: string }>(`/api/v1/control/alarms/${encodeURIComponent(event.source_id)}/${event.serid}/ack`, {
         method: "POST",
         body: JSON.stringify({ event_time: event.event_time, action, pic, note, pin }),
       });
-      if (result.is_active !== false || result.source_i_flag !== 1 || !result.acknowledged_at) throw new Error("Sumber belum mengonfirmasi perubahan i_flag; alarm tetap aktif.");
-      setFeedback("Sumber mengonfirmasi alarm ditangani (i_flag diperbarui).");
+      if (result.is_active !== false || result.source_i_flag !== 1 || (!result.acknowledged_at && result.status !== "ALREADY_HANDLED")) throw new Error("Sumber belum mengonfirmasi perubahan i_flag; alarm tetap aktif.");
+      setFeedback(result.status === "ALREADY_HANDLED"
+        ? "Alarm sumber sudah ditangani sebelumnya; i_flag=1 terkonfirmasi."
+        : "Sumber mengonfirmasi alarm ditangani (i_flag diperbarui ke 1).");
       dialog.current?.close();
       onChanged();
     } catch (error) {
@@ -116,14 +118,14 @@ function SourceAlarmResponse({ event, onChanged }: { event: PolicyEvent; onChang
     {feedback ? <span role="status">{feedback}</span> : null}
     <dialog ref={dialog} className="native-user-dialog" aria-label={`Respons alarm sumber SERID ${event.serid}`}>
       <form className="native-user-dialog-content action-form" onSubmit={(e) => void submit(e)}>
-        <h2>Respons alarm di sumber</h2>
-        <p>Operasi ini memperbarui flag alarm pada sumber LAN dan memerlukan PIN operator.</p>
+        <h2>Matikan alarm di sumber</h2>
+        <p>Operasi ini menulis i_op, PIC, catatan, dan i_flag=1 pada baris sumber yang dipilih. Kolom ack legacy tidak diubah; PIN operator diperlukan.</p>
         <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} disabled={pending} required />
         <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} readOnly={user.role !== "Administrator"} disabled={pending} required />
         <Input label="Catatan" value={note} onChange={(e) => setNote(e.target.value)} disabled={pending} />
         <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending} required />
         {feedback ? <p role="alert">{feedback}</p> : null}
-        <div className="form-actions"><Button type="submit" variant="primary" disabled={pending || !pic || !pin}>{pending ? "Memperbarui sumber…" : "Kirim respons sumber"}</Button><Button type="button" variant="secondary" disabled={pending} onClick={() => dialog.current?.close()}>Batal</Button></div>
+        <div className="form-actions"><Button type="submit" variant="primary" disabled={pending || !pic || !pin}>{pending ? "Memperbarui sumber…" : "Matikan alarm sumber"}</Button><Button type="button" variant="secondary" disabled={pending} onClick={() => dialog.current?.close()}>Batal</Button></div>
       </form>
     </dialog>
   </>;

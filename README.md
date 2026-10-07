@@ -153,7 +153,7 @@ Dataset developer tetap mencakup detector contoh **5202 / IS-1 Koridor** untuk r
 
 Operator-facing alarm dikendalikan policy restart-safe di central storage; raw source alarm tetap menjadi evidence. Burst HIGH dapat surface maksimum tiga ALARM dalam window lima menit yang di-anchor ke ALARM #1. ALARM #3 mengaktifkan `RETRIGGER_LOCKED`, dan hanya kondisi `NORMAL` (`dose < LOW/WARN`) yang mereset counter/lock. `ALERT` tidak mereset episode.
 
-Administrator/Operator dapat melakukan Response/Silence dan timed suppression 1 menit sampai 24 jam. Source write-through memakai kontrak legacy:
+Administrator/Operator dapat melakukan Response/Silence dan timed suppression 1 menit sampai 24 jam. Source write-through memakai kontrak legacy pada satu row alarm yang dipilih:
 
 ```sql
 UPDATE alarm
@@ -161,7 +161,7 @@ SET i_op = ?, pic = ?, note = ?, i_flag = 1
 WHERE serid = ? AND dtoa = ? AND i_flag = 0
 ```
 
-Kolom `ack` dipertahankan. Jika source sedang gagal, silence/response diretry dengan backoff `5s, 15s, 30s, 60s` dan maksimum 25 pending row per live cycle.
+Kolom `ack` dipertahankan. Backend mengunci identitas `(serid, dtoa)`, compare-and-set `i_flag=0`, commit, lalu membaca kembali row yang sama dari source. Hasil `ALREADY_HANDLED` berarti row exact sudah `i_flag=1`; hasil source timeout, row mismatch, commit, atau read-back yang gagal tetap error aktif dan tidak menjadi sukses lokal. Jika source sedang gagal, silence/response diretry dengan backoff `5s, 15s, 30s, 60s` dan maksimum 25 pending row per live cycle. SQL/read-back membuktikan state database, bukan penerimaan bunyi buzzer fisik; bunyi hardware tetap memerlukan commissioning operator di detector.
 
 ## Reports dan quarterly archive
 

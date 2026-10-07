@@ -202,6 +202,28 @@ class BackfillPullResult:
     checkpoint: datetime | None = None
     error: str | None = None
 
+
+@dataclass(frozen=True, slots=True)
+class SourceAlarmResponse:
+    """Truthful result of an exact source alarm response attempt."""
+
+    status: str
+    source_serid: int | None = None
+    source_event_time: datetime | None = None
+    source_ack: int | None = None
+    source_i_flag: int | None = None
+    source_i_op: datetime | None = None
+    source_pic: str | None = None
+    source_note: str | None = None
+
+    @property
+    def confirmed(self) -> bool:
+        return self.status in {"CONFIRMED", "ALREADY_HANDLED"}
+
+    def __bool__(self) -> bool:
+        # Policy/suppression dispatchers use bool(respond_alarm(...)).
+        return self.confirmed
+
 def parse_lan_sources() -> list[LanSource]:
     raw = os.getenv("RADMON_LAN_SOURCES", "").strip()
     if not raw:
@@ -542,20 +564,104 @@ ORDER BY d.serid
             raise RuntimeError('station source hilang setelah update')
         return current
 
-    def respond_alarm(self, serid: int, dtoa: datetime, *, action: str, pic: str, note: str, at: datetime) -> bool:
-        source_note = f'[{action.strip()}] {note.strip()}'.strip()[:255]
+    @staticmethod
+    def _source_alarm_response(row: dict[str, Any] | None, status: str) -> SourceAlarmResponse:
+        if row is None:
+            return SourceAlarmResponse(status)
+        return SourceAlarmResponse(
+            status,
+            source_serid=int(row["serid"]) if row.get("serid") is not None else None,
+            source_event_time=row.get("dtoa") if isinstance(row.get("dtoa"), datetime) else None,
+            source_ack=int(row["ack"]) if row.get("ack") is not None else None,
+            source_i_flag=int(row["i_flag"]) if row.get("i_flag") is not None else None,
+            source_i_op=row.get("i_op") if isinstance(row.get("i_op"), datetime) else None,
+            source_pic=row.get("pic"),
+            source_note=row.get("note"),
+        )
+
+    @classmethod
+    def _read_source_alarm_row(cls, cursor, serid: int, dtoa: datetime, *, for_update: bool = False) -> dict[str, Any] | None:
+        sql = """SELECT serid, dtoa, ack, i_flag, i_op, pic, note
+FROM alarm WHERE serid = ? AND dtoa = ?"""
+        if for_update:
+            sql += " FOR UPDATE"
+        cursor.execute(sql, (int(serid), dtoa))
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        keys = ("serid", "dtoa", "ack", "i_flag", "i_op", "pic", "note")
+        return dict(row) if isinstance(row, dict) else dict(zip(keys, row))
+
+    def respond_alarm_result(self, serid: int, dtoa: datetime, *, action: str, pic: str, note: str, at: datetime) -> SourceAlarmResponse:
+        """Write one exact source row and prove the committed result.
+
+        The source schema uses ``i_flag`` as the active/handled latch. ``ack``
+        is a separate legacy field and is intentionally never written here.
+        """
+        if not isinstance(dtoa, datetime):
+            raise ValueError("waktu alarm sumber tidak valid")
+        source_pic = str(pic or "").strip()
+        if not source_pic:
+            raise ValueError("PIC wajib diisi")
+        if len(source_pic) > 100:
+            raise ValueError("PIC sumber maksimal 100 karakter")
+        source_note = f"[{str(action or '').strip()}] {str(note or '').strip()}".strip()[:255]
         connection = self._connection()
+        committed = False
         try:
             with connection.cursor() as cursor:
-                cursor.execute('\nUPDATE alarm\nSET i_op = ?, pic = ?, note = ?, i_flag = 1\nWHERE serid = ? AND dtoa = ? AND i_flag = 0\n', (at, pic.strip(), source_note, int(serid), dtoa))
-                changed = int(getattr(cursor, 'rowcount', 0))
+                before = self._read_source_alarm_row(cursor, serid, dtoa, for_update=True)
+                if before is None:
+                    connection.rollback()
+                    return SourceAlarmResponse("NOT_FOUND")
+                if int(before.get("i_flag") or 0) == 1:
+                    connection.rollback()
+                    return self._source_alarm_response(before, "ALREADY_HANDLED")
+                if int(before.get("i_flag") or 0) != 0:
+                    connection.rollback()
+                    return self._source_alarm_response(before, "ROW_MISMATCH")
+
+                cursor.execute(
+                    """UPDATE alarm
+SET i_op = ?, pic = ?, note = ?, i_flag = 1
+WHERE serid = ? AND dtoa = ? AND i_flag = 0""",
+                    (at, source_pic, source_note, int(serid), dtoa),
+                )
+                changed = int(getattr(cursor, "rowcount", 0))
+                if changed != 1:
+                    connection.rollback()
+                    # A concurrent operator may have handled this exact row.
+                    after_race = self._read_source_alarm_row(cursor, serid, dtoa)
+                    if after_race is not None and int(after_race.get("i_flag") or 0) == 1:
+                        return self._source_alarm_response(after_race, "ALREADY_HANDLED")
+                    return self._source_alarm_response(after_race, "ROW_MISMATCH")
+
             connection.commit()
-            return changed == 1
+            committed = True
+
+            with connection.cursor() as cursor:
+                after = self._read_source_alarm_row(cursor, serid, dtoa)
+            if after is None or int(after.get("i_flag") or 0) != 1:
+                raise RuntimeError("source response committed but i_flag read-back is not 1")
+            if after.get("ack") != before.get("ack"):
+                raise RuntimeError("source response changed legacy ack unexpectedly")
+            if after.get("i_op") is None or after.get("pic") is None:
+                raise RuntimeError("source response read-back is missing i_op or pic")
+            return self._source_alarm_response(after, "CONFIRMED")
         except Exception:
-            connection.rollback()
+            if not committed:
+                try:
+                    connection.rollback()
+                except Exception:
+                    pass
             raise
         finally:
             connection.close()
+
+    def respond_alarm(self, serid: int, dtoa: datetime, *, action: str, pic: str, note: str, at: datetime) -> bool:
+        # Keep the bool adapter for policy/suppression callers while the
+        # operator path consumes the detailed status above.
+        return bool(self.respond_alarm_result(serid, dtoa, action=action, pic=pic, note=note, at=at))
 
     def alarm_states(self, limit: int=2000) -> list[dict[str, Any]]:
         connection = self._connection()

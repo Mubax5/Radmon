@@ -133,6 +133,8 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
   const selectedEventId = active.length === 1
     ? active[0].event_id
     : active.some((item) => item.event_id === eventId) ? eventId : "";
+  const selectedEvent = active.find((item) => item.event_id === selectedEventId);
+  const selectedSourceAlarm = selectedEvent?.event_type === "source_alarm";
 
   function resetResponse() {
     setEventId("");
@@ -181,7 +183,14 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
         body: JSON.stringify(request.body),
       });
       confirmAlarmResponse(selected, result);
-      setFeedback({ kind: "ok", text: "Respons alarm tersimpan." });
+      setFeedback({
+        kind: "ok",
+        text: result.status === "ALREADY_HANDLED"
+          ? "Alarm sumber sudah ditangani sebelumnya; status i_flag=1 terkonfirmasi."
+          : selected.event_type === "source_alarm"
+            ? "Alarm sumber dinonaktifkan: i_flag=1 terkonfirmasi dari sumber."
+            : "Respons alarm tersimpan.",
+      });
       resetResponse();
       setRespondOpen(false);
       onChanged();
@@ -257,9 +266,11 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
           <Dialog className="radmon-dialog mobile-sheet-dialog" data-testid="alarm-response-dialog">
             <div className="mobile-sheet-content">
               <div className="mobile-sheet-handle" aria-hidden />
-              <Dialog.Title>Respons alarm</Dialog.Title>
+              <Dialog.Title>{selectedSourceAlarm ? "Matikan alarm sumber" : "Respons alarm"}</Dialog.Title>
               <Dialog.Description>
-                PIN operator diperlukan untuk mencatat respons alarm.
+                {selectedSourceAlarm
+                  ? "Aksi ini menulis i_op, PIC, catatan, dan i_flag=1 pada baris alarm sumber yang dipilih. ack legacy tidak diubah."
+                  : "PIN operator diperlukan untuk mencatat respons alarm."}
               </Dialog.Description>
               <form className="action-form dialog-form" onSubmit={respond}>
                 <NativeSelect

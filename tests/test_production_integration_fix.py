@@ -181,11 +181,12 @@ def test_alarm_response_is_one_step_and_uses_source_flag_path(tmp_path):
 
 def test_remote_alarm_response_sql_sets_i_flag_without_touching_ack():
     class Cursor:
-        rowcount = 1
-
         def __init__(self):
-            self.sql = ""
+            self.rowcount = 0
+            self.sqls = []
             self.params = None
+            self.row = [5201, datetime(2026, 9, 10, 4, 30, 0), 0, 0, None, None, None]
+            self.result = None
 
         def __enter__(self):
             return self
@@ -194,8 +195,20 @@ def test_remote_alarm_response_sql_sets_i_flag_without_touching_ack():
             return False
 
         def execute(self, sql, params=()):
-            self.sql = sql
+            self.sqls.append(sql)
             self.params = params
+            normalized = " ".join(sql.lower().split())
+            if normalized.startswith("select"):
+                self.result = tuple(self.row)
+            elif normalized.startswith("update"):
+                self.row[3] = 1
+                self.row[4] = params[0]
+                self.row[5] = params[1]
+                self.row[6] = params[2]
+                self.rowcount = 1
+
+        def fetchone(self):
+            return self.result
 
     class Connection:
         def __init__(self):
@@ -227,7 +240,7 @@ def test_remote_alarm_response_sql_sets_i_flag_without_touching_ack():
         at=datetime(2026, 9, 10, 4, 31, 0),
     )
     assert ok is True
-    normalized = " ".join(connection.cursor_obj.sql.split()).lower()
+    normalized = " ".join(next(item for item in connection.cursor_obj.sqls if item.lower().lstrip().startswith("update")).split()).lower()
     assert "i_flag = 1" in normalized
     assert "ack =" not in normalized
     assert connection.committed is True
