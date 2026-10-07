@@ -98,7 +98,9 @@ def test_api_errors_surface_backend_detail_for_401_403_409():
 
 def test_alarm_response_posts_pin_to_real_event_endpoint():
     actions = read("Actions.tsx")
-    assert "/api/v1/control/alarm-events/${encodeURIComponent(selectedEventId)}/response" in actions
+    response = read("activeAlarms.ts")
+    assert "/api/v1/control/alarm-events/${encodeURIComponent(event.event_id)}/response" in response
+    assert "alarmResponseRequest(selected" in actions
     assert '"pin, action, pic, reason"' in actions or "{ pin, action, pic, reason }" in actions
     # Tombol kirim terkunci sampai event + PIC + alasan + PIN terisi.
     assert "!selectedEventId || !pic || !reason || !pin" in actions
