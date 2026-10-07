@@ -7,6 +7,7 @@ import { formatDoseValue, formatPolicyMeasurement } from "../format";
 import { describeLifecycle, kindLabel, statusLabel } from "./alarmLifecycle";
 import { useWebRefresh } from "../live";
 import { useSession } from "../auth";
+import type { ActiveAlarm } from "../activeAlarms";
 import {
   ErrorCard,
   LoadingCard,
@@ -41,7 +42,7 @@ type AlarmHistoryResponse = { items: PolicyEvent[]; total: number; limit: number
 function normalizeHistory(items: PolicyEvent[]): PolicyEvent[] {
   return items.map((item) => {
     if (item.event_type === "policy_lifecycle") return item;
-    if (item.policy_event) return { ...item.policy_event, source_alarm: item, event_type: "policy_lifecycle" };
+    if (item.policy_event && (!item.is_active || item.policy_event.status === "ACTIVE")) return { ...item.policy_event, source_alarm: item, event_type: "policy_lifecycle" };
     return {
       ...item,
       event_id: `source:${item.source_id}:${item.serid}:${item.event_time}`,
@@ -208,6 +209,9 @@ export function AlarmsPage() {
   const requestedEventId = new URLSearchParams(window.location.search).get("event");
   const [soundOn, setSoundOn] = useState(false);
   const [items, setItems] = useState<PolicyEvent[] | null>(null);
+  const [activeItems, setActiveItems] = useState<ActiveAlarm[]>([]);
+  const [activeLoaded, setActiveLoaded] = useState(false);
+  const [activeError, setActiveError] = useState("");
   const [historyOffset, setHistoryOffset] = useState(0);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [suppressions, setSuppressions] = useState<Suppression[]>([]);
@@ -222,6 +226,15 @@ export function AlarmsPage() {
   const load = (offset = historyOffset) => Promise.allSettled([
     api<AlarmHistoryResponse>(`/api/v1/web/alarm-history?limit=500&offset=${offset}`),
     api<Suppression[]>("/api/v1/control/suppressions?active_only=true"),
+    api<{ items: ActiveAlarm[] }>("/api/v1/web/active-alarms").then((currentAlarms) => {
+      setActiveLoaded(true);
+      setActiveItems(currentAlarms.items);
+      setActiveError("");
+    }).catch((reason: unknown) => {
+      setActiveLoaded(true);
+      setActiveItems([]);
+      setActiveError(reason instanceof Error ? reason.message : "Tidak dapat memuat alarm aktif");
+    }),
   ])
     .then(([events, activeSuppressions]) => {
       if (events.status === "fulfilled") {
@@ -245,15 +258,12 @@ export function AlarmsPage() {
 
   const summary = useMemo(() => {
     const events = items ?? [];
-    const active = events.filter(
-      (event) => ["ALARM", "SOURCE_ALARM"].includes(String(event.kind).toUpperCase()) && String(event.status).toUpperCase() === "ACTIVE",
-    );
     const retriggerLocked = events.filter((event) => event.kind === "RETRIGGER_LOCKED").length;
     const suppressed = events.filter((event) => event.kind === "SUPPRESSED").length;
-    return { active, retriggerLocked, suppressed, total: events.length };
-  }, [items]);
+    return { active: activeItems, retriggerLocked, suppressed, total: events.length };
+  }, [items, activeItems]);
 
-  const isInitialLoading = items === null && !error;
+  const isInitialLoading = items === null && !activeLoaded && !error;
   const eventsFailedOnFirstLoad = items === null && Boolean(error);
   const enableAlarmAlerts = async () => {
     // Explicit click grants autoplay eligibility before later alarm beeps.
@@ -297,7 +307,7 @@ export function AlarmsPage() {
           </div>
         </div>
       ) : null}
-      {items ? (
+      {items || activeLoaded ? (
         <>
           <PageSection
             title="Alarm aktif"
@@ -305,12 +315,12 @@ export function AlarmsPage() {
             className="active-alarm-section"
           >
             <div className="active-alarm-list" aria-live="polite">
-              <EventCards events={summary.active} onChanged={() => void load()} />
+              {activeError ? <ErrorCard message={`Status alarm aktif tidak tersedia: ${activeError}`} /> : <EventCards events={summary.active as PolicyEvent[]} onChanged={() => void load()} />}
             </div>
           </PageSection>
 
           <div className="metric-grid alarm-summary">
-            <MetricCard label="Aktif" value={summary.active.length} badge={<Badge variant={summary.active.length ? "error" : "success"}>{summary.active.length ? "Perlu tindakan" : "Aman"}</Badge>} />
+            <MetricCard label="Aktif" value={activeError ? "—" : summary.active.length} badge={<Badge variant={activeError ? "warning" : summary.active.length ? "error" : "success"}>{activeError ? "Status tidak tersedia" : summary.active.length ? "Perlu tindakan" : "Tidak ada alarm aktif"}</Badge>} />
             <MetricCard label="Alarm ditahan sementara" value={summary.retriggerLocked} badge={<span className="cell-subtle">Menunggu pemicu baru</span>} />
             <MetricCard label="Alarm diredam" value={summary.suppressed} badge={<span className="cell-subtle">Sesuai pengaturan</span>} />
             <MetricCard label="Catatan terbaru" value={summary.total} badge={<span className="cell-subtle">Riwayat alarm</span>} />
@@ -323,13 +333,13 @@ export function AlarmsPage() {
                 <Button variant="secondary" onClick={() => void loadSuppressions()}>Muat ulang suppression</Button>
               </div>
             ) : null}
-            <AlarmOperations events={items.filter((event) => event.event_type !== "source_alarm") as (PolicyEvent & { event_id: string })[]} suppressions={suppressions} onChanged={() => void load()} initialEventId={requestedEventId} />
+            <AlarmOperations events={activeItems} activeError={activeError} suppressions={suppressions} onChanged={() => void load()} initialEventId={requestedEventId} />
           </PageSection>
 
           <PageSection title="Riwayat alarm" description="Lihat alarm alat dan perubahan pengaturan alarm berdasarkan waktu.">
             <ResponsiveDataView
-              desktop={<EventTable events={items} onChanged={() => void load()} />}
-              mobile={<EventCards events={items} onChanged={() => void load()} />}
+              desktop={<EventTable events={items ?? []} onChanged={() => void load()} />}
+              mobile={<EventCards events={items ?? []} onChanged={() => void load()} />}
             />
             <div className="form-actions" aria-label="Navigasi riwayat event">
               <span className="cell-subtle">{historyTotal === 0 ? "0 event" : `${historyOffset + 1}–${Math.min(historyOffset + (items?.length ?? 0), historyTotal)} dari ${historyTotal}`}</span>

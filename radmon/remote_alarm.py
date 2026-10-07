@@ -66,8 +66,8 @@ class RemoteAlarmMirror:
         self._ensure_active_schema()
         clause = 'WHERE is_active = 1' if active_only else ''
         with self.store._connection() as connection:
-            rows = connection.execute(f'\nSELECT source_id, serid, remote_serid, event_time, level, measured_value,\n       threshold, hit_count, acknowledged_at, pic, action, note,\n       notification_sent_at, is_active, source_i_flag\nFROM remote_alarm_state {clause}\nORDER BY event_time DESC LIMIT ?\n', (max(1, int(limit)),)).fetchall()
-        return [self._row(row) for row in rows]
+            rows = connection.execute(f'\nSELECT source_id, serid, remote_serid, event_time, level, measured_value,\n       threshold, hit_count, acknowledged_at, pic, action, note,\n       notification_sent_at, is_active, source_i_flag, policy_event_id, source_observed_at\nFROM remote_alarm_state {clause}\nORDER BY event_time DESC LIMIT ?\n', (max(1, int(limit)),)).fetchall()
+        return [dict(self._row(row[:15]), policy_event_id=row[15], source_observed_at=row[16]) for row in rows]
 
     def get(self, source_id: str, serid: int, event_time: datetime):
         self._ensure_active_schema()

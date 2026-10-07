@@ -7,10 +7,19 @@ export type PolicyAlarmEvent = {
   measured_value?: number | null;
   fresh?: boolean;
   offline?: boolean;
+  surfaced_at?: string;
+  resolved_at?: string | null;
 };
 
 export function isThresholdAlarm(event: PolicyAlarmEvent): boolean {
   return event.kind === "ALARM" && ["LOW_THRESHOLD", "HIGH_THRESHOLD"].includes(event.reason ?? "");
+}
+
+export function notificationStateLabel(event: PolicyAlarmEvent): string {
+  if (event.status === "AUTO_RESOLVED_NORMAL") return "Pulih otomatis · event telah selesai";
+  if (event.status === "RESPONDED" || event.status === "SOURCE_HANDLED") return "Ditangani · event telah selesai";
+  if (event.status !== "ACTIVE") return "Event telah selesai";
+  return "Event tercatat · lihat Alarm untuk status aktif terkini";
 }
 
 export function freshUndeliveredEvents(

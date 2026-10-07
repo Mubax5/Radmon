@@ -225,6 +225,15 @@ def attach_web_api_routes(
     ):
         return repository.history(serid, limit=limit)
 
+    @app.get("/api/v1/web/active-alarms")
+    def current_alarms(identity: UserIdentity = Depends(viewer)):
+        from .active_alarms import active_alarms
+        try:
+            items = active_alarms(alarm_mirror, alarm_policy)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {"items": items, "total": len(items), "observed_at": datetime.now().astimezone()}
+
     @app.get("/api/v1/web/alarm-history")
     def alarm_history(limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0, le=1000000), identity: UserIdentity = Depends(viewer)):
         """Paginated merged source alarm rows and central policy lifecycle."""
@@ -335,7 +344,6 @@ def attach_web_api_routes(
             source = candidates[0][1] if candidates and (len(candidates) == 1 or candidates[0][0] < candidates[1][0]) else None
             if source is not None:
                 source["policy_event"] = item
-                source["status"] = item.get("status")
             else:
                 merged.append(item)
         merged.sort(key=time_key, reverse=True)

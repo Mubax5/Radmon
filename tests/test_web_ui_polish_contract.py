@@ -131,7 +131,8 @@ def test_alarms_page_renders_full_content_on_suppression_partial_success():
     assert "Promise.allSettled" in alarms
     assert "/api/v1/web/alarm-history?limit=500" in alarms
     assert "/api/v1/control/suppressions?active_only=true" in alarms
-    assert '<AlarmOperations events={items.filter((event) => event.event_type !== "source_alarm")' in alarms
+    assert '<AlarmOperations events={activeItems}' in alarms
+    assert '/api/v1/web/active-alarms' in alarms
     # Event gagal pada load awal harus tampilkan error + retry eksplisit,
     # bukan skeleton/blank putih selamanya.
     assert "Muat ulang alarm" in alarms
@@ -165,8 +166,8 @@ def test_alarms_overlay_keeps_background_mounted_and_stacked():
 
 def test_alarms_dropdown_filled_from_active_with_empty_state():
     actions = read("Actions.tsx")
-    # Dropdown wajib diturunkan dari event ALARM ACTIVE.
-    assert "ALARM" in actions and "ACTIVE" in actions
+    # Dropdown consumes the same canonical active dataset as page count/list.
+    assert "const active = events" in actions
     assert "eventItems" in actions
     assert "Pilih event" in actions
     # Empty-state jelas saat tidak ada alarm aktif, plus hitungan saat ada.

@@ -3,17 +3,9 @@ import { Button, Dialog, Input, LayerCard } from "@cloudflare/kumo";
 import { api, type Role } from "./api";
 import { formatDoseValue } from "./format";
 import { useSession } from "./auth";
+import { alarmResponseRequest, confirmAlarmResponse, type ActiveAlarm } from "./activeAlarms";
 
-type AlarmEvent = {
-  event_id: string;
-  serid: number;
-  status: string;
-  kind: string;
-  measured_value?: number | null;
-  threshold?: number | null;
-  surfaced_at?: string;
-  reason?: string | null;
-};
+type AlarmEvent = ActiveAlarm;
 
 export type Suppression = {
   suppression_id: string;
@@ -95,15 +87,12 @@ function NativeSelect({
   );
 }
 
-export function AlarmOperations({ events, suppressions, onChanged, initialEventId }: { events: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void; initialEventId?: string | null }) {
+export function AlarmOperations({ events, suppressions, onChanged, initialEventId, activeError }: { events: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void; initialEventId?: string | null; activeError?: string }) {
   const { user } = useSession();
   const canEditPic = user?.role === "Administrator";
-  const active = useMemo(
-    () => events.filter((event) => String(event.kind).toUpperCase() === "ALARM" && String(event.status).toUpperCase() === "ACTIVE"),
-    [events],
-  );
+  const active = events;
   const eventItems = useMemo(
-    () => Object.fromEntries(active.map((item) => [item.event_id, `SERID ${item.serid} · ${item.reason === "LOW_THRESHOLD" ? "LOW" : "HIGH"} · ${formatDoseValue(item.measured_value)}`])),
+    () => Object.fromEntries(active.map((item) => [item.event_id, `SERID ${item.serid} · ${item.source_id || "Pusat"} · ${item.reason === "LOW_THRESHOLD" ? "LOW" : "HIGH"} · ${formatDoseValue(item.measured_value)} · ${item.surfaced_at || item.event_time || ""}`])),
     [active],
   );
   const [respondOpen, setRespondOpen] = useState(false);
@@ -184,10 +173,14 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
     setPending("respond");
     try {
       if (!selectedEventId) throw new Error("Pilih event alarm aktif");
-      await api(`/api/v1/control/alarm-events/${encodeURIComponent(selectedEventId)}/response`, {
+      const selected = active.find((item) => item.event_id === selectedEventId);
+      if (!selected || user?.role === "Viewer") throw new Error("Pilih alarm aktif dengan izin operator");
+      const request = alarmResponseRequest(selected, { pin, action, pic, reason });
+      const result = await api<Parameters<typeof confirmAlarmResponse>[1]>(request.route, {
         method: "POST",
-        body: JSON.stringify({ pin, action, pic, reason }),
+        body: JSON.stringify(request.body),
       });
+      confirmAlarmResponse(selected, result);
       setFeedback({ kind: "ok", text: "Respons alarm tersimpan." });
       resetResponse();
       setRespondOpen(false);
@@ -260,7 +253,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
         <h2>Respons alarm</h2>
         <p>Respons alarm aktif setelah memastikan event, PIC, action, alasan, dan PIN operator.</p>
         <Dialog.Root open={respondOpen} onOpenChange={changeRespondOpen}>
-          <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={active.length === 0 || pending !== null}>Respons alarm</Button>} />
+          <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={!user || user.role === "Viewer" || pending !== null}>Respons alarm</Button>} />
           <Dialog className="radmon-dialog mobile-sheet-dialog" data-testid="alarm-response-dialog">
             <div className="mobile-sheet-content">
               <div className="mobile-sheet-handle" aria-hidden />
@@ -273,7 +266,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
                   id="alarm-event-select"
                   name="event_id"
                   testId="alarm-event-select"
-                  label={`Event aktif (${active.length})`}
+                  label={`Event aktif (${activeError ? "?" : active.length})`}
                   value={selectedEventId}
                   onChange={(event) => setEventId(event.target.value)}
                   disabled={active.length === 0 || pending === "respond"}
@@ -286,7 +279,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
                 </NativeSelect>
                 {active.length === 0 ? (
                   <p className="cell-subtle alarm-empty-hint" role="status">
-                    Tidak ada alarm aktif saat ini. Respons tersedia setelah ada event ALARM ACTIVE.
+                    {activeError ? `Status alarm aktif tidak tersedia: ${activeError}` : "Tidak ada alarm aktif saat ini. Respons tersedia untuk alarm sumber atau policy aktif."}
                   </p>
                 ) : (
                   <p className="cell-subtle alarm-empty-hint" role="status">

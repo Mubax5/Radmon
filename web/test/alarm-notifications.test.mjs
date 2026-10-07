@@ -9,7 +9,12 @@ const source = await readFile(new URL("../src/alarmNotifications.ts", import.met
 const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2021 },
 }).outputText;
-const { freshUndeliveredEvents, playAlarmSignal } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
+const { freshUndeliveredEvents, playAlarmSignal, notificationStateLabel } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
+
+test("resolved transient toast labels completion; recorded toast never claims current activity", () => {
+  assert.match(notificationStateLabel({ status: "AUTO_RESOLVED_NORMAL" }), /Pulih otomatis.*selesai/);
+  assert.match(notificationStateLabel({ status: "ACTIVE" }), /lihat Alarm.*terkini/);
+});
 
 test("fresh LOW/HIGH policy alarms notify once, including short-lived resolved events", () => {
   const delivered = new Set();

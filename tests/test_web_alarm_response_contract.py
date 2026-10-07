@@ -43,7 +43,7 @@ def test_event_select_trigger_shows_serid_label_not_placeholder_only():
     assert "eventItems" in actions
     assert "SERID ${item.serid}" in actions
     # Native select terikat value ke pilihan efektif dan punya selector stabil.
-    assert 'label={`Event aktif (${active.length})`}' in actions
+    assert 'label={`Event aktif (${activeError ? "?" : active.length})`}' in actions
     assert 'testId="alarm-event-select"' in actions
     assert 'name="event_id"' in actions
     assert "value={selectedEventId}" in actions
@@ -69,7 +69,9 @@ def test_action_is_preset_select_not_free_text_input():
 
 def test_response_and_cancel_still_hit_real_endpoints_with_pin():
     actions = read("Actions.tsx")
-    assert "/api/v1/control/alarm-events/${encodeURIComponent(selectedEventId)}/response" in actions
+    response = read("activeAlarms.ts")
+    assert "/api/v1/control/alarm-events/${encodeURIComponent(event.event_id)}/response" in response
+    assert "alarmResponseRequest(selected" in actions
     assert "{ pin, action, pic, reason }" in actions
     assert "/api/v1/control/suppressions/${encodeURIComponent(item.suppression_id)}/cancel" in actions
     assert "{ pin: cancelPin, reason: cancelReason }" in actions
@@ -106,7 +108,8 @@ def test_modal_stacking_keeps_background_mounted_and_select_on_top():
 
 def test_source_alarm_rows_have_real_source_ack_not_policy_event_response():
     alarms = read("pages/AlarmsPage.tsx")
-    assert 'event.event_type !== "source_alarm"' in alarms
+    assert 'events={activeItems}' in alarms
+    assert '"/api/v1/web/active-alarms"' in alarms
     assert "/api/v1/control/alarms/${encodeURIComponent(event.source_id)}/${event.serid}/ack" in alarms
     assert "source_i_flag !== 1" in alarms
     assert "i_flag diperbarui" in alarms

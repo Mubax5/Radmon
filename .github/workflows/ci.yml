@@ -43,6 +43,10 @@ jobs:
         working-directory: web
         run: npm run build
 
+      - name: Verify alarm notifications and response dispatch
+        working-directory: web
+        run: npm run test:notifications
+
       - name: Run tests
         shell: bash
         run: |
