@@ -25,7 +25,11 @@ def setup(tmp_path):
             calls.append((serid, event_time))
             return True
 
-    control = AlarmControlService(security, mirror, AuditTrail(security), remote_factory=lambda _: Remote())
+    control = AlarmControlService(
+        security, mirror, AuditTrail(security),
+        remote_factory=lambda _: Remote(),
+        now=lambda: datetime(2026, 10, 7, 11, 27, 20),
+    )
     control.policy_store = policy.store
     control.policy = policy
     app = FastAPI()
