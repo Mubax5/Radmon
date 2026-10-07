@@ -41,11 +41,13 @@ def test_bootstrap_requires_playlist_and_returns_playlist_kiosk_url(tmp_path):
 
 
 def test_api_provisioner_upserts_shared_pages_and_five_operations_variants(tmp_path):
-    bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
+    bootstrap = GrafanaBootstrap(Settings(db_password="current-secret"), project_root=tmp_path)
     calls = []
 
     def request(url, *, method="GET", payload=None, use_auth=True):
         calls.append((method, url, payload))
+        if url.endswith("/api/datasources/uid/ipradmon-mysql/health"):
+            return {"status": "OK", "message": "Database Connection OK"}
         if "/api/datasources/uid/" in url and method == "GET":
             return {"uid": "ipradmon-mysql"}
         if "/apis/playlist.grafana.app/" in url and method == "GET":
@@ -70,11 +72,13 @@ def test_api_provisioner_upserts_shared_pages_and_five_operations_variants(tmp_p
 
 
 def test_api_provisioner_updates_existing_playlist_with_resource_version(tmp_path):
-    bootstrap = GrafanaBootstrap(Settings(), project_root=tmp_path)
+    bootstrap = GrafanaBootstrap(Settings(db_password="current-secret"), project_root=tmp_path)
     calls = []
 
     def request(url, *, method="GET", payload=None, use_auth=True):
         calls.append((method, url, payload))
+        if url.endswith("/api/datasources/uid/ipradmon-mysql/health"):
+            return {"status": "OK", "message": "Database Connection OK"}
         if "/api/datasources/uid/" in url and method == "GET":
             return {"uid": "ipradmon-mysql"}
         if "/apis/playlist.grafana.app/" in url and method == "GET":

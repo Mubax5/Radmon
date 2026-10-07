@@ -19,6 +19,9 @@ export type Station = {
   doserate?: number | null;
   dtom?: string | null;
   latest_timestamp?: string | null;
+  last_data_age_seconds?: number | null;
+  last_data_age_label?: string | null;
+  last_reading_source?: string | null;
   offline_reason?: string | null;
   offline_context?: string | null;
   offline_description?: string | null;

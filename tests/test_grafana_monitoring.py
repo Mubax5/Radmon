@@ -149,9 +149,11 @@ def test_bootstrap_reuses_ready_fallback_before_starting_services():
 
 def test_bootstrap_refuses_to_return_unverified_playlist():
     bootstrap = GrafanaBootstrap(
-        replace(Settings(), grafana_fallback_port=3300),
+        replace(Settings(db_password="current-secret"), grafana_fallback_port=3300),
         dashboard_probe=lambda base_url: False,
         playlist_probe=lambda base_url: False,
+        grafana_health_probe=lambda base_url: False,
+        native_runner=lambda **kwargs: None,
         compose_runner=lambda **kwargs: None,
         sleeper=lambda _: None,
         attempts=2,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import logging
 import os
 import socket
 
@@ -34,98 +33,6 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
             )
         except Exception:
             return False
-
-    def _datasource_health(self, base_url: str) -> tuple[bool, str]:
-        endpoint = (
-            f"{base_url.rstrip('/')}/api/datasources/uid/{DATASOURCE_UID}/health"
-        )
-        try:
-            response = self._request_json(endpoint, method="POST")
-        except Exception as exc:
-            return False, str(exc)
-        status = str(response.get("status") or "").strip().casefold()
-        details = response.get("details") if isinstance(response, dict) else None
-        verbose_message = details.get("verboseMessage") if isinstance(details, dict) else None
-        detail = str(
-            verbose_message
-            or response.get("message")
-            or response.get("error")
-            or response.get("status")
-            or "unknown datasource health response"
-        ).strip()
-        return status in {"ok", "success"}, detail
-
-    def _ensure_datasource_connection(self, base_url: str) -> bool:
-        """Verify Grafana's datasource, repairing only its configured secret if needed."""
-        base = base_url.rstrip("/")
-        datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
-        healthy, detail = self._datasource_health(base)
-        if healthy:
-            return True
-
-        if "authentication plugin is not supported" in detail.casefold():
-            logging.getLogger(__name__).error(
-                "Grafana datasource is degraded: its MariaDB account advertises an unsupported authentication plugin"
-            )
-            return False
-
-        # Grafana intentionally redacts secure fields from datasource GET responses.
-        # Keep its saved UID and all non-secret settings, and refresh only the
-        # password held in the active RadMon DB configuration. Never delete or
-        # recreate persistent datasource state as a health-repair shortcut.
-        try:
-            current = self._request_json(datasource_endpoint)
-        except Exception as exc:
-            detail = str(exc)
-            for secret in (self.settings.db_password, self.settings.grafana_password):
-                if secret:
-                    detail = detail.replace(secret, "<redacted>")
-            logging.getLogger(__name__).error(
-                "Grafana datasource is degraded and its settings could not be safely read: %s",
-                detail,
-            )
-            return False
-        if not isinstance(current, dict) or current.get("uid") != DATASOURCE_UID:
-            logging.getLogger(__name__).error(
-                "Grafana datasource is degraded and its settings could not be safely read; persistent state was left untouched"
-            )
-            return False
-        preserved_fields = (
-            "id",
-            "orgId",
-            "uid",
-            "name",
-            "type",
-            "access",
-            "url",
-            "database",
-            "user",
-            "basicAuth",
-            "basicAuthUser",
-            "withCredentials",
-            "isDefault",
-            "jsonData",
-        )
-        payload = {
-            key: deepcopy(current[key])
-            for key in preserved_fields
-            if key in current
-        }
-        payload["secureJsonData"] = {"password": self.settings.db_password}
-        self._request_json(datasource_endpoint, method="PUT", payload=payload)
-
-        repaired, repaired_detail = self._datasource_health(base)
-        if not repaired:
-            safe_detail = repaired_detail or detail
-            for secret in (self.settings.db_password, self.settings.grafana_password):
-                if secret:
-                    safe_detail = safe_detail.replace(secret, "<redacted>")
-            logging.getLogger(__name__).error(
-                "Grafana datasource remains degraded after password-only repair: %s",
-                safe_detail,
-            )
-            return False
-        return True
 
     @staticmethod
     def _refresh_managed_dashboard_queries(
@@ -321,6 +228,25 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
                         panel["title"] = factory_title
                         changed = True
 
+        # Add the explicit offline last-readings table to an older saved Page 2
+        # without resetting its layout or any operator-owned panels.
+        if is_page_two and any(
+            isinstance(panel, dict) and panel.get("description") == "building-dose-trend"
+            for panel in panels
+        ):
+            saved_descriptions = {
+                panel.get("description")
+                for panel in panels
+                if isinstance(panel, dict)
+            }
+            for factory_panel in factory_panels.values():
+                if (
+                    factory_panel.get("description") == "offline-last-readings"
+                    and factory_panel.get("description") not in saved_descriptions
+                ):
+                    panels.append(deepcopy(factory_panel))
+                    changed = True
+
         has_managed_station_panels = sum(
             1 for panel in panels
             if isinstance(panel, dict)
@@ -353,7 +279,12 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
             dashboard_endpoint = f"{base}/api/dashboards/uid/{uid}"
             try:
                 current = self._request_json(dashboard_endpoint)
-            except Exception:
+            except Exception as exc:
+                if not self._is_missing_resource(exc):
+                    raise RuntimeError(
+                        f"Grafana dashboard {uid} lookup failed: "
+                        f"{self._redact_detail(exc)}"
+                    ) from exc
                 dashboard = dict(factory_dashboard)
                 dashboard["editable"] = True
                 self._request_json(
@@ -392,18 +323,7 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
 
     def _provision_via_api(self, base_url: str) -> bool:
         base = base_url.rstrip("/")
-        datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
-        datasource_payload = self._datasource_payload()
-        try:
-            self._request_json(datasource_endpoint)
-        except Exception:
-            self._request_json(
-                f"{base}/api/datasources",
-                method="POST",
-                payload=datasource_payload,
-            )
-
-        self._ensure_datasource_connection(base)
+        self._ensure_or_create_datasource(base)
         self._provision_dashboards_via_api(base)
 
         playlist_endpoint = (
@@ -411,7 +331,12 @@ class PersistentGrafanaBootstrap(GrafanaBootstrap):
         )
         try:
             self._request_json(playlist_endpoint)
-        except Exception:
+        except Exception as exc:
+            if not self._is_missing_resource(exc):
+                raise RuntimeError(
+                    "Grafana playlist lookup failed: "
+                    f"{self._redact_detail(exc)}"
+                ) from exc
             self._request_json(
                 f"{base}/apis/playlist.grafana.app/v1/namespaces/default/playlists",
                 method="POST",

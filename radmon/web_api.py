@@ -84,6 +84,59 @@ def _fallback_last_measurement(repository: Any, serid: int) -> dict[str, Any] | 
     return None
 
 
+def _offline_last_readings(repository: Any, serid: int, *, limit: int) -> list[dict[str, Any]] | None:
+    """Use the bounded cache only for an offline station.
+
+    Online History keeps its existing historical query contract. Once the
+    latest station sample is stale, the UI receives up to N genuine samples
+    from ``recent_last`` instead of causing an unbounded historical fallback.
+    """
+    cache_fn = getattr(repository, "last_readings", None)
+    if not callable(cache_fn):
+        return None
+    station: dict[str, Any] | None = None
+    snapshot_fn = getattr(repository, "overview_rows", None)
+    if callable(snapshot_fn):
+        try:
+            station = next(
+                (dict(item) for item in snapshot_fn() if int(item.get("serid")) == int(serid)),
+                None,
+            )
+        except Exception:
+            station = None
+    if station is None:
+        stations_fn = getattr(repository, "stations", None)
+        if callable(stations_fn):
+            try:
+                station = next(
+                    (dict(item) for item in stations_fn() if int(item.get("serid")) == int(serid)),
+                    None,
+                )
+            except Exception:
+                station = None
+    if station is None:
+        return None
+
+    row = None
+    if station.get("dtom") is not None:
+        row = station
+    else:
+        latest_fn = getattr(repository, "latest", None)
+        if callable(latest_fn):
+            try:
+                row = latest_fn(int(serid))
+            except Exception:
+                row = None
+    status, _dose_rate, _measured_at, _reason = _station_status(station, row)
+    if status != "offline":
+        return None
+    try:
+        rows = cache_fn(int(serid), limit=limit)
+    except Exception:
+        return None
+    return list(rows) if rows else None
+
+
 def _station_status(station: dict[str, Any], row: dict[str, Any] | None) -> tuple[str, float | None, Any, str | None]:
     if row is None:
         return "offline", None, None, "Belum ada measurement dari perangkat"
@@ -103,6 +156,26 @@ def _station_status(station: dict[str, Any], row: dict[str, Any] | None) -> tupl
 def _station_response(station: dict[str, Any], row: dict[str, Any] | None, source_id: str | None) -> dict[str, Any]:
     status, dose_rate, measured_at, offline_reason = _station_status(station, row)
     description = str(station.get("description") or "")
+    age_seconds = None
+    age_label = None
+    if measured_at is not None:
+        parsed = measured_at
+        if isinstance(parsed, str):
+            try:
+                parsed = datetime.fromisoformat(parsed.replace("Z", "+00:00"))
+            except ValueError:
+                parsed = None
+        if isinstance(parsed, datetime):
+            now = datetime.now(parsed.tzinfo) if parsed.tzinfo is not None else datetime.now()
+            age_seconds = max(0, int((now - parsed).total_seconds()))
+            if age_seconds < 60:
+                age_label = f"{age_seconds} detik"
+            elif age_seconds < 3600:
+                age_label = f"{age_seconds // 60} menit"
+            elif age_seconds < 86400:
+                age_label = f"{age_seconds // 3600} jam"
+            else:
+                age_label = f"{age_seconds // 86400} hari"
     return {
         **station,
         "description": description,
@@ -110,6 +183,9 @@ def _station_response(station: dict[str, Any], row: dict[str, Any] | None, sourc
         "doserate": dose_rate,
         "dtom": measured_at,
         "latest_timestamp": measured_at,
+        "last_data_age_seconds": age_seconds,
+        "last_data_age_label": age_label,
+        "last_reading_source": "historical-measurement" if measured_at is not None else None,
         "offline_reason": offline_reason,
         "offline_context": description if status == "offline" else None,
         "offline_description": description if status == "offline" else None,
@@ -223,7 +299,16 @@ def attach_web_api_routes(
         limit: int = Query(default=240, ge=1, le=2000),
         identity: UserIdentity = Depends(viewer),
     ):
-        return repository.history(serid, limit=limit)
+        cached = _offline_last_readings(repository, serid, limit=limit)
+        if cached is not None:
+            return cached
+        history_fn = getattr(repository, "history", None)
+        if callable(history_fn):
+            return history_fn(serid, limit=limit)
+        last_readings_fn = getattr(repository, "last_readings", None)
+        if callable(last_readings_fn):
+            return last_readings_fn(serid, limit=limit)
+        raise HTTPException(status_code=503, detail="station history is unavailable")
 
     @app.get("/api/v1/web/active-alarms")
     def current_alarms(identity: UserIdentity = Depends(viewer)):

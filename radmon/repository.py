@@ -8,7 +8,7 @@ from typing import Any, Callable
 from .config import Settings
 from .db import connect_mariadb
 from .models import LatestReading, Measurement, StationConfig
-from .recent_read_model import RollingRecentManager
+from .recent_read_model import OFFLINE_LAST_READING_LIMIT, RollingRecentManager
 from .stations import station_by_id, station_catalog
 
 
@@ -26,6 +26,7 @@ BASE_REQUIRED_SCHEMA = {
 REQUIRED_SCHEMA = {
     **BASE_REQUIRED_SCHEMA,
     "recent": {"serid", "dtom", "doserate", "dose", "previnterval", "stat"},
+    "recent_last": {"serid", "dtom", "doserate", "dose", "previnterval", "stat"},
     "vrecent": {
         "serid", "name", "location", "warnlevel", "alarmlevel", "unit", "audiopath",
         "description", "maxidlemin", "dtom", "doserate", "dose", "previnterval", "stat",
@@ -531,5 +532,45 @@ ORDER BY v.serid
                 cursor.execute(f"SELECT COUNT(*) FROM alarm WHERE {' AND '.join(clauses)}", tuple(params))
                 row = cursor.fetchone()
             return int(row[0] if not isinstance(row, dict) else next(iter(row.values())))
+        finally:
+            connection.close()
+
+    def last_readings(self, serid: int | None = None, *, limit: int = OFFLINE_LAST_READING_LIMIT) -> list[dict[str, Any]]:
+        """Return bounded genuine latest readings for offline presentation."""
+        bounded = max(1, min(int(limit), OFFLINE_LAST_READING_LIMIT))
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                if serid is not None:
+                    cursor.execute(
+                        f"""
+SELECT serid, dtom, doserate, dose, previnterval, stat
+FROM recent_last
+WHERE serid = ?
+ORDER BY dtom DESC
+LIMIT {bounded}
+""",
+                        (int(serid),),
+                    )
+                    rows = cursor.fetchall()
+                else:
+                    cursor.execute("SELECT DISTINCT serid FROM device ORDER BY serid")
+                    station_rows = cursor.fetchall()
+                    rows = []
+                    for station_row in station_rows:
+                        station_id = _row_get(station_row, "serid", 0)
+                        cursor.execute(
+                            f"""
+SELECT serid, dtom, doserate, dose, previnterval, stat
+FROM recent_last
+WHERE serid = ?
+ORDER BY dtom DESC
+LIMIT {bounded}
+""",
+                            (station_id,),
+                        )
+                        rows.extend(cursor.fetchall())
+            keys = ("serid", "dtom", "doserate", "dose", "previnterval", "stat")
+            return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
         finally:
             connection.close()

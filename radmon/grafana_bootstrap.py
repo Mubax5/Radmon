@@ -30,6 +30,14 @@ DASHBOARD_SLUG = "radmon-tv-page-1-realtime"
 DATASOURCE_UID = "ipradmon-mysql"
 
 
+class GrafanaApiError(RuntimeError):
+    """An HTTP failure from the managed Grafana API, without secret payloads."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        self.status_code = int(status_code)
+        super().__init__(detail)
+
+
 def _base_url(value: str) -> str:
     parsed = urlsplit(value)
     if not parsed.scheme or not parsed.netloc:
@@ -163,6 +171,10 @@ class GrafanaBootstrap:
         return self._dashboard_payloads()[0]
 
     def _datasource_payload(self) -> dict:
+        if not self.settings.db_password:
+            raise RuntimeError(
+                "Grafana datasource write refused: managed database password is empty"
+            )
         return {
             "uid": DATASOURCE_UID,
             "name": "ipradmon",
@@ -182,21 +194,161 @@ class GrafanaBootstrap:
             "secureJsonData": {"password": self.settings.db_password},
         }
 
-    def _provision_via_api(self, base_url: str) -> bool:
-        """Install or repair datasource, TV dashboards, and the 30-second playlist."""
+    def _redact_detail(self, detail: object) -> str:
+        text = str(detail)
+        for secret in (self.settings.db_password, self.settings.grafana_password):
+            if secret:
+                text = text.replace(secret, "<redacted>")
+        return text
+
+    def _datasource_health(self, base_url: str) -> tuple[bool, str]:
+        endpoint = (
+            f"{base_url.rstrip('/')}/api/datasources/uid/{DATASOURCE_UID}/health"
+        )
+        try:
+            response = self._request_json(endpoint, method="POST")
+        except Exception as exc:
+            return False, self._redact_detail(exc)
+        if not isinstance(response, dict):
+            return False, "Grafana datasource health returned an invalid response"
+        status = str(response.get("status") or "").strip().casefold()
+        details = response.get("details")
+        verbose_message = details.get("verboseMessage") if isinstance(details, dict) else None
+        detail = str(
+            verbose_message
+            or response.get("message")
+            or response.get("error")
+            or response.get("status")
+            or "unknown datasource health response"
+        ).strip()
+        return status in {"ok", "success"}, self._redact_detail(detail)
+
+    @staticmethod
+    def _is_missing_resource(exc: Exception) -> bool:
+        if isinstance(exc, GrafanaApiError):
+            return exc.status_code == 404
+        # Keep small test doubles and older integrations compatible, while not
+        # treating network/auth failures as a missing datasource.
+        text = str(exc).casefold()
+        return (
+            text.strip() in {"404", "missing", "not found", "resource missing"}
+            or " 404" in text
+        )
+
+    def _preserve_datasource_payload(self, current: dict) -> dict:
+        if current.get("uid") != DATASOURCE_UID:
+            raise RuntimeError(
+                "Grafana datasource identity mismatch; persistent datasource was left untouched"
+            )
+        preserved_fields = (
+            "id",
+            "orgId",
+            "uid",
+            "name",
+            "type",
+            "access",
+            "url",
+            "database",
+            "user",
+            "basicAuth",
+            "basicAuthUser",
+            "withCredentials",
+            "isDefault",
+            "jsonData",
+        )
+        payload = {
+            key: json.loads(json.dumps(current[key]))
+            for key in preserved_fields
+            if key in current
+        }
+        if not self.settings.db_password:
+            raise RuntimeError(
+                "Grafana datasource repair refused: managed database password is empty"
+            )
+        # Never send secureJsonData={} or a redacted secureJsonFields value.
+        # This is the only secret mutation performed by reconciliation.
+        payload["secureJsonData"] = {"password": self.settings.db_password}
+        return payload
+
+    def _ensure_datasource_connection(self, base_url: str) -> bool:
+        """Verify Grafana's live connection and repair only its managed password.
+
+        Grafana redacts secure fields from GET responses. A healthy datasource is
+        therefore left byte-for-byte alone; an unhealthy one is read, its stable
+        identity/plugin settings are preserved, and only the configured password
+        is sent in a bounded repair. Any failed verification is raised so startup
+        reports the real datasource failure instead of claiming success.
+        """
         base = base_url.rstrip("/")
         datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
-        payload = self._datasource_payload()
+        healthy, detail = self._datasource_health(base)
+        if healthy:
+            return True
+
         try:
-            self._request_json(datasource_endpoint)
-        except Exception:
+            current = self._request_json(datasource_endpoint)
+        except Exception as exc:
+            raise RuntimeError(
+                "Grafana datasource is unhealthy and its existing settings could not be read: "
+                f"{self._redact_detail(exc)}"
+            ) from exc
+        if not isinstance(current, dict):
+            raise RuntimeError(
+                "Grafana datasource is unhealthy and returned an invalid settings document"
+            )
+
+        payload = self._preserve_datasource_payload(current)
+        try:
+            response = self._request_json(
+                datasource_endpoint,
+                method="PUT",
+                payload=payload,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Grafana datasource password-only repair failed: "
+                f"{self._redact_detail(exc)}"
+            ) from exc
+        if isinstance(response, dict) and response.get("uid") not in {None, DATASOURCE_UID}:
+            raise RuntimeError(
+                "Grafana datasource password-only repair returned a different UID"
+            )
+
+        repaired, repaired_detail = self._datasource_health(base)
+        if not repaired:
+            raise RuntimeError(
+                "Grafana datasource remains unhealthy after password-only repair: "
+                f"{repaired_detail or detail}"
+            )
+        return True
+
+    def _ensure_or_create_datasource(self, base_url: str) -> None:
+        base = base_url.rstrip("/")
+        datasource_endpoint = f"{base}/api/datasources/uid/{DATASOURCE_UID}"
+        try:
+            current = self._request_json(datasource_endpoint)
+        except Exception as exc:
+            if not self._is_missing_resource(exc):
+                raise RuntimeError(
+                    "Grafana datasource lookup failed: "
+                    f"{self._redact_detail(exc)}"
+                ) from exc
             self._request_json(
                 f"{base}/api/datasources",
                 method="POST",
-                payload=payload,
+                payload=self._datasource_payload(),
             )
         else:
-            self._request_json(datasource_endpoint, method="PUT", payload=payload)
+            if not isinstance(current, dict) or current.get("uid") != DATASOURCE_UID:
+                raise RuntimeError(
+                    "Grafana datasource identity mismatch; no datasource was overwritten"
+                )
+        self._ensure_datasource_connection(base)
+
+    def _provision_via_api(self, base_url: str) -> bool:
+        """Install or repair datasource, TV dashboards, and the 30-second playlist."""
+        base = base_url.rstrip("/")
+        self._ensure_or_create_datasource(base)
 
         for dashboard in self._dashboard_payloads():
             self._request_json(
@@ -215,7 +367,12 @@ class GrafanaBootstrap:
         )
         try:
             current = self._request_json(playlist_endpoint)
-        except Exception:
+        except Exception as exc:
+            if not self._is_missing_resource(exc):
+                raise RuntimeError(
+                    "Grafana playlist lookup failed: "
+                    f"{self._redact_detail(exc)}"
+                ) from exc
             self._request_json(
                 f"{base}/apis/playlist.grafana.app/v1/namespaces/default/playlists",
                 method="POST",
@@ -270,6 +427,7 @@ class GrafanaBootstrap:
                 "RADMON_DB_USER": self.settings.db_user,
                 "RADMON_DB_PASSWORD": self.settings.db_password,
                 "RADMON_GRAFANA_DB_HOST": "host.docker.internal",
+                "GF_PLUGINS_PREINSTALL_AUTO_UPDATE": "false",
             }
         )
         return env
@@ -490,9 +648,14 @@ class GrafanaBootstrap:
             if use_auth and method == "GET" and exc.code in {401, 403}:
                 return self._request_json(url, method=method, payload=payload, use_auth=False)
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Grafana API {exc.code}: {detail or exc.reason}") from exc
+            raise GrafanaApiError(
+                exc.code,
+                f"Grafana API {exc.code}: {self._redact_detail(detail or exc.reason)}",
+            ) from exc
         except URLError as exc:
-            raise RuntimeError(f"Grafana tidak dapat dihubungi: {exc.reason}") from exc
+            raise RuntimeError(
+                f"Grafana tidak dapat dihubungi: {self._redact_detail(exc.reason)}"
+            ) from exc
 
     def ensure(self) -> str:
         candidates = self._candidate_base_urls()

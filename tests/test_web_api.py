@@ -79,6 +79,47 @@ def test_authenticated_viewer_can_read_overview_and_history(tmp_path):
     assert history.json()[0]["serid"] == 5201
 
 
+def test_offline_history_uses_bounded_genuine_cache_with_original_timestamps(tmp_path):
+    security = SecurityStore(tmp_path / "offline-cache.db")
+    security.create_user("viewer", "Viewer", Role.VIEWER, "Password123!", "2468")
+    token = security.create_session("viewer", 3600)
+
+    class OfflineRepository:
+        def overview_rows(self):
+            return [{
+                "serid": 5701, "name": "Offline detector", "location": "Gd.57",
+                "description": "source offline", "warnlevel": 23.0, "alarmlevel": 25.0,
+                "maxidlemin": 30, "unit": "uSv/h", "dtom": "2026-06-23T10:00:00",
+                "doserate": 0.17, "dose": 0.01, "previnterval": 2, "stat": 0,
+            }]
+
+        def last_readings(self, serid, *, limit):
+            assert serid == 5701
+            assert limit == 40
+            return [
+                {"serid": 5701, "dtom": "2026-06-23T10:00:00", "doserate": 0.17, "dose": 0.01, "stat": 0},
+                {"serid": 5701, "dtom": "2026-06-23T09:59:58", "doserate": 0.18, "dose": 0.01, "stat": 0},
+                {"serid": 5701, "dtom": "2026-06-23T09:59:56", "doserate": 0.16, "dose": 0.01, "stat": 0},
+            ]
+
+        def history(self, serid, limit=240):
+            raise AssertionError("offline route must not fall back to full history")
+
+    app = FastAPI()
+    attach_web_api_routes(app, security=security, repository=OfflineRepository())
+    client = TestClient(app)
+    client.cookies.set(SESSION_COOKIE, token)
+
+    response = client.get("/api/v1/web/stations/5701/history?limit=40")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 3
+    assert [row["dtom"] for row in body] == [
+        "2026-06-23T10:00:00", "2026-06-23T09:59:58", "2026-06-23T09:59:56"
+    ]
+
+
 def test_station_detail_exposes_source_ownership(tmp_path):
     client = make_client(tmp_path, Role.VIEWER, source_owned_serid=5201)
 

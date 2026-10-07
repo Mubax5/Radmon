@@ -296,6 +296,10 @@ export function HistoryPage() {
   const unit = selectedStation?.unit ?? "uSv/h";
   const fmt = (value: number | null) => value == null ? "—" : `${formatDoseValue(value)} ${unit}`;
   const chronological = [...rows].sort((a, b) => Date.parse(String(b.dtom ?? "")) - Date.parse(String(a.dtom ?? "")));
+  const offlineLastReadings = selectedStation?.status === "offline";
+  const historyDescription = offlineLastReadings
+    ? `Stasiun OFFLINE — ${history.points.length} pembacaan terakhir yang tersimpan ditampilkan dengan timestamp asli. Data terakhir ${selectedStation?.last_data_age_label ?? "usianya tidak diketahui"}.`
+    : `${history.points.length} pengukuran aktual dalam riwayat stasiun.`;
 
   // Searchable station combobox; the listbox is portaled to the document layer so
   // modal, navigation, and scroll-container overflow cannot clip the options.
@@ -446,7 +450,7 @@ export function HistoryPage() {
 
           <PageSection
             title="Tren dose rate"
-            description={`${history.points.length} pengukuran ditampilkan pada grafik.`}
+            description={historyDescription}
           >
             <LayerCard className="action-card trend-chart-card">
               <div className={`trend-chart-wrap${refreshing ? " is-refreshing" : ""}`} aria-busy={refreshing}>
@@ -474,7 +478,7 @@ export function HistoryPage() {
                           <Table.Cell>{formatTimestamp(String(row.dtom ?? ""))}</Table.Cell>
                           <Table.Cell>{formatDoseValue(row.doserate)}</Table.Cell>
                           <Table.Cell>{formatDoseValue(row.dose)}</Table.Cell>
-                          <Table.Cell>{String(row.stat ?? "—")}</Table.Cell>
+                           <Table.Cell>{offlineLastReadings ? "OFFLINE · LAST READING" : String(row.stat ?? "—")}</Table.Cell>
                         </Table.Row>
                       ))}
                     </Table.Body>
@@ -491,7 +495,7 @@ export function HistoryPage() {
                       </div>
                       <div className="card-meta">
                         <span>Dose: {formatDoseValue(row.dose)}</span>
-                        <span>Status: {String(row.stat ?? "—")}</span>
+                         <span>Status: {offlineLastReadings ? "OFFLINE · LAST READING" : String(row.stat ?? "—")}</span>
                       </div>
                     </LayerCard>
                   ))}

@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..grafana_bootstrap import GrafanaBootstrap
+from ..grafana_persistent import PersistentGrafanaBootstrap
 from ..paths import ApplicationPaths
 from ..secure_context import get_context
 from ..security import Role
@@ -160,7 +161,12 @@ class MainWindow(QMainWindow):
         self.archive_catalog = archive_catalog
         self.preferences = DesktopPreferences.load(settings)
         self._manage_grafana = bool(manage_grafana)
-        self._grafana_bootstrap = GrafanaBootstrap(settings) if self._manage_grafana else None
+        # Production Grafana is managed exclusively on stable loopback port
+        # 3300. The generic bootstrap remains available for developer/tests;
+        # the desktop lifecycle must never reprovision an unrelated port 3000.
+        self._grafana_bootstrap = (
+            PersistentGrafanaBootstrap(settings) if self._manage_grafana else None
+        )
         self._grafana_ready_url: str | None = (
             f"{str(settings.grafana_url).rstrip('/')}/" if not self._manage_grafana else None
         )

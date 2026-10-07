@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from .config import Settings
 from .db import connect_mariadb
-from .recent_read_model import RollingRecentManager
+from .recent_read_model import OFFLINE_LAST_READING_LIMIT, RollingRecentManager
 
 
 LOG = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ class CentralRepositoryProtocol(Protocol):
     def overview_rows(self) -> list[dict[str, Any]]: ...
     def latest(self, serid: int) -> dict[str, Any] | None: ...
     def history(self, serid: int, limit: int = 240) -> list[dict[str, Any]]: ...
+    def last_readings(self, serid: int, limit: int = OFFLINE_LAST_READING_LIMIT) -> list[dict[str, Any]]: ...
 
 
 class CentralMariaDBRepository:
@@ -210,6 +211,28 @@ ORDER BY d.location, d.name
                 cursor.execute(
                     "SELECT serid, dtom, doserate, dose, previnterval, stat FROM measurement WHERE serid = ? ORDER BY dtom DESC LIMIT ?",
                     (int(serid), bounded),
+                )
+                rows = cursor.fetchall()
+            keys = ("serid", "dtom", "doserate", "dose", "previnterval", "stat")
+            return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]
+        finally:
+            connection.close()
+
+    def last_readings(self, serid: int, limit: int = OFFLINE_LAST_READING_LIMIT) -> list[dict[str, Any]]:
+        """Read the bounded genuine cache used when a station is offline."""
+        bounded = max(1, min(int(limit), OFFLINE_LAST_READING_LIMIT))
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+SELECT serid, dtom, doserate, dose, previnterval, stat
+FROM recent_last
+WHERE serid = ?
+ORDER BY dtom DESC
+LIMIT {bounded}
+""",
+                    (int(serid),),
                 )
                 rows = cursor.fetchall()
             keys = ("serid", "dtom", "doserate", "dose", "previnterval", "stat")

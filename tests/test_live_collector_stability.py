@@ -360,6 +360,7 @@ def test_central_live_upsert_uses_one_connection_with_history_then_rolling_commi
     assert connections[0].closed == 1
     statements = connections[0].cursor_obj.statements
     assert sum("insert into device" in sql for sql in statements) == 2
-    assert sum("insert ignore into recent" in sql for sql in statements) == 2
+    assert sum("insert ignore into recent_last" in sql for sql in statements) == 2
+    assert sum("insert ignore into recent (" in sql for sql in statements) == 2
     assert sum("insert ignore into measurement" in sql for sql in statements) == 2
     assert sum("delete" in sql and "from recent" in sql for sql in statements) <= 1

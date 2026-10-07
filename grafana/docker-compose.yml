@@ -15,6 +15,7 @@ services:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_USERS_DEFAULT_THEME: light
+      GF_PLUGINS_PREINSTALL_AUTO_UPDATE: "false"
     volumes:
       - ./provisioning/datasources:/etc/grafana/provisioning/datasources:ro
       - grafana-data:/var/lib/grafana

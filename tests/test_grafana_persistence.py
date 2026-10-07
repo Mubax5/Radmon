@@ -295,7 +295,7 @@ def test_legacy_readonly_dashboard_is_unlocked_without_restoring_factory_layout(
 
 
 def test_missing_grafana_resources_are_seeded_editable_without_overwrite(tmp_path: Path) -> None:
-    bootstrap = PersistentGrafanaBootstrap(Settings(), project_root=tmp_path)
+    bootstrap = PersistentGrafanaBootstrap(Settings(db_password="current-secret"), project_root=tmp_path)
     posts: list[tuple[str, dict]] = []
     datasource_created = False
 
@@ -420,7 +420,45 @@ def test_unhealthy_existing_datasource_repairs_only_password_and_preserves_confi
     assert all(not (method == "POST" and url.endswith("/api/datasources")) for method, url, _ in writes)
 
 
-def test_unsupported_auth_plugin_keeps_dashboards_available_without_mutating_datasource(tmp_path: Path) -> None:
+def test_unhealthy_datasource_refuses_empty_managed_password_without_put(tmp_path: Path) -> None:
+    bootstrap = PersistentGrafanaBootstrap(Settings(db_password=""), project_root=tmp_path)
+    writes: list[tuple[str, str]] = []
+
+    def request(url: str, *, method: str = "GET", payload=None, use_auth=True):
+        if url.endswith("/health"):
+            return {"status": "ERROR", "message": "Database Connection Failed"}
+        if method == "GET" and url.endswith("/api/datasources/uid/ipradmon-mysql"):
+            return {"uid": "ipradmon-mysql", "type": "mysql", "jsonData": {"maxOpenConns": 20}}
+        writes.append((method, url))
+        return {"status": "ok"}
+
+    bootstrap._request_json = request  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="password.*empty"):
+        bootstrap._ensure_datasource_connection("http://localhost:3300")
+    assert writes == []
+
+
+def test_datasource_lookup_auth_failure_is_not_treated_as_missing(tmp_path: Path) -> None:
+    bootstrap = PersistentGrafanaBootstrap(Settings(db_password="current-secret"), project_root=tmp_path)
+    writes: list[tuple[str, str]] = []
+
+    def request(url: str, *, method: str = "GET", payload=None, use_auth=True):
+        if url.endswith("/health"):
+            return {"status": "ERROR", "message": "Database Connection Failed"}
+        if method == "GET" and url.endswith("/api/datasources/uid/ipradmon-mysql"):
+            raise RuntimeError("Grafana API 403: forbidden")
+        writes.append((method, url))
+        return {"status": "ok"}
+
+    bootstrap._request_json = request  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="could not be read"):
+        bootstrap._ensure_datasource_connection("http://localhost:3300")
+    assert writes == []
+
+
+def test_unsupported_auth_plugin_is_reported_without_mutating_datasource_identity(tmp_path: Path) -> None:
+    import pytest
+
     bootstrap = PersistentGrafanaBootstrap(
         Settings(db_password="current-secret"),
         project_root=tmp_path,
@@ -457,9 +495,12 @@ def test_unsupported_auth_plugin_keeps_dashboards_available_without_mutating_dat
         raise AssertionError(url)
 
     bootstrap._request_json = request  # type: ignore[method-assign]
-    assert bootstrap._provision_via_api("http://localhost:3300") is True
+    with pytest.raises(RuntimeError, match="remains unhealthy"):
+        bootstrap._provision_via_api("http://localhost:3300")
 
-    assert health_checks == 1
-    assert not [item for item in writes if "/api/datasources" in item[1]]
-    assert len([item for item in writes if item[1].endswith("/api/dashboards/db")]) == len(DASHBOARD_UIDS)
-    assert any(item[1].endswith("/playlists") for item in writes)
+    assert health_checks == 2
+    datasource_writes = [item for item in writes if "/api/datasources" in item[1]]
+    assert len(datasource_writes) == 1
+    assert datasource_writes[0][0] == "PUT"
+    assert datasource_writes[0][2]["uid"] == "ipradmon-mysql"
+    assert all(item[0] != "DELETE" for item in datasource_writes)

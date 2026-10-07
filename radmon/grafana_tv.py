@@ -6,6 +6,7 @@ from typing import Any, Sequence
 from urllib.parse import urlencode
 
 from .models import StationConfig
+from .recent_read_model import OFFLINE_LAST_READING_LIMIT
 from .stations import station_catalog
 
 DATASOURCE_UID = "ipradmon-mysql"
@@ -400,6 +401,47 @@ LIMIT {TREND_POINT_LIMIT}
     return panel
 
 
+def _offline_last_readings_table(panel_id: int) -> dict[str, Any]:
+    """Show genuine old samples without pretending they belong to ``now``.
+
+    Grafana's dashboard time picker clips historical timestamps, so this table is
+    intentionally separate from the 1-hour trend. It makes the bounded cache,
+    original measurement time, age, and OFFLINE state visible to operators.
+    """
+    relation = _status_relation()
+    table = _panel(panel_id, "table", "Pembacaan Terakhir · Offline", 0, 18, 24, 6)
+    table["description"] = "offline-last-readings"
+    table["targets"] = [_target(f"""
+SELECT
+  r.serid AS `ID`,
+  d.name AS `Ruangan`,
+  d.location AS `Lokasi`,
+  CASE WHEN s.status = 'OFFLINE' {STATUS_COLLATION}
+       THEN 'OFFLINE · LAST READING' ELSE s.status END AS `Status`,
+  DATE_FORMAT(r.dtom, '%Y-%m-%d %H:%i:%s') AS `Waktu Asli`,
+  TIMESTAMPDIFF(SECOND, r.dtom,
+    CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00')) AS `Umur Data (detik)`,
+  {_format_dose_sql('r.doserate')} AS `Dose Rate`,
+  {_format_dose_sql('r.dose')} AS `Dose`
+FROM recent_last r
+JOIN device d ON d.serid = r.serid
+JOIN ({relation}) s ON s.serid = r.serid
+WHERE s.status = 'OFFLINE' {STATUS_COLLATION}
+ORDER BY FIELD(s.status, 'OFFLINE' {STATUS_COLLATION}, 'ALARM' {STATUS_COLLATION}, 'ALERT' {STATUS_COLLATION}, 'NORMAL' {STATUS_COLLATION}), r.serid, r.dtom DESC
+LIMIT {len(station_catalog()) * OFFLINE_LAST_READING_LIMIT}
+""")]
+    table["fieldConfig"] = {
+        "defaults": {"custom": {"align": "auto", "cellOptions": {"type": "auto"}}},
+        "overrides": [
+            {"matcher": {"id": "byName", "options": "Dose Rate"}, "properties": [{"id": "unit", "value": "suffix: µSv/h"}, {"id": "decimals", "value": 2}]},
+            {"matcher": {"id": "byName", "options": "Dose"}, "properties": [{"id": "unit", "value": "suffix: µSv"}, {"id": "decimals", "value": 2}]},
+            {"matcher": {"id": "byName", "options": "Status"}, "properties": [{"id": "mappings", "value": [{"type": "value", "options": {"NORMAL": {"color": "green", "text": "NORMAL"}, "ALERT": {"color": "yellow", "text": "LOW / WARNING"}, "ALARM": {"color": "red", "text": "HIGH / ALARM"}, "OFFLINE · LAST READING": {"color": "gray", "text": "OFFLINE · LAST READING"}}}]}, {"id": "custom.cellOptions", "value": {"type": "color-background"}}]},
+        ],
+    }
+    table["options"] = {"cellHeight": "sm", "enablePagination": True, "showHeader": True}
+    return table
+
+
 def build_page_one() -> dict[str, Any]:
     dashboard = _base_dashboard("RadMon TV · Realtime", PAGE_UIDS[0], time_from="now-30m")
     widths = [5, 5, 5, 5, 4]
@@ -449,6 +491,7 @@ def build_page_two() -> dict[str, Any]:
             color=color, decimals=decimals, value_size=42,
         ))
         panel_id += 1
+    dashboard["panels"].append(_offline_last_readings_table(panel_id))
     return dashboard
 
 

@@ -45,6 +45,19 @@ class RecentPage(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.cellClicked.connect(self._row_clicked)
 
+        self.last_readings_table = QTableWidget(0, 4)
+        self.last_readings_table.setObjectName("recentLastReadingsTable")
+        self.last_readings_table.setHorizontalHeaderLabels(
+            ["Station", "Original Measurement Time", "Dose Rate [µSv/h]", "Data Status"]
+        )
+        self.last_readings_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.last_readings_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.last_readings_table.verticalHeader().setVisible(False)
+        self.last_readings_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.last_readings_table.horizontalHeader().setStretchLastSection(True)
+        self.last_readings_table.setMinimumHeight(130)
+        self.last_readings_table.setMaximumHeight(260)
+
         self.message_table = QTableWidget(0, 2)
         self.message_table.setObjectName("recentMessageTable")
         self.message_table.setHorizontalHeaderLabels(["Date/Time", "Message"])
@@ -60,6 +73,8 @@ class RecentPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         layout.addWidget(self.table, 1)
+        layout.addWidget(QLabel("Last readings (up to 30 genuine samples per station; original timestamps)"))
+        layout.addWidget(self.last_readings_table, 0)
         layout.addWidget(QLabel("Message"))
         layout.addWidget(self.message_table, 0)
         self.refresh_live()
@@ -171,4 +186,50 @@ class RecentPage(QWidget):
                 alarm_item.setText("S" if effective == "SUPPRESSED" else "●")
                 alarm_item.setToolTip(tooltip)
 
+        self._refresh_last_readings(rows, now)
         self.last_error = None if not errors else "Recent load partial error: " + "; ".join(errors[:3])
+
+    def _refresh_last_readings(self, live_rows: list[dict], now: datetime) -> None:
+        """Render several genuine timestamped readings, including stale ones."""
+        reader = getattr(self.repository, "last_readings", None)
+        if not callable(reader):
+            self.last_readings_table.setRowCount(0)
+            return
+        try:
+            readings = list(reader(limit=30))
+        except Exception as exc:
+            self.last_readings_table.setRowCount(0)
+            self.last_error = f"Last readings load error: {exc}"
+            return
+        station_meta = {
+            int(row["serid"]): row for row in live_rows if row.get("serid") is not None
+        }
+        self.last_readings_table.setRowCount(len(readings))
+        for index, reading in enumerate(readings):
+            serid = int(reading["serid"])
+            station = station_meta.get(serid, {})
+            measured_at = reading.get("dtom")
+            try:
+                status = classify_status(
+                    float(reading.get("doserate")) if reading.get("doserate") is not None else None,
+                    measured_at,
+                    now,
+                    float(station.get("warnlevel") or 0),
+                    float(station.get("alarmlevel") or 0),
+                    int(station.get("maxidlemin") or 30),
+                ).value
+            except Exception:
+                status = "OFFLINE"
+            if status == "OFFLINE":
+                status = "OFFLINE · LAST READING"
+            values = (
+                str(station.get("name") or serid),
+                self._text_time(measured_at),
+                "" if reading.get("doserate") is None else format_dose_value(reading["doserate"]),
+                status,
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                if status.startswith("OFFLINE"):
+                    item.setForeground(QColor("#777777"))
+                self.last_readings_table.setItem(index, column, item)
