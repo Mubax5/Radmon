@@ -1,7 +1,7 @@
 # Review keamanan RadMon (ID)
 
-**Tanggal review:** 8 Oktober 2026  
-**Baseline:** `127c1907`  
+**Tanggal review:** 8 Oktober 2026<br>
+**Baseline:** `127c1907`<br>
 **Status:** implementasi sudah diverifikasi di workspace dan belum dideploy ke
 produksi. Dokumen ini adalah catatan engineering dan readiness, bukan sertifikasi
 keamanan atau jaminan tidak ada kerentanan yang belum diketahui.
