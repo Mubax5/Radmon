@@ -319,7 +319,6 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         settings.archive_dir,
         timezone_name=settings.archive_timezone,
     )
-    archive_catalog.reconcile()
 
     archive_service = None
     if settings.archive_enabled:
@@ -420,6 +419,7 @@ class CentralService:
             lambda suppression: SuppressionExpiryScheduler(suppression.expire_due)
         )
         self._expiry_scheduler: Any | None = None
+        self._archive_reconcile_thread: threading.Thread | None = None
 
     @property
     def running(self) -> bool:
@@ -436,6 +436,37 @@ class CentralService:
         if self._runtime is None:
             raise RuntimeError("central service belum dijalankan")
         return self._runtime.archive_catalog
+
+    def _reconcile_archive_catalog(self, archive_catalog: Any) -> None:
+        """Reconcile retained archives without delaying the control plane.
+
+        Archive verification reads large quarter payloads and may take minutes
+        on an installed system. It is maintenance work, not a prerequisite for
+        serving health, authentication, or live alarms; running it in the API
+        startup path made an upgrade look hung while it still held the lock.
+        """
+        try:
+            result = archive_catalog.reconcile()
+            count = len(result) if result is not None else 0
+            LOG.info("archive catalog reconciliation complete entries=%s", count)
+        except Exception:
+            LOG.exception("archive catalog reconciliation failed; control plane remains available")
+
+    def _start_archive_reconciliation(self, archive_catalog: Any) -> None:
+        reconcile = getattr(archive_catalog, "reconcile", None)
+        if not callable(reconcile):
+            return
+        thread = self._archive_reconcile_thread
+        if thread is not None and thread.is_alive():
+            return
+        thread = threading.Thread(
+            target=self._reconcile_archive_catalog,
+            args=(archive_catalog,),
+            name="radmon-archive-reconcile",
+            daemon=True,
+        )
+        self._archive_reconcile_thread = thread
+        thread.start()
 
     def start(self) -> None:
         if self.running:
@@ -463,6 +494,10 @@ class CentralService:
             if app_state is not None:
                 app_state.radmon_api_server = api
             api.start()
+            # Do not make the first 8090 readiness response wait for large
+            # archive verification. The catalog remains wired to all routes;
+            # reconciliation continues safely in the background.
+            self._start_archive_reconciliation(runtime.archive_catalog)
         except Exception:
             self._api = None
             if lan_started:
