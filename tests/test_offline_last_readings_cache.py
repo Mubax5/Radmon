@@ -25,7 +25,7 @@ class RecordingCursor:
         return (0,)
 
 
-def test_mirror_keeps_real_timestamp_in_cache_and_hot_path_until_cleanup():
+def test_mirror_keeps_real_timestamp_in_cache_and_hot_path_without_cutoff():
     cursor = RecordingCursor()
     RollingRecentManager.mirror_sample(
         cursor,
@@ -40,6 +40,24 @@ def test_mirror_keeps_real_timestamp_in_cache_and_hot_path_until_cleanup():
     assert "insert ignore into recent_last" in cursor.calls[0][0].lower()
     assert "insert ignore into recent" in cursor.calls[-1][0].lower()
     assert cursor.calls[0][1] == cursor.calls[-1][1] == (5701, datetime(2026, 6, 23, 10, 0, 0), 0.17, 0.01, 2, 0)
+
+
+def test_mirror_keeps_stale_source_sample_only_in_bounded_cache_when_cutoff_is_known():
+    cursor = RecordingCursor()
+    RollingRecentManager.mirror_sample(
+        cursor,
+        serid=5701,
+        dtom=datetime(2026, 6, 23, 10, 0, 0),
+        doserate=0.17,
+        dose=0.01,
+        previnterval=2,
+        stat=0,
+        hot_cutoff=datetime(2026, 10, 8, 4, 0, 0),
+    )
+
+    assert "insert ignore into recent_last" in cursor.calls[0][0].lower()
+    assert "select ?, ?, ?, ?, ?, ?" in cursor.calls[-1][0].lower()
+    assert "where ? >= ?" in cursor.calls[-1][0].lower()
 
 
 def test_cleanup_keeps_offline_cache_bounded_and_hot_path_strictly_rolling():

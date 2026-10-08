@@ -70,6 +70,17 @@ def _building_from_location(location: str, fallback: str) -> str:
     return digits or fallback
 
 
+def _recent_cutoff(cursor: Any) -> Any | None:
+    """Use the same three-hour hot-window boundary for the compatibility path."""
+    cursor.execute(
+        "SELECT DATE_SUB(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '+07:00'), "
+        "INTERVAL 3 HOUR) AS cutoff"
+    )
+    row = cursor.fetchone()
+    value = row.get("cutoff") if isinstance(row, dict) else (row[0] if row else None)
+    return value if getattr(value, "year", None) is not None else None
+
+
 def upsert_recent(
     cursor: Any,
     measurement: Measurement,
@@ -90,6 +101,7 @@ def upsert_recent(
         dose=dose,
         previnterval=interval,
         stat=measurement.stat,
+        hot_cutoff=_recent_cutoff(cursor),
     )
 
 

@@ -105,6 +105,7 @@ class RollingRecentManager:
         dose: float,
         previnterval: int,
         stat: int,
+        hot_cutoff: Any | None = None,
     ) -> None:
         # The fallback cache is separate from the hot rolling table. A first-run
         # race must not prevent an authoritative online sample from being mirrored.
@@ -119,14 +120,30 @@ VALUES (?, ?, ?, ?, ?, ?)
             )
         except Exception:
             LOG.warning("offline last-readings cache is unavailable; continuing hot-path mirror")
-        cursor.execute(
-            """
+        hot_params = (
+            int(serid), dtom, float(doserate), float(dose), int(previnterval), int(stat)
+        )
+        if hot_cutoff is None:
+            cursor.execute(
+                """
 INSERT IGNORE INTO recent
   (serid, dtom, doserate, dose, previnterval, stat)
 VALUES (?, ?, ?, ?, ?, ?)
 """,
-            (int(serid), dtom, float(doserate), float(dose), int(previnterval), int(stat)),
-        )
+                hot_params,
+            )
+        else:
+            # Old but genuine source samples remain available through
+            # recent_last, never in the three-hour hot table.
+            cursor.execute(
+                """
+INSERT IGNORE INTO recent
+  (serid, dtom, doserate, dose, previnterval, stat)
+SELECT ?, ?, ?, ?, ?, ?
+WHERE ? >= ?
+""",
+                hot_params + (dtom, hot_cutoff),
+            )
 
     @staticmethod
     def _parse_dtom(value: Any):
@@ -148,6 +165,7 @@ VALUES (?, ?, ?, ?, ?, ?)
         return None
 
     def mirror_samples(self, cursor: Any, rows: Iterable[dict[str, Any]]) -> int:
+        hot_cutoff = self._database_cutoff(cursor)
         mirrored = 0
         for row in rows:
             raw_dtom = row.get("dtom")
@@ -190,6 +208,7 @@ VALUES (?, ?, ?, ?, ?, ?)
                 dose=dose_val,
                 previnterval=interval,
                 stat=stat_val,
+                hot_cutoff=hot_cutoff,
             )
             mirrored += 1
         return mirrored
