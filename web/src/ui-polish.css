@@ -139,7 +139,7 @@
 
 .report-download-link {
   width: fit-content;
-  min-height: 40px;
+  min-height: 44px;
   display: inline-flex;
   align-items: center;
   padding: 8px 12px;
@@ -161,6 +161,8 @@
   align-items: center;
   gap: 8px;
 }
+
+.report-actions > button { min-height: 44px; }
 
 .report-preview {
   min-height: 240px;

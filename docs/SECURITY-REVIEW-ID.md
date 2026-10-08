@@ -2,6 +2,7 @@
 
 **Tanggal review:** 8 Oktober 2026<br>
 **Baseline:** `127c1907`<br>
+**Evidence code parent:** `65b358db`<br>
 **Status:** implementasi sudah diverifikasi di workspace dan belum dideploy ke
 produksi. Dokumen ini adalah catatan engineering dan readiness, bukan sertifikasi
 keamanan atau jaminan tidak ada kerentanan yang belum diketahui.
@@ -75,15 +76,45 @@ Validasi yang tersedia pada workspace:
 - Test UI: **20 passed** (7 UI state, 5 dialog, 2 format, 6 notification).
 - `packaging/radmon_update.ps1 -SelfTest`: **passed**, termasuk simulated
   rollback tree aplikasi dan stable readiness gate.
-- GitHub Actions `CI` run **37749393634** pada commit ini: **success**.
-- GitHub Actions `Windows RadMon EXE` run **37749393597**: **success**;
+- GitHub Actions `CI` run **37750410637** pada commit parent: **success**.
+- GitHub Actions `Windows RadMon EXE` run **37750410745**: **success**;
   build EXE/installer, updater smoke, native install smoke, upgrade terhadap
   server berjalan, dan upload/publish workflow selesai.
 - `npm.cmd audit --package-lock-only --omit=dev --json`: **0 vulnerability**
   pada 189 dependency production yang ter-resolve.
-- `pip-audit` tidak tersedia di environment dan tidak di-install sesuai
-  pembatasan task. Dependensi Python belum memiliki evidence audit setara.
-- Browser executable/Playwright tidak tersedia; tidak ada klaim visual live.
+- `pip-audit 2.9.0` dijalankan dari virtualenv terisolasi di folder TEMP yang
+  disetujui; source, `.env`, database, dan virtualenv RadMon tidak diubah.
+  Scan `requirements.txt` (runtime + test/tooling) menemukan **1 advisory**:
+  `mariadb 1.1.14`, `CVE-2026-44172` / `GHSA-pv9p-5w55-55jm`, tanpa
+  `fix_versions` pada database advisory. Constraint saat ini
+  `mariadb>=1.1.10,<2` tetap belum memiliki upgrade connector yang dapat
+  dibuktikan aman. Metadata advisory menyebut versi server 3.3.18/3.4.8 dan
+  perbaikan 3.3.19/3.4.9, sehingga kecocokannya dengan Python connector 1.1.14
+  harus dikonfirmasi vendor/operator; ini bukan klaim exploitability atau zero
+  risk.
+- Scan `requirements-build.txt` (PyInstaller dan transitifnya) menemukan **0
+  advisory yang diketahui**. Scan read-only terhadap `.venv` menemukan **4
+  advisory pada 2 package**: advisory MariaDB di atas dan tiga advisory pada
+  `urllib3 2.7.0` (`CVE-2026-97687`, `CVE-2026-97688`, `CVE-2026-97689`),
+  semuanya memiliki fix `urllib3>=2.8.0`. Resolver requirements bersih memilih
+  `urllib3 2.8.0` melalui Selenium; `.venv` lokal yang stale tidak dipakai
+  sebagai bukti artifact production dan tidak dimutasi dalam review ini.
+- Edge sistem `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`
+  dan Playwright Python yang sudah tersedia dipakai pada server static lokal
+  `127.0.0.1` dengan API mock, profil browser sementara, dan screenshot di TEMP.
+  Sampel mencakup Overview, Alarm, History, Reports, Viewer/Operator/
+  Administrator, viewport **360/768/1280/1366 px**, text 200%, focus keyboard,
+  modal PIN tanpa submit, listbox, report preview PDF mock, dan source
+  `i_flag=0` versus policy alarm. **24 check, 20 screenshot, 0 page error, 0
+  request mutasi**; tidak ada request ke source LAN atau production.
+- Satu skip pada full pytest sebelumnya berasal dari fixture Selenium
+  `tests/test_web_responsive_browser.py` yang melewati test ketika executable
+  Chrome/Chromium/Edge tidak tersedia pada runner saat itu. Gap tersebut kini
+  memiliki bukti render Playwright+Edge terisolasi di atas; bukti ini tetap
+  merupakan sampel mock, bukan acceptance visual semua state production.
+- CSS report action/download dinaikkan ke target sentuh minimum 44px setelah
+  ditemukan tombol 36px pada render; `npm.cmd run check` dan `npm.cmd run build`
+  sesudah perbaikan berhasil.
 - Workflow publikasi otomatis `latest` berjalan sebagai bagian CI; tidak ada
   klaim bahwa artifact sudah dipasang atau dijalankan di production.
 - Tidak ada deploy/restart production, perubahan credential production,
@@ -115,8 +146,10 @@ Validasi yang tersedia pada workspace:
   release yang sedang berjalan. Restore/data migration produksi tetap pending.
 - [x] Full backend tests, `npm.cmd run check`, frontend build, dan seluruh test
   UI yang tersedia sudah dijalankan setelah integrasi.
-- [ ] Validasi visual browser pada 360/768/1280/1366 px oleh owner UI atau CI
-  browser; static CSS review bukan pengganti visual runtime.
+- [x] Sampel validasi visual browser mock pada 360/768/1280/1366 px, termasuk
+  focus, modal, role, overflow, report, dan state alarm telah dijalankan.
+- [ ] Owner UI melakukan acceptance visual live/staging pada 360/768/1280/1366
+  px; sampel mock bukan pengganti validasi deployment.
 - [ ] Setelah approval, lakukan canary upgrade dan pantau audit login,
   source-health transitions, archive/report jobs, serta orphan temp artifacts.
 
@@ -136,8 +169,13 @@ Validasi yang tersedia pada workspace:
 - Worker shutdown memiliki bounded wait. Jika driver/database call melanggar
   timeout, proses worker dapat tetap hidup di luar batas dan harus ditangani
   oleh service supervisor; hal itu bukan bukti data corruption sudah mustahil.
-- Dependency scan Python tidak tersedia, browser dan runtime production belum
-  seluruhnya dijalankan dalam audit ini.
+- Advisory dependency Python MariaDB belum mempunyai fix connector yang dapat
+  dibuktikan dari scan; vendor/operator harus menentukan connector/server patch
+  yang kompatibel. `.venv` audit juga memuat `urllib3 2.7.0` stale yang harus
+  dibangun ulang dengan `>=2.8.0` sebelum dipakai sebagai runtime.
+- Render browser yang dilakukan adalah sampel static+mock dengan Edge lokal;
+  browser, API, source LAN, dan runtime production belum seluruhnya dijalankan
+  dalam audit ini.
 - `FastAPI/Starlette` mengeluarkan deprecation warning untuk `on_event`; ini
   bukan failure keamanan, tetapi migrasi ke lifespan API sebaiknya masuk backlog.
 - Review ini mengurangi vulnerability yang terkonfirmasi dari source dan test,
