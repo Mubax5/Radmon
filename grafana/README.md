@@ -2,16 +2,25 @@
 
 Grafana adalah visualization engine untuk landing monitoring RadMon. Ia membaca schema existing `device`, `measurement`, dan `alarm` secara read-only; tidak ada migration/DDL ke database source production.
 
+Compose fallback juga bind ke `127.0.0.1:${RADMON_GRAFANA_PORT:-3300}` dan
+menolak start bila `RADMON_GRAFANA_PASSWORD` belum diisi. Port Grafana tidak
+boleh dipublish langsung ke LAN.
+
 ## Access model
 
 ```text
-http://192.168.1.2:8090/  -> redirect ke Playlist Grafana kiosk, anonymous read-only
+https://monitoring.example/ -> Playlist Grafana kiosk, session RadMon required
 http://localhost:3300     -> Grafana normal UI/login/editor di PC server
 ```
 
-Anonymous Grafana mempunyai role Viewer. Login form tetap aktif untuk Administrator lokal. Default credential Grafana adalah `admin/admin` sampai diganti melalui prosedur admin.
+Remote anonymous tidak didukung. Login form hanya untuk Administrator lokal;
+Grafana direct/anonymous, bila dipakai untuk compatibility, tetap loopback-only.
+Secret `admin/admin`, kosong, dan secret lemah ditolak oleh managed bootstrap;
+instalasi baru dapat membuat secret unik dari marker first-start.
 
-Landing RadMon tidak membungkus Grafana dengan React/header/sign-in. User anonymous melihat Grafana fullscreen/kiosk secara langsung.
+Landing RadMon tidak membungkus Grafana dengan React/header/sign-in. User
+remote membuka session RadMon lalu melihat Grafana fullscreen/kiosk melalui
+gateway.
 
 ## Persistence dan editing
 

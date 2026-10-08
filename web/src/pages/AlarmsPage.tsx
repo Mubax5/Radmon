@@ -217,18 +217,24 @@ export function AlarmsPage() {
   const [activeItems, setActiveItems] = useState<ActiveAlarm[]>([]);
   const [sourceItems, setSourceItems] = useState<ActiveAlarm[]>([]);
   const [activeLoaded, setActiveLoaded] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
   const [activeError, setActiveError] = useState("");
   const [historyOffset, setHistoryOffset] = useState(0);
   const [historyTotal, setHistoryTotal] = useState(0);
   const [suppressions, setSuppressions] = useState<Suppression[]>([]);
   const [error, setError] = useState("");
   const [suppressionError, setSuppressionError] = useState("");
-  const loadSuppressions = () => api<Suppression[]>("/api/v1/control/suppressions?active_only=true")
+  const [suppressionLoaded, setSuppressionLoaded] = useState(false);
+  const loadSuppressions = () => {
+    setSuppressionLoaded(false);
+    return api<Suppression[]>("/api/v1/control/suppressions?active_only=true")
     .then((activeSuppressions) => {
       setSuppressions(activeSuppressions);
       setSuppressionError("");
+      setSuppressionLoaded(true);
     })
-    .catch((e) => setSuppressionError(e instanceof Error ? e.message : "Tidak dapat memuat suppression"));
+    .catch((e) => { setSuppressionError(e instanceof Error ? e.message : "Tidak dapat memuat suppression"); setSuppressionLoaded(true); });
+  };
   const load = (offset = historyOffset) => Promise.allSettled([
     api<AlarmHistoryResponse>(`/api/v1/web/alarm-history?limit=500&offset=${offset}`),
     api<Suppression[]>("/api/v1/control/suppressions?active_only=true"),
@@ -252,14 +258,18 @@ export function AlarmsPage() {
         setHistoryOffset(events.value.offset);
         setHistoryTotal(events.value.total);
         setError("");
+        setHistoryLoaded(true);
       } else {
         setError(events.reason instanceof Error ? events.reason.message : "Tidak dapat memuat alarm");
+        setHistoryLoaded(true);
       }
       if (activeSuppressions.status === "fulfilled") {
         setSuppressions(activeSuppressions.value);
         setSuppressionError("");
+        setSuppressionLoaded(true);
       } else {
         setSuppressionError(activeSuppressions.reason instanceof Error ? activeSuppressions.reason.message : "Tidak dapat memuat suppression");
+        setSuppressionLoaded(true);
       }
     });
 
@@ -280,7 +290,7 @@ export function AlarmsPage() {
     };
   }, [items, activeItems, sourceItems]);
 
-  const isInitialLoading = items === null && !activeLoaded && !error;
+  const isInitialLoading = items === null && !activeLoaded && !historyLoaded && !error;
   const eventsFailedOnFirstLoad = items === null && Boolean(error);
   const enableAlarmAlerts = async () => {
     // Explicit click grants autoplay eligibility before later alarm beeps.
@@ -340,9 +350,9 @@ export function AlarmsPage() {
           <div className="metric-grid alarm-summary">
              <MetricCard label="Aktif (sumber)" value={activeError || !activeLoaded ? "—" : summary.sourceActive.length} badge={<Badge variant={activeError || !activeLoaded ? "warning" : summary.sourceActive.length ? "error" : "success"}>{activeError || !activeLoaded ? "Status tidak tersedia" : summary.sourceActive.length ? "Perlu tindakan" : "Tidak ada alarm yang berbunyi"}</Badge>} />
              {summary.policyActive.length ? <MetricCard label="Policy aktif (informasi)" value={summary.policyActive.length} badge={<span className="cell-subtle">Tidak membuka respons sumber</span>} /> : null}
-            <MetricCard label="Alarm ditahan sementara" value={summary.retriggerLocked} badge={<span className="cell-subtle">Menunggu pemicu baru</span>} />
-            <MetricCard label="Alarm diredam" value={summary.suppressed} badge={<span className="cell-subtle">Sesuai pengaturan</span>} />
-            <MetricCard label="Catatan terbaru" value={summary.total} badge={<span className="cell-subtle">Riwayat alarm</span>} />
+            <MetricCard label="Alarm ditahan sementara" value={items === null ? "—" : summary.retriggerLocked} badge={<span className="cell-subtle">{items === null ? "Riwayat tidak tersedia" : "Menunggu pemicu baru"}</span>} />
+            <MetricCard label="Alarm diredam" value={items === null ? "—" : summary.suppressed} badge={<span className="cell-subtle">{items === null ? "Riwayat tidak tersedia" : "Sesuai pengaturan"}</span>} />
+            <MetricCard label="Catatan terbaru" value={items === null ? "—" : summary.total} badge={<span className="cell-subtle">{items === null ? "Riwayat tidak tersedia" : "Riwayat alarm"}</span>} />
           </div>
 
           <PageSection title="Tindakan operator" description="Catat respons dan penanggung jawab alarm, atau redam alarm stasiun untuk waktu tertentu. Perubahan memerlukan PIN operator.">
@@ -352,20 +362,22 @@ export function AlarmsPage() {
                 <Button variant="secondary" onClick={() => void loadSuppressions()}>Muat ulang suppression</Button>
               </div>
             ) : null}
-             <AlarmOperations events={activeItems} sourceEvents={sourceItems} sourceStatus={!activeLoaded ? "loading" : activeError ? "error" : "ready"} activeError={activeError} suppressions={suppressions} onChanged={() => void load()} initialEventId={requestedEventId} />
+            <AlarmOperations events={activeItems} sourceEvents={sourceItems} sourceStatus={!activeLoaded ? "loading" : activeError ? "error" : "ready"} activeError={activeError} suppressions={suppressions} suppressionsStatus={!suppressionLoaded ? "loading" : suppressionError ? "error" : "ready"} onChanged={() => void load()} initialEventId={requestedEventId} />
           </PageSection>
 
-          <PageSection title="Riwayat alarm" description="Lihat alarm alat dan perubahan pengaturan alarm berdasarkan waktu.">
-            <ResponsiveDataView
-              desktop={<EventTable events={items ?? []} onChanged={() => void load()} />}
-              mobile={<EventCards events={items ?? []} onChanged={() => void load()} />}
-            />
-            <div className="form-actions" aria-label="Navigasi riwayat event">
-              <span className="cell-subtle">{historyTotal === 0 ? "0 event" : `${historyOffset + 1}–${Math.min(historyOffset + (items?.length ?? 0), historyTotal)} dari ${historyTotal}`}</span>
-              <Button variant="secondary" disabled={historyOffset === 0} onClick={() => void load(Math.max(0, historyOffset - 500))}>Sebelumnya</Button>
-              <Button variant="secondary" disabled={historyOffset + (items?.length ?? 0) >= historyTotal} onClick={() => void load(historyOffset + 500)}>Berikutnya</Button>
-            </div>
-          </PageSection>
+           <PageSection title="Riwayat alarm" description="Lihat alarm alat dan perubahan pengaturan alarm berdasarkan waktu.">
+             {items === null ? historyLoaded ? <p className="cell-subtle" role="status">Riwayat alarm belum tersedia.</p> : <LoadingCard label="Memuat riwayat alarm…" /> : <>
+               <ResponsiveDataView
+                 desktop={<EventTable events={items} onChanged={() => void load()} />}
+                 mobile={<EventCards events={items} onChanged={() => void load()} />}
+               />
+               <div className="form-actions" aria-label="Navigasi riwayat event">
+                 <span className="cell-subtle">{historyTotal === 0 ? "0 event" : `${historyOffset + 1}–${Math.min(historyOffset + items.length, historyTotal)} dari ${historyTotal}`}</span>
+                 <Button variant="secondary" disabled={historyOffset === 0} onClick={() => void load(Math.max(0, historyOffset - 500))}>Sebelumnya</Button>
+                 <Button variant="secondary" disabled={historyOffset + items.length >= historyTotal} onClick={() => void load(historyOffset + 500)}>Berikutnya</Button>
+               </div>
+             </>}
+           </PageSection>
         </>
       ) : null}
     </div>

@@ -85,7 +85,7 @@ Test-NetConnection 192.168.1.38 -Port 3306
 
 Uji dari PC central, bukan hanya dari laptop operator. `TcpTestSucceeded: False` mengarah ke layanan MariaDB sumber, kabel/routing/VLAN, firewall sumber, atau ACL jaringan; TCP sukses belum membuktikan autentikasi/schema database. Administrator dapat melihat status sumber dan waktu poll terakhir di Control Plane setelah login. `/health` menunjukkan status layanan pusat, bukan rincian kesehatan seluruh detector.
 
-Untuk akses dari client BRIN-NET, uji `Test-NetConnection 192.168.1.2 -Port 8090` dari client. Gateway `8090` adalah jalur web yang dibuka untuk client; `3300`, `3306`, dan `47652` tetap lokal/antar-server sesuai arsitektur. Jika TCP `8090` gagal dari LAN tetapi berhasil di PC server, eskalasikan routing/ACL/firewall kepada administrator jaringan. Jangan membuka port database/Grafana ke seluruh LAN sebagai jalan pintas.
+Untuk akses dari client BRIN-NET, uji `Test-NetConnection 192.168.1.2 -Port 8090` dari client. Gateway `8090` adalah jalur web yang dibuka untuk client; `3300`, `3306`, dan `47652` tetap lokal/antar-server sesuai arsitektur. Jika TCP `8090` gagal dari LAN tetapi berhasil di PC server, eskalasikan routing/ACL/firewall kepada administrator jaringan. Jangan membuka port database/Grafana ke seluruh LAN sebagai jalan pintas. Endpoint `8090` internal tidak menggantikan reverse proxy HTTPS untuk login remote; `426` berarti TLS termination, `RADMON_TRUSTED_PROXY_NETS`, dan `X-Forwarded-Proto: https` perlu diperiksa.
 
 ## Update dan checksum
 

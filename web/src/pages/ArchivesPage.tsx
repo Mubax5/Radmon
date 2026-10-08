@@ -41,6 +41,16 @@ function exportStatus(job: ArchiveExportJob) {
   );
 }
 
+function archiveStateLabel(state: unknown): string {
+  switch (String(state ?? "").toUpperCase()) {
+    case "COMPLETE": return "Selesai";
+    case "RUNNING": return "Berjalan";
+    case "FAILED": return "Gagal";
+    case "QUEUED": return "Menunggu";
+    default: return state ? String(state) : "Status tidak diketahui";
+  }
+}
+
 export function ArchivesPage() {
   const [items, setItems] = useState<ArchiveRecord[] | null>(null);
   const [year, setYear] = useState("all");
@@ -108,7 +118,7 @@ export function ArchivesPage() {
         description="Temukan arsip pengukuran per kuartal dan unduh data untuk disimpan atau ditinjau."
       />
       {error ? <ErrorCard message={error} /> : null}
-      {!items ? <LoadingCard /> : (
+      {!items && !error ? <LoadingCard /> : items ? (
         <>
           <div className="metric-grid archive-summary">
             <MetricCard label="Bundle arsip" value={items.length} badge={<span className="cell-subtle">Total katalog</span>} />
@@ -154,7 +164,7 @@ export function ArchivesPage() {
                       {derived.filtered.map((item, index) => (
                         <Table.Row key={`${item.quarter_id ?? "archive"}-${index}`}>
                           <Table.Cell><strong>{String(item.quarter_id ?? "—")}</strong></Table.Cell>
-                          <Table.Cell>{String(item.state ?? "—")}</Table.Cell>
+                          <Table.Cell>{archiveStateLabel(item.state)}</Table.Cell>
                           <Table.Cell>{formatTimestamp(item.start_at)}</Table.Cell>
                           <Table.Cell>{formatTimestamp(item.end_at)}</Table.Cell>
                           <Table.Cell>{formatTimestamp(item.updated_at ?? item.created_at)}</Table.Cell>
@@ -177,7 +187,7 @@ export function ArchivesPage() {
                       <div className="archive-card-header">
                         <div>
                           <h3>{String(item.quarter_id ?? "Arsip")}</h3>
-                          <div className="cell-subtle">{String(item.state ?? "Status tidak diketahui")}</div>
+                          <div className="cell-subtle">{archiveStateLabel(item.state)}</div>
                         </div>
                       </div>
                       <div className="card-meta">
@@ -196,7 +206,7 @@ export function ArchivesPage() {
             />
           </PageSection>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

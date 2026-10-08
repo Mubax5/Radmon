@@ -179,7 +179,8 @@ body:has([role="dialog"]) .page-stack { visibility: visible; }
 
 .mobile-card-list { display: grid; gap: 10px; min-width: 0; }
 .station-card, .record-card, .archive-card, .alarm-card, .user-card, .source-card { padding: 14px; display: grid; gap: 10px; min-width: 0; transition: border-color 160ms ease, box-shadow 160ms ease; }
-.station-card-header, .record-card-header, .archive-card-header, .alarm-card-header, .user-card-header, .source-card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; min-width: 0; }
+.station-card-header, .record-card-header, .archive-card-header, .alarm-card-header, .user-card-header, .source-card-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 10px; min-width: 0; }
+.station-card-header .alarm-status { flex: 1 1 100%; }
 .station-card-header > div, .record-card-header > div, .archive-card-header > div, .alarm-card-header > div, .user-card-header > div, .source-card-header > div { min-width: 0; }
 .station-card h3, .record-card h3, .archive-card h3, .alarm-card h3, .user-card h3, .source-card h3 { margin: 0; font-size: 15px; overflow-wrap: anywhere; }
 .record-card-header > strong { min-width: 0; text-align: right; overflow-wrap: anywhere; }
@@ -205,7 +206,7 @@ body:has([role="dialog"]) .page-stack { visibility: visible; }
 .form-actions > button { min-height: 44px; }
 .active-suppression-list { display: grid; gap: 10px; margin-top: 18px; }
 .active-suppression-list h3 { margin: 0; font-size: 14px; }
-.active-suppression-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px; }
+.active-suppression-row { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px; }
 .active-suppression-row > div { display: grid; gap: 3px; min-width: 0; }
 .active-suppression-row span { color: #6b7280; font-size: 12px; overflow-wrap: anywhere; }
 .trend-chart { width: 100%; min-width: 0; overflow: hidden; }
@@ -259,11 +260,13 @@ body:has([role="dialog"]) .page-stack { visibility: visible; }
 .alarm-notification.is-warning { color: #7a5a00; background: #fff8db; border-color: #f5d76e; border-left-color: #e3a008; }
 .alarm-status-dot.is-blinking { animation: radmon-alarm-pulse 1s ease-in-out infinite; }
 @keyframes radmon-alarm-pulse { 50% { opacity: .25; box-shadow: 0 0 0 5px rgb(217 45 32 / 16%); } }
-.alarm-action-link { border: 0; padding: 2px 4px; color: #b42318; background: transparent; font: inherit; text-decoration: underline; cursor: pointer; }
+.alarm-action-link { min-height: 44px; display: inline-flex; align-items: center; padding: 8px 10px; border: 0; border-radius: 6px; color: #b42318; background: transparent; font: inherit; text-decoration: underline; cursor: pointer; }
+.alarm-action-link:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .alarm-notification-stack { position: fixed; z-index: var(--radmon-layer-toast); inset: 16px 16px auto auto; display: grid; gap: 8px; width: min(460px, calc(100% - 32px)); }
 .alarm-notification { display: flex; align-items: center; gap: 10px; padding: 14px 16px; color: #7a271a; background: #fff1f0; border: 1px solid #fecdca; border-left: 5px solid #d92d20; border-radius: 10px; box-shadow: 0 8px 28px rgb(16 24 40 / 18%); }
 .alarm-notification .alarm-action-link { margin-left: auto; white-space: nowrap; }
-.alarm-notification-dismiss { border: 0; color: inherit; background: transparent; cursor: pointer; }
+.alarm-notification-dismiss { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding: 8px; border: 0; border-radius: 6px; color: inherit; background: transparent; cursor: pointer; }
+.alarm-notification-dismiss:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 @media (max-width: 640px) { .alarm-notification-stack { inset: 10px 10px auto; width: auto; } .alarm-notification { flex-wrap: wrap; } }
 
 @media (prefers-reduced-motion: reduce) {

@@ -230,6 +230,78 @@ function Wait-CentralReadiness {
     throw "RadMon control plane did not become ready and stable within $timeout seconds. Last health result: $lastDetail. $diagnostics"
 }
 
+function Stop-InstalledServer {
+    param([string]$AppDir)
+
+    $task = Get-ScheduledTask -TaskName "RadMon Server" -ErrorAction SilentlyContinue
+    if ($null -ne $task) {
+        Stop-ScheduledTask -TaskName "RadMon Server" -ErrorAction SilentlyContinue
+    }
+    $normalized = [System.IO.Path]::GetFullPath($AppDir).TrimEnd('\') + '\'
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $processes = @(
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $path = [string]$_.ExecutablePath
+                    $path -and $path.StartsWith($normalized, [System.StringComparison]::OrdinalIgnoreCase)
+                }
+        )
+        foreach ($process in $processes) {
+            Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue
+        }
+        if ($processes.Count -eq 0) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "RadMon app processes did not stop before the verified upgrade window"
+}
+
+function Move-AppToUpgradeBackup {
+    param(
+        [string]$AppDir,
+        [string]$BackupDir
+    )
+
+    $root = [System.IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
+    $app = [System.IO.Path]::GetFullPath($AppDir).TrimEnd('\')
+    if ($app -eq $root -or -not $app.StartsWith($root + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to stage an app directory outside the owned install root"
+    }
+    if (-not (Test-Path -LiteralPath $AppDir -PathType Container)) {
+        throw "Installed RadMon app directory is missing: $AppDir"
+    }
+    if (Test-Path -LiteralPath $BackupDir) {
+        throw "Upgrade backup already exists: $BackupDir"
+    }
+    Move-Item -LiteralPath $AppDir -Destination $BackupDir -Force
+}
+
+function Restore-AppFromUpgradeBackup {
+    param(
+        [string]$AppDir,
+        [string]$BackupDir,
+        [switch]$StartServer
+    )
+
+    if (-not (Test-Path -LiteralPath $BackupDir -PathType Container)) {
+        throw "Upgrade rollback backup is missing: $BackupDir"
+    }
+    Stop-InstalledServer -AppDir $AppDir
+    if (Test-Path -LiteralPath $AppDir) {
+        $failedDir = "$AppDir.failed-$([Guid]::NewGuid().ToString('N'))"
+        # Move the failed tree aside rather than recursively deleting arbitrary
+        # content. The tree remains available for post-failure diagnostics.
+        Move-Item -LiteralPath $AppDir -Destination $failedDir -Force
+    }
+    Move-Item -LiteralPath $BackupDir -Destination $AppDir -Force
+    if ($StartServer) {
+        Start-ScheduledTask -TaskName "RadMon Server" -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-UpdaterSelfTest {
     $root = Join-Path ([System.IO.Path]::GetTempPath()) ("radmon-updater-selftest-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $root | Out-Null
@@ -267,6 +339,32 @@ function Invoke-UpdaterSelfTest {
             throw "Bounded stable readiness self-test failed"
         }
         Remove-Variable -Name radmonUpdaterSelfTestProbeCalls -Scope Script -ErrorAction SilentlyContinue
+
+        # Simulate an installer that leaves a new app tree before readiness
+        # succeeds. The old owned tree must be restored and the failed tree must
+        # remain available for diagnostics; no real scheduled task is started.
+        $oldInstallRoot = $InstallRoot
+        try {
+            $InstallRoot = $root
+            $appDir = Join-Path $root "app"
+            $backupDir = Join-Path $root "runtime\updates\previous-app"
+            New-Item -ItemType Directory -Force -Path $appDir, (Split-Path -Parent $backupDir) | Out-Null
+            "old-release" | Set-Content -Path (Join-Path $appDir "release.txt") -Encoding ASCII
+            Move-AppToUpgradeBackup -AppDir $appDir -BackupDir $backupDir
+            New-Item -ItemType Directory -Force -Path $appDir | Out-Null
+            "failed-release" | Set-Content -Path (Join-Path $appDir "release.txt") -Encoding ASCII
+            Restore-AppFromUpgradeBackup -AppDir $appDir -BackupDir $backupDir
+            $restored = Get-Content -Path (Join-Path $appDir "release.txt") -Raw
+            if ($restored.Trim() -ne "old-release") {
+                throw "App rollback self-test did not restore the previous release"
+            }
+            if (@(Get-ChildItem -Path "$appDir.failed-*" -ErrorAction SilentlyContinue).Count -ne 1) {
+                throw "App rollback self-test did not preserve the failed tree"
+            }
+        }
+        finally {
+            $InstallRoot = $oldInstallRoot
+        }
     }
     finally {
         Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
@@ -283,6 +381,8 @@ if ($SelfTest) {
 
 $mutex = New-Object System.Threading.Mutex($false, $MutexName)
 $hasMutex = $false
+$backupDir = $null
+$backupMoved = $false
 try {
     try {
         $hasMutex = $mutex.WaitOne(0)
@@ -330,6 +430,13 @@ try {
     $verifiedHash = Test-InstallerChecksum -SetupPath $setupPath -ChecksumPath $checksumPath
     Write-UpdaterLog "Installer checksum verified: $verifiedHash. Starting silent upgrade to $remoteSha."
 
+    $appDir = Join-Path $InstallRoot "app"
+    $backupDir = Join-Path $updateDir "previous-app"
+    Stop-InstalledServer -AppDir $appDir
+    Move-AppToUpgradeBackup -AppDir $appDir -BackupDir $backupDir
+    $backupMoved = $true
+    Write-UpdaterLog "Previous release staged at $backupDir before installer execution."
+
     $arguments = @(
         "/VERYSILENT",
         "/SUPPRESSMSGBOXES",
@@ -350,11 +457,27 @@ try {
     Write-UpdaterLog "Control plane readiness verified after upgrade: $readiness."
     Write-UpdaterLog "Automatic upgrade completed successfully: $remoteSha."
 
+    if ($backupMoved -and (Test-Path -LiteralPath $backupDir)) {
+        Remove-Item -LiteralPath $backupDir -Recurse -Force
+        $backupMoved = $false
+    }
+
     Get-ChildItem -Path $updatesRoot -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -ne $remoteSha } |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 }
 catch {
+    if ($backupMoved -and $null -ne $backupDir) {
+        try {
+            Write-UpdaterLog "Upgrade failed; restoring the previous app release from $backupDir."
+            Restore-AppFromUpgradeBackup -AppDir (Join-Path $InstallRoot "app") -BackupDir $backupDir -StartServer
+            Write-UpdaterLog "Previous app release restored and server task restart requested."
+            $backupMoved = $false
+        }
+        catch {
+            try { Write-UpdaterLog ("Automatic rollback failed: " + $_.Exception.Message) } catch { }
+        }
+    }
     try {
         Write-UpdaterLog ("Updater failed: " + $_.Exception.Message)
     }

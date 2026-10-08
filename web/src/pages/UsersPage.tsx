@@ -184,7 +184,7 @@ export function UsersPage() {
         action={createUserAction}
       />
       {error ? <ErrorCard message={error} /> : null}
-      {!items ? <LoadingCard /> : (
+      {!items && !error ? <LoadingCard /> : items ? (
         <>
           <div className="metric-grid user-summary">
             <MetricCard label="Pengguna" value={summary.total} badge={<span className="cell-subtle">Identitas terautentikasi</span>} />
@@ -200,7 +200,7 @@ export function UsersPage() {
             />
           </PageSection>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

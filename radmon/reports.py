@@ -197,7 +197,14 @@ class ReportService:
                 serid=self.settings.serid,
                 limit=max(1, int(limit)),
             )
-        return sorted(list(rows), key=self._row_sort_key)
+        bounded_rows: list[dict[str, Any]] = []
+        for row in rows:
+            bounded_rows.append(row)
+            if len(bounded_rows) > max(1, int(limit)):
+                raise ValueError(
+                    f"jumlah pengukuran melebihi batas {self.MAX_MEASUREMENT_ROWS:,}; pilih rentang waktu lebih sempit"
+                )
+        return sorted(bounded_rows, key=self._row_sort_key)
 
     def rows(
         self,
@@ -246,7 +253,12 @@ class ReportService:
         count = self._count("alarm_count", database_start, database_end)
         if count is not None and count > self.MAX_ALARM_ROWS:
             raise ValueError(f"jumlah alarm melebihi batas {self.MAX_ALARM_ROWS:,}; pilih rentang waktu lebih sempit")
-        rows = self.repository.alarm_history(database_start, database_end, serid=self.settings.serid, limit=self.MAX_ALARM_ROWS + 1)
+        raw_rows = self.repository.alarm_history(database_start, database_end, serid=self.settings.serid, limit=self.MAX_ALARM_ROWS + 1)
+        rows: list[dict[str, Any]] = []
+        for row in raw_rows:
+            rows.append(row)
+            if len(rows) > self.MAX_ALARM_ROWS:
+                break
         if len(rows) > self.MAX_ALARM_ROWS:
             raise ValueError(f"jumlah alarm melebihi batas {self.MAX_ALARM_ROWS:,}; pilih rentang waktu lebih sempit")
         return rows

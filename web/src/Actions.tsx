@@ -43,7 +43,15 @@ const RESPONSE_ACTION_ITEMS = {
 
 function Feedback({ state }: { state: { kind: "ok" | "error"; text: string } | null }) {
   if (!state) return null;
-  return <div className={state.kind === "ok" ? "form-success" : "form-error"}>{state.text}</div>;
+  return (
+    <div
+      className={state.kind === "ok" ? "form-success" : "form-error"}
+      role={state.kind === "ok" ? "status" : "alert"}
+      aria-live={state.kind === "ok" ? "polite" : "assertive"}
+    >
+      {state.text}
+    </div>
+  );
 }
 
 function NativeSelect({
@@ -87,7 +95,7 @@ function NativeSelect({
   );
 }
 
-export function AlarmOperations({ events, sourceEvents, suppressions, onChanged, initialEventId, activeError, sourceStatus = "ready" }: { events: AlarmEvent[]; sourceEvents?: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void; initialEventId?: string | null; activeError?: string; sourceStatus?: "loading" | "ready" | "error" }) {
+export function AlarmOperations({ events, sourceEvents, suppressions, onChanged, initialEventId, activeError, sourceStatus = "ready", suppressionsStatus = "ready" }: { events: AlarmEvent[]; sourceEvents?: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void; initialEventId?: string | null; activeError?: string; sourceStatus?: "loading" | "ready" | "error"; suppressionsStatus?: "loading" | "ready" | "error" }) {
   const { user } = useSession();
   const canEditPic = user?.role === "Administrator";
   // ``events`` is retained for callers that do not yet provide the split
@@ -385,7 +393,7 @@ export function AlarmOperations({ events, sourceEvents, suppressions, onChanged,
         </Dialog.Root>
         <div className="active-suppression-list" aria-live="polite">
           <h3>Suppression aktif</h3>
-          {suppressions.length === 0 ? <p className="cell-subtle">Tidak ada suppression aktif.</p> : suppressions.map((item) => (
+          {suppressionsStatus === "loading" ? <p className="cell-subtle" role="status">Memuat suppression aktif…</p> : suppressionsStatus === "error" ? <p className="cell-subtle" role="status">Daftar suppression aktif belum tersedia.</p> : suppressions.length === 0 ? <p className="cell-subtle">Tidak ada suppression aktif.</p> : suppressions.map((item) => (
             <div className="active-suppression-row" key={item.suppression_id}>
               <div>
                 <strong>SERID {item.serid}</strong>

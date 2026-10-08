@@ -13,7 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
-from .config import Settings
+from .config import Settings, is_safe_grafana_password
 from .grafana_tv import (
     DASHBOARD_UIDS,
     PAGE_UIDS,
@@ -423,6 +423,8 @@ class GrafanaBootstrap:
         env.update(
             {
                 "RADMON_GRAFANA_PORT": str(self.settings.grafana_fallback_port),
+                "RADMON_GRAFANA_USER": self.settings.grafana_user,
+                "RADMON_GRAFANA_PASSWORD": self.settings.grafana_password,
                 "RADMON_DB_PORT": str(self.settings.db_port),
                 "RADMON_DB_USER": self.settings.db_user,
                 "RADMON_DB_PASSWORD": self.settings.db_password,
@@ -645,8 +647,6 @@ class GrafanaBootstrap:
                 raw = response.read().decode("utf-8")
                 return json.loads(raw) if raw else {}
         except HTTPError as exc:
-            if use_auth and method == "GET" and exc.code in {401, 403}:
-                return self._request_json(url, method=method, payload=payload, use_auth=False)
             detail = exc.read().decode("utf-8", errors="replace")
             raise GrafanaApiError(
                 exc.code,
@@ -658,6 +658,14 @@ class GrafanaBootstrap:
             ) from exc
 
     def ensure(self) -> str:
+        # Frozen/installed processes carry application_dir. Library callers may
+        # still construct Settings() for API-only tests without a Grafana secret,
+        # but a managed installation must not start admin/admin or empty auth.
+        if self.settings.application_dir is not None and not is_safe_grafana_password(self.settings.grafana_password):
+            raise RuntimeError(
+                "password admin Grafana belum aman/unik; isi RADMON_GRAFANA_PASSWORD "
+                "dengan secret minimal 20 karakter dan jangan gunakan nilai default"
+            )
         candidates = self._candidate_base_urls()
         healthy_ready_found = False
         errors: list[str] = []

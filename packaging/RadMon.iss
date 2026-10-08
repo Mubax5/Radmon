@@ -22,9 +22,6 @@ OutputDir=installer
 OutputBaseFilename=RadMon-Setup
 UninstallDisplayIcon={app}\app\{#AppExeName}
 
-[InstallDelete]
-Type: filesandordirs; Name: "{app}\app"
-
 [Dirs]
 Name: "{app}\config"; Flags: uninsneveruninstall
 Name: "{app}\runtime"; Flags: uninsneveruninstall

@@ -29,7 +29,9 @@ def test_live_history_refresh_keeps_existing_content_mounted():
     history = read("pages/HistoryPage.tsx")
     assert "loadHistory(true)" in history
     assert "loadHistory(false)" in history
-    assert "loading && rows.length === 0" in history
+    # A station switch/live refresh may retain rows from the selected station;
+    # show the initial loader only while no current rows are mounted.
+    assert "(loading || waitingForSelected) && currentRows.length === 0" in history
     assert "setRefreshing" in history
 
 

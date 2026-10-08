@@ -4,22 +4,24 @@
 
 Server production berjalan otomatis melalui Scheduled Task Windows. User tidak perlu membuka `RadMon.exe` untuk membuat collector/API tetap hidup.
 
-### Monitoring tanpa login
+### Monitoring remote dengan session RadMon
 
 Dari network BRIN/LAN yang diizinkan buka:
 
 ```text
-http://192.168.1.2:8090/
+https://monitoring.example/
 ```
 
-Alamat tersebut langsung membuka Grafana Playlist fullscreen/kiosk. Halaman ini tidak memiliki tombol Sign in RadMon, sidebar RadMon, atau fitur kontrol. Anonymous Grafana adalah read-only Viewer.
+Alamat tersebut membuka Grafana Playlist fullscreen/kiosk setelah login session
+RadMon. Remote anonymous tidak didukung; Grafana direct/anonymous hanya boleh
+berada di loopback server dan port 3300 tidak boleh dibuka ke LAN.
 
 ### RadMon Control Plane
 
 Untuk fitur aplikasi buka:
 
 ```text
-http://192.168.1.2:8090/app
+https://monitoring.example/app
 ```
 
 Semua role RadMon **wajib login**, termasuk Viewer.
@@ -38,7 +40,8 @@ Overview menampilkan jumlah station `NORMAL`, `WARNING`, `ALARM`, dan `OFFLINE` 
 
 ## Grafana monitoring dan editing
 
-Monitoring public-BRIN dan editor memakai state dashboard Grafana yang sama.
+Monitoring remote yang sudah authenticated dan editor memakai state dashboard
+Grafana yang sama.
 
 Untuk editing, Administrator bekerja dari PC server dan membuka:
 
@@ -46,7 +49,10 @@ Untuk editing, Administrator bekerja dari PC server dan membuka:
 http://localhost:3300
 ```
 
-Login Grafana default adalah `admin/admin` bila belum diubah. Setelah dashboard diedit dan **Save**, hasil itu menjadi state authoritative dan langsung dipakai monitoring. RadMon tidak melakukan overwrite factory setiap startup.
+Login Grafana harus memakai secret yang dikelola operator; `admin/admin`,
+kosong, atau secret lemah akan memblokir managed bootstrap. Setelah dashboard
+diedit dan **Save**, hasil itu menjadi state authoritative dan langsung dipakai
+monitoring. RadMon tidak melakukan overwrite factory setiap startup.
 
 Dashboard factory hanya dibuat bila UID dashboard belum ada. Dashboard lama yang masih `editable=false` dapat dibuka editing melalui migrasi satu kali yang mempertahankan panel/layout/query tersimpan.
 
@@ -130,7 +136,9 @@ Jika server tidak dapat diakses:
 
 ## Upgrade
 
-Installer baru boleh mengganti application files, tetapi harus mempertahankan:
+Updater terverifikasi men-stage release lama dan memeriksa marker/readiness;
+jika gagal, release lama dipulihkan. Application files boleh diganti, tetapi
+harus mempertahankan:
 
 ```text
 config\.env

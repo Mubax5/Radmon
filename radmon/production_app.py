@@ -13,7 +13,7 @@ import webbrowser
 from typing import Callable, Sequence, Any
 
 from .central_service import CentralService, smoke_server_lifecycle
-from .config import Settings
+from .config import Settings, ensure_grafana_password
 from .desktop_app import run_admin_ui
 from .grafana_persistent import PersistentGrafanaBootstrap
 from .logging_setup import configure_logging
@@ -165,6 +165,9 @@ def _prepare_settings(paths: ApplicationPaths) -> tuple[Settings, Path]:
     ):
         folder.mkdir(parents=True, exist_ok=True)
     _migrate_legacy_env(paths)
+    # New installer templates contain an explicit marker. Generate once,
+    # atomically, but never replace a legacy operator-chosen credential.
+    ensure_grafana_password(paths.env_file)
     settings = Settings.from_env(paths.env_file).for_application_paths(paths)
     settings = replace(settings, lan_enabled=True)
     return settings, configure_logging(settings.log_dir)

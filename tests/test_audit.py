@@ -41,7 +41,7 @@ def test_audit_records_actor_target_before_after_and_applog(tmp_path):
         "gd52",
     )
     assert json.loads(row[6]) == {"acknowledged_at": None}
-    assert json.loads(row[7])["pic"] == "Budi"
+    assert json.loads(row[7])["pic"] == "[REDACTED]"
     assert row[8] == 1
     assert logger.messages and "ALARM_ACK" in logger.messages[-1]
 

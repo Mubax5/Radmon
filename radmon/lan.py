@@ -189,6 +189,10 @@ class LivePullResult:
     inserted_measurements: int = 0
     mirrored_alarms: int = 0
     error: str | None = None
+    # Connectivity is kept separate from policy/cache processing. A source can
+    # answer live_rows() while central policy evaluation fails.
+    remote_connected: bool = False
+    policy_error: str | None = None
     mapped_live_rows: list[dict[str, Any]] = field(default_factory=list, repr=False)
     source_clock_offset: timedelta = field(default=timedelta(0), repr=False)
 
@@ -1019,6 +1023,7 @@ class LanAggregator:
             clock_offset = clock_offset_fn() if callable(clock_offset_fn) else timedelta(0)
             result.source_clock_offset = clock_offset
             raw_live = remote.live_rows()
+            result.remote_connected = True
             mapped_live: list[dict[str, Any]] = []
             for row in raw_live:
                 remote_serid = int(row['serid'])
@@ -1079,7 +1084,8 @@ class LanAggregator:
             alarm_policy.process_cycle(source.source_id, mapped_live, mapped_alarms)
             _retry_source_silences(self, source, alarm_policy)
         except Exception as exc:
-            result.error = str(exc)
+            result.policy_error = str(exc)
+            result.error = result.policy_error
         return result
 
     def run_live_fallback_once(self, source) -> LivePullResult:
@@ -1179,6 +1185,7 @@ class LanAggregator:
                 result.error = "fallback produced no live rows"
                 return result
             result.mapped_live_rows = mapped_live
+            result.remote_connected = True
             if hasattr(self.central, "upsert_live_rows"):
                 self.central.upsert_live_rows(source.source_id, mapped_live)
             result.live_stations = len(mapped_live)
@@ -1214,11 +1221,11 @@ class LanAggregator:
         return result
 
     def _run_live_policy_base_once(self, source):
-        historical_seed = self.checkpoints.load_alarm(source.source_id) is None
         result = self._run_live_core_once(source)
         if result.error:
             return result
         try:
+            historical_seed = self.checkpoints.load_alarm(source.source_id) is None
             remote = self.remote_factory(source)
             state_reader = getattr(remote, 'alarm_states', None)
             state_rows = state_reader(2000) if callable(state_reader) else []
@@ -1246,5 +1253,6 @@ class LanAggregator:
                     if handled and hasattr(self.central, 'mark_alarm_handled'):
                         self.central.mark_alarm_handled(handled)
         except Exception as exc:
-            result.error = str(exc)
+            result.policy_error = str(exc)
+            result.error = result.policy_error
         return result

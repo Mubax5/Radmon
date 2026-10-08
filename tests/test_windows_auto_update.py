@@ -49,6 +49,18 @@ def test_updater_uses_latest_release_and_installed_release_marker():
     assert "radmon-updater.log" in script
 
 
+def test_updater_stages_previous_app_and_rolls_back_failed_release():
+    installer = (ROOT / "packaging/RadMon.iss").read_text(encoding="utf-8")
+    script = (ROOT / "packaging/radmon_update.ps1").read_text(encoding="utf-8")
+
+    assert "Move-AppToUpgradeBackup" in script
+    assert "Restore-AppFromUpgradeBackup" in script
+    assert "previous-app" in script
+    assert "failed-" in script
+    assert "Wait-CentralReadiness" in script
+    assert "[InstallDelete]" not in installer
+
+
 def test_windows_build_embeds_release_sha_and_smokes_updater():
     workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
 

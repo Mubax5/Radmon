@@ -9,6 +9,12 @@ _SOURCE_FIELDS = (
     'measured_value', 'threshold', 'hit_count', 'is_active', 'source_i_flag',
     'source_observed_at', 'source_observation_version',
 )
+_POLICY_FIELDS = (
+    'event_id', 'source_id', 'serid', 'remote_serid', 'remote_event_time',
+    'surfaced_at', 'origin', 'kind', 'trigger_index', 'measured_value',
+    'threshold', 'status', 'suppression_id', 'responded_at',
+    'notification_sent_at', 'resolved_at', 'resolution_code',
+)
 
 
 def _time_text(value: Any) -> str:
@@ -43,6 +49,11 @@ def _source_action_row(raw: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _policy_view_row(raw: dict[str, Any]) -> dict[str, Any]:
+    """Return the read-only policy projection used by viewer-facing routes."""
+    return {key: raw[key] for key in _POLICY_FIELDS if key in raw}
+
+
 def active_alarm_snapshot(mirror: Any, policy: Any) -> dict[str, Any]:
     """Read one consistent active snapshot and split source actions from policy rows.
 
@@ -60,7 +71,7 @@ def active_alarm_snapshot(mirror: Any, policy: Any) -> dict[str, Any]:
     # authoritative gate in case an inconsistent/stale mirror row has
     # is_active=1 while i_flag is already 1.
     sources = [raw for raw in sources if _source_is_actionable(dict(raw))]
-    policies = {row['event_id']: dict(row, event_type='policy_lifecycle')
+    policies = {row['event_id']: dict(_policy_view_row(row), event_type='policy_lifecycle')
                 for row in policies if row.get('kind') == 'ALARM' and row.get('status') == 'ACTIVE'}
 
     def same_occurrence(left, right):

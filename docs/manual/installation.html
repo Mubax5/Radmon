@@ -30,16 +30,16 @@
       <li>Jalankan <code>RadMon-Setup.exe</code> sebagai Administrator.</li>
       <li>Edit <code>config\.env</code> dan isi central/source database credential.</li>
       <li>Untuk security DB baru, isi <code>RADMON_BOOTSTRAP_ADMIN_USER</code>, password, dan PIN satu kali.</li>
-      <li>Pastikan Grafana native tersedia di port 3300; isi <code>RADMON_GRAFANA_BIN</code> bila lokasinya non-standar.</li>
+       <li>Pastikan Grafana native tersedia di port 3300; isi <code>RADMON_GRAFANA_BIN</code> bila lokasinya non-standar. Gunakan secret Grafana unik, bukan <code>admin/admin</code>.</li>
       <li>Restart Scheduled Task <code>RadMon Server</code> atau reboot setelah konfigurasi lengkap.</li>
     </ol>
 
     <h2>URL</h2>
-    <pre>http://192.168.1.2:8090/       Grafana monitoring kiosk tanpa login RadMon
-http://192.168.1.2:8090/app    RadMon Control Plane, wajib login
-http://localhost:3300          Grafana admin/editor hanya pada PC server</pre>
+     <pre>https://monitoring.example/    Grafana monitoring kiosk, wajib login RadMon
+ https://monitoring.example/app RadMon Control Plane, wajib login
+ http://localhost:3300          Grafana admin/editor hanya pada PC server</pre>
 
-    <p>Client BRIN-NET memakai port 8090 saja. Grafana monitoring diproxy oleh RadMon sehingga browser remote tidak perlu dan tidak diberi akses inbound langsung ke 3300. Viewer, Operator, dan Administrator semuanya wajib login RadMon; anonymous hanya melihat Grafana read-only.</p>
+     <p>Client BRIN-NET memakai reverse proxy HTTPS menuju gateway 8090. Grafana monitoring diproxy oleh RadMon sehingga browser remote tidak perlu dan tidak diberi akses inbound langsung ke 3300. Viewer, Operator, dan Administrator semuanya wajib login RadMon; remote anonymous tidak didukung.</p>
 
     <h2>Grafana persistent</h2>
     <p>Production normal memakai Grafana native, bukan Docker Desktop. Factory dashboard hanya di-seed jika resource belum ada. Dashboard yang sudah tersimpan tidak di-overwrite pada startup. Administrator dapat Edit dan Save dari <code>localhost:3300</code>; hasil Save langsung dipakai monitoring dan tetap ada setelah restart atau upgrade.</p>
@@ -51,7 +51,7 @@ http://localhost:3300          Grafana admin/editor hanya pada PC server</pre>
     <p>Scheduled Task menjalankan <code>app\RadMon.exe --server</code> sebagai SYSTEM saat startup Windows dan mencoba restart otomatis bila proses berhenti. Menutup browser tidak mematikan server.</p>
 
     <h2>Upgrade</h2>
-    <p>Jalankan installer baru sebagai Administrator. Installer mengganti aplikasi tetapi mempertahankan <code>config\.env</code>, <code>runtime\</code>, <code>archives\</code>, dan <code>reports\</code>.</p>
+     <p>Jalankan updater/installer baru sebagai Administrator. Updater men-stage release lama, memeriksa marker dan readiness, lalu memulihkan release lama bila gagal. <code>config\.env</code>, <code>runtime\</code>, <code>archives\</code>, dan <code>reports\</code> tetap dipertahankan.</p>
 
     <h2>Source production</h2>
     <pre>gd50 -&gt; 192.168.1.50:3306 / ipradmon

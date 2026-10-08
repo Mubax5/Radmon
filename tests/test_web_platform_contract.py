@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from radmon.config import Settings
+from radmon.secure_api import SESSION_COOKIE
+from radmon.security import Role, SecurityStore
 from radmon.web_host import attach_web_routes, monitoring_url
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +35,7 @@ def test_monitoring_landing_stays_on_radmon_gateway(tmp_path: Path) -> None:
     assert "kiosk" in response.headers["location"].lower()
 
 
-def test_remote_grafana_is_proxied_through_radmon_without_client_credentials(tmp_path: Path) -> None:
+def test_authenticated_remote_grafana_is_proxied_without_client_credentials(tmp_path: Path) -> None:
     seen: list[httpx.Request] = []
 
     def upstream(request: httpx.Request) -> httpx.Response:
@@ -42,17 +44,21 @@ def test_remote_grafana_is_proxied_through_radmon_without_client_credentials(tmp
 
     app = FastAPI()
     settings = Settings(central_host="192.168.1.2", grafana_fallback_port=3300)
+    security = SecurityStore(tmp_path / "security.db")
+    security.create_user("viewer", "Viewer", Role.VIEWER, "Password123!", "2468")
     attach_web_routes(
         app,
         settings=settings,
+        security=security,
         web_dist=tmp_path / "missing",
         grafana_transport=httpx.MockTransport(upstream),
     )
     client = TestClient(app, client=("10.50.60.70", 50000))
+    client.cookies.set(SESSION_COOKIE, security.create_session("viewer"))
     response = client.post(
         "/api/ds/query?requestId=Q1",
         content=b"{}",
-        headers={"authorization": "Basic secret", "cookie": "grafana_session=secret"},
+        headers={"authorization": "Basic secret"},
     )
 
     assert response.status_code == 200

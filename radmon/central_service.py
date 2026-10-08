@@ -354,7 +354,10 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         device_admin=services.device_admin,
         user_admin=services.user_admin,
         report_jobs=report_jobs,
-        cookie_secure=_enabled("RADMON_WEB_COOKIE_SECURE"),
+        cookie_secure=bool(settings.web_cookie_secure),
+        reject_insecure_remote=settings.application_dir is not None,
+        allowed_origins=tuple(settings.web_allowed_origins),
+        trusted_proxy_nets=tuple(settings.trusted_proxy_nets),
         archive_catalog=archive_catalog,
         archive_service=archive_service,
         archive_exports=archive_exports,
@@ -371,7 +374,7 @@ def build_central_runtime(settings: Settings) -> CentralRuntime:
         alarm_policy=services.alarm_policy,
         alarm_mirror=services.alarm_mirror,
     )
-    attach_web_routes(app, settings=settings)
+    attach_web_routes(app, settings=settings, security=services.security)
 
     @app.on_event("shutdown")
     async def stop_report_jobs() -> None:

@@ -27,6 +27,13 @@ const reportRangeError = (startAt: string, endAt: string) => {
   return "";
 };
 
+function reportStatusLabel(status: ReportJob["status"]): string {
+  if (status === "queued") return "Menunggu";
+  if (status === "running") return "Berjalan";
+  if (status === "completed") return "Selesai";
+  return "Gagal";
+}
+
 export function ReportsPage() {
   const [jobs, setJobs] = useState<ReportJob[] | null>(null);
   const [stations, setStations] = useState<Station[]>([]);
@@ -49,7 +56,6 @@ export function ReportsPage() {
   const currentDraftUrl = draftPreview?.key === selectedKey ? draftPreview.url : null;
   const displayedPreviewUrl = currentDraftUrl ?? (draftPaused ? previewUrl : null);
   const previewReady = Boolean(previewJobId && jobs?.some((job) => job.job_id === previewJobId && job.status === "completed"));
-  const currentPreviewReady = Boolean(currentDraftUrl && !draftLoading && !draftError);
 
   useEffect(() => () => {
     if (draftPreview) URL.revokeObjectURL(draftPreview.url);
@@ -184,7 +190,7 @@ export function ReportsPage() {
     {error ? <ErrorCard message={error} /> : null}
     <p className="report-range-hint">Waktu pada PDF ditampilkan sebagai WIB. Rentang laporan maksimal 24 jam; tepat 24 jam diperbolehkan.</p>
     {selectedRangeError ? <p className="report-range-error" role="alert">{selectedRangeError}</p> : null}
-    {!jobs ? <LoadingCard /> : <>
+    {!jobs && !error ? <LoadingCard /> : jobs ? <>
        <div className="report-workspace">
        <section className="report-preview-pane" aria-label="Pratinjau PDF laporan">
           <div className="report-preview-heading"><h2>Pratinjau PDF</h2>{draftError && currentDraftUrl ? <span>PDF sebelumnya — pratinjau terbaru gagal</span> : draftPaused && previewUrl ? <span>PDF sebelumnya — bukan pilihan saat ini</span> : null}</div>
@@ -198,13 +204,13 @@ export function ReportsPage() {
          <label className="native-select-field" htmlFor="report-station"><span>Stasiun</span><select id="report-station" className="native-select" value={serid} onChange={(event) => { setDraftPaused(false); setSerid(event.target.value); }} required>{stations.map((station) => <option key={station.serid} value={station.serid}>{station.name} (SERID {station.serid})</option>)}</select></label>
           <label className="native-input-field" htmlFor="report-start"><span>Mulai</span><input id="report-start" type="datetime-local" value={startAt} onChange={(event) => { setDraftPaused(false); setStartAt(event.target.value); }} required /></label>
           <label className="native-input-field" htmlFor="report-end"><span>Selesai</span><input id="report-end" type="datetime-local" value={endAt} onChange={(event) => { setDraftPaused(false); setEndAt(event.target.value); }} required /></label>
-          <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !serid || !selectedRange || !currentPreviewReady}>{creating ? "Meminta laporan…" : "Buat laporan"}</Button></div>
+          <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !serid || !selectedRange}>{creating ? "Meminta laporan…" : "Buat laporan"}</Button></div>
        </form></LayerCard>
        </div>
        <PageSection title="Laporan yang diminta" description="Progres dan hasil laporan diperbarui otomatis.">
         <div className="mobile-card-list">
           {jobs.map((job) => <LayerCard className="user-card" key={job.job_id}>
-            <strong>SERID {job.serid} · {job.status}</strong>
+             <strong>SERID {job.serid} · {reportStatusLabel(job.status)}</strong>
             <div className="card-meta"><span>{formatTimestamp(job.start_at)} sampai {formatTimestamp(job.end_at)}</span><span>Diminta {formatTimestamp(job.created_at)}</span>{job.error ? <span role="alert">{job.error}</span> : null}</div>
             {job.status === "completed" ? <div className="report-actions">
                 <Button type="button" variant="secondary" onClick={() => { setPreviewJobId(job.job_id); setDraftPaused(true); setDraftPreview(null); }}>{previewJobId === job.job_id ? "Ditampilkan" : "Tampilkan PDF"}</Button>
@@ -214,6 +220,6 @@ export function ReportsPage() {
           {jobs.length === 0 ? <LayerCard className="empty-card">Belum ada laporan.</LayerCard> : null}
         </div>
       </PageSection>
-    </>}
+    </> : null}
   </div>;
 }

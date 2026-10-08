@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from dataclasses import asdict
+from ipaddress import ip_address, ip_network
 import sqlite3
+import os
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
 from .audit import AuditTrail
 from .remote_alarm import RemoteAlarmMirror
-from .security import Role, SecurityError, SecurityStore, UserIdentity
+from .security import AuthenticationRateLimited, Role, SecurityError, SecurityStore, UserIdentity
 
 
 SESSION_COOKIE = "radmon_session"
@@ -124,6 +127,173 @@ class ArchiveExportRequest(BaseModel):
     value: str | None = Field(default=None, max_length=16)
 
 
+_SAFE_ALARM_FIELDS = frozenset({
+    "source_id", "serid", "remote_serid", "event_time", "level",
+    "measured_value", "threshold", "hit_count", "is_active",
+    "source_i_flag", "source_observed_at", "source_observation_version",
+    "policy_event_id",
+})
+_SAFE_ARCHIVE_EXPORT_FIELDS = (
+    "job_id", "selection", "selection_value", "status", "phase",
+    "partitions_total", "partitions_read", "rows_read", "bytes_written",
+    "error", "created_at", "completed_at",
+)
+
+
+def _safe_alarm(item: dict[str, Any]) -> dict[str, Any]:
+    return {key: item[key] for key in _SAFE_ALARM_FIELDS if key in item}
+
+
+def _safe_archive_export(item: dict[str, Any]) -> dict[str, Any]:
+    return {key: item.get(key) for key in _SAFE_ARCHIVE_EXPORT_FIELDS}
+
+
+def _origin(value: str | None, *, allow_path: bool = False) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = urlsplit(value.strip())
+    except ValueError:
+        return None
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
+        return None
+    if (
+        parsed.username
+        or parsed.password
+        or (not allow_path and (parsed.path not in {"", "/"} or parsed.query or parsed.fragment))
+        or (allow_path and parsed.fragment)
+    ):
+        return None
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}"
+
+
+def _request_origin(request: Request) -> str:
+    return f"{request.url.scheme.lower()}://{request.url.netloc.lower()}"
+
+
+def _allowed_origins(request: Request, configured_origins: tuple[str, ...] = ()) -> set[str]:
+    configured = {
+        parsed
+        for parsed in (
+            _origin(value)
+            for value in (*configured_origins, *os.getenv("RADMON_WEB_ALLOWED_ORIGINS", "").split(","))
+        )
+        if parsed
+    }
+    configured.add(_request_origin(request))
+    return configured
+
+
+def _validate_browser_request(request: Request, *, configured_origins: tuple[str, ...] = ()) -> None:
+    """Reject cross-site browser mutations while keeping bearer/CLI clients usable."""
+    fetch_site = request.headers.get("sec-fetch-site", "").strip().lower()
+    if fetch_site == "cross-site":
+        raise HTTPException(status_code=403, detail="cross-site request ditolak")
+    expected = _allowed_origins(request, configured_origins)
+    origin_header = request.headers.get("origin")
+    if origin_header is not None:
+        parsed = _origin(origin_header)
+        if parsed is None or parsed not in expected:
+            raise HTTPException(status_code=403, detail="origin request tidak diizinkan")
+        return
+    referer = request.headers.get("referer")
+    if referer:
+        parsed = _origin(referer, allow_path=True)
+        if parsed is None or parsed not in expected:
+            raise HTTPException(status_code=403, detail="referer request tidak diizinkan")
+
+
+def _trusted_proxy_networks(configured: tuple[str, ...] | None = None):
+    values = configured
+    if values is None:
+        values = tuple(item.strip() for item in os.getenv("RADMON_TRUSTED_PROXY_NETS", "").split(",") if item.strip())
+    networks = []
+    for value in values:
+        try:
+            networks.append(ip_network(str(value), strict=False))
+        except ValueError:
+            continue
+    return tuple(networks)
+
+
+def _client_ip(request: Request, *, trusted_proxy_nets: tuple[str, ...] | None = None) -> str:
+    peer = str(request.client.host if request.client else "unknown")
+    try:
+        peer_address = ip_address(peer)
+    except ValueError:
+        peer_address = None
+    if peer_address is None or not any(peer_address in network for network in _trusted_proxy_networks(trusted_proxy_nets)):
+        return peer
+    for value in request.headers.get("x-forwarded-for", "").split(","):
+        candidate = value.strip()
+        try:
+            ip_address(candidate)
+        except ValueError:
+            continue
+        return candidate
+    return peer
+
+
+def _request_is_loopback(request: Request, *, trusted_proxy_nets: tuple[str, ...] | None = None) -> bool:
+    try:
+        return ip_address(_client_ip(request, trusted_proxy_nets=trusted_proxy_nets)).is_loopback
+    except ValueError:
+        return False
+
+
+def _request_is_secure_transport(
+    request: Request,
+    *,
+    trusted_proxy_nets: tuple[str, ...] | None = None,
+) -> bool:
+    if request.url.scheme.lower() == "https":
+        return True
+    # A TLS-terminating reverse proxy may forward the internal request over
+    # HTTP. Only honor its protocol header when the peer is explicitly trusted.
+    peer = str(request.client.host if request.client else "")
+    try:
+        peer_address = ip_address(peer)
+    except ValueError:
+        return False
+    if not any(peer_address in network for network in _trusted_proxy_networks(trusted_proxy_nets)):
+        return False
+    return request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower() == "https"
+
+
+def _install_security_boundary(app: FastAPI, *, configured_origins: tuple[str, ...] = ()) -> None:
+    if getattr(app.state, "radmon_security_boundary_installed", False):
+        return
+    app.state.radmon_security_boundary_installed = True
+
+    @app.middleware("http")
+    async def security_boundary(request: Request, call_next):
+        mutating = request.method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        protected_path = (
+            request.url.path.startswith("/auth/")
+            or request.url.path.startswith("/api/v1/control/")
+        )
+        if mutating and protected_path:
+            try:
+                _validate_browser_request(request, configured_origins=configured_origins)
+            except HTTPException as exc:
+                return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; base-uri 'self'; object-src 'none'; "
+            "frame-ancestors 'self'; frame-src 'self'; script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self'; form-action 'self'",
+        )
+        if request.url.path.startswith("/auth/") or request.url.path.startswith("/api/"):
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
+
+
 def _report_response(item: dict[str, Any]) -> dict[str, Any]:
     """Return only browser-safe persisted job metadata, never owner internals."""
     fields = (
@@ -144,6 +314,9 @@ def attach_secure_routes(
     user_admin: Any | None = None,
     report_jobs: Any | None = None,
     cookie_secure: bool = False,
+    reject_insecure_remote: bool = False,
+    allowed_origins: tuple[str, ...] = (),
+    trusted_proxy_nets: tuple[str, ...] | None = None,
     archive_catalog: Any | None = None,
     archive_service: Any | None = None,
     archive_exports: Any | None = None,
@@ -151,6 +324,8 @@ def attach_secure_routes(
     alarm_policy: Any | None = None,
     alarm_suppression: Any | None = None,
 ) -> FastAPI:
+    _install_security_boundary(app, configured_origins=allowed_origins)
+
     def current_user(request: Request) -> UserIdentity:
         identity = security.session_user(request.cookies.get(SESSION_COOKIE))
         if identity is None:
@@ -187,8 +362,32 @@ def attach_secure_routes(
         return HTTPException(status_code=409, detail="perubahan pengguna tidak dapat disimpan")
 
     @app.post("/auth/login")
-    def login(payload: LoginRequest, response: Response):
-        identity = security.authenticate(payload.username, payload.password)
+    def login(payload: LoginRequest, request: Request, response: Response):
+        remote_request = not _request_is_loopback(request, trusted_proxy_nets=trusted_proxy_nets)
+        if reject_insecure_remote and remote_request and (
+            not cookie_secure
+            or not _request_is_secure_transport(request, trusted_proxy_nets=trusted_proxy_nets)
+        ):
+            raise HTTPException(
+                status_code=426,
+                detail="remote authentication requires HTTPS",
+            )
+        try:
+            identity = security.authenticate(
+                payload.username,
+                payload.password,
+                client_ip=_client_ip(request, trusted_proxy_nets=trusted_proxy_nets),
+            )
+        except AuthenticationRateLimited as exc:
+            audit.record(
+                "LOGIN_RATE_LIMITED", None, "user", payload.username.strip().lower()[:64],
+                success=False, reason="authentication throttle",
+            )
+            raise HTTPException(
+                status_code=429,
+                detail="terlalu banyak percobaan login; coba lagi nanti",
+                headers={"Retry-After": str(exc.retry_after)},
+            ) from exc
         if identity is None:
             audit.record(
                 "LOGIN_FAILED", None, "user", payload.username.strip().lower(),
@@ -196,9 +395,13 @@ def attach_secure_routes(
             )
             raise HTTPException(status_code=401, detail="invalid credentials")
         token = security.create_session(identity.username, SESSION_TTL_SECONDS)
+        effective_cookie_secure = bool(cookie_secure and not (
+            _request_is_loopback(request, trusted_proxy_nets=trusted_proxy_nets)
+            and request.url.scheme.lower() != "https"
+        ))
         response.set_cookie(
             SESSION_COOKIE, token, max_age=SESSION_TTL_SECONDS,
-            httponly=True, secure=cookie_secure, samesite="strict", path="/",
+            httponly=True, secure=effective_cookie_secure, samesite="strict", path="/",
         )
         audit.record("LOGIN_SUCCESS", identity, "user", identity.username)
         return {
@@ -212,7 +415,16 @@ def attach_secure_routes(
         token = request.cookies.get(SESSION_COOKIE)
         identity = security.session_user(token)
         security.revoke_session(token)
-        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(
+            SESSION_COOKIE,
+            path="/",
+            secure=bool(cookie_secure and not (
+                _request_is_loopback(request, trusted_proxy_nets=trusted_proxy_nets)
+                and request.url.scheme.lower() != "https"
+            )),
+            httponly=True,
+            samesite="strict",
+        )
         audit.record("LOGOUT", identity, "user", identity.username if identity else None)
         return {"status": "ok"}
 
@@ -228,7 +440,7 @@ def attach_secure_routes(
     # diagnostics/history. Operator-facing alarm workflow uses policy events.
     @app.get("/api/v1/control/alarms")
     def alarms(identity: UserIdentity = Depends(current_user)):
-        return alarm_mirror.list_alarms(limit=500)
+        return [_safe_alarm(dict(item)) for item in alarm_mirror.list_alarms(limit=500)]
 
     @app.get("/api/v1/control/alarm-events")
     def alarm_events(identity: UserIdentity = Depends(require_operator)):
@@ -540,7 +752,7 @@ def attach_secure_routes(
         )
 
     @app.get("/api/v1/control/audit")
-    def audit_events(identity: UserIdentity = Depends(current_user)):
+    def audit_events(identity: UserIdentity = Depends(require_admin)):
         return audit.list_events(limit=500)
 
     @app.get("/api/v1/control/archives")
@@ -549,7 +761,13 @@ def attach_secure_routes(
             return archive_exports.inventory()
         if archive_catalog is None:
             return []
-        return archive_catalog.list_archives(limit=1000)
+        visible = []
+        for item in archive_catalog.list_archives(limit=1000):
+            visible.append({
+                key: item.get(key)
+                for key in ("quarter_id", "state", "start_at", "end_at", "created_at", "updated_at", "row_counts")
+            })
+        return visible
 
     def authorised_archive_export(job_id: str, identity: UserIdentity) -> dict[str, Any]:
         item = archive_exports.get(job_id)
@@ -564,7 +782,9 @@ def attach_secure_routes(
         if archive_exports is None:
             raise HTTPException(status_code=404, detail="archive export service unavailable")
         try:
-            return archive_exports.create(identity, selection=payload.selection, value=payload.value)
+            return _safe_archive_export(
+                archive_exports.create(identity, selection=payload.selection, value=payload.value)
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -580,7 +800,7 @@ def attach_secure_routes(
         if archive_exports is None:
             raise HTTPException(status_code=404, detail="archive export service unavailable")
         item = authorised_archive_export(job_id, identity)
-        return {key: item.get(key) for key in ("job_id", "selection", "selection_value", "status", "phase", "partitions_total", "partitions_read", "rows_read", "bytes_written", "error", "created_at", "completed_at")}
+        return _safe_archive_export(item)
 
     @app.get("/api/v1/control/archive-exports/{job_id}/download")
     def download_archive_export(job_id: str, identity: UserIdentity = Depends(require_operator)):

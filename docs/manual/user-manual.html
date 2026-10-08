@@ -11,11 +11,11 @@
     <h1>RadMon User Manual</h1>
     <p>Production RadMon berjalan otomatis 24/7 melalui Scheduled Task Windows yang menjalankan <strong>app\RadMon.exe --server</strong>. Browser user bukan lifecycle owner server.</p>
 
-    <h2>Monitoring anonymous</h2>
-    <p>Buka <code>http://192.168.1.2:8090/</code> untuk Grafana monitoring fullscreen/kiosk. Halaman ini read-only, tidak mempunyai tombol Sign in RadMon, dan hanya tersedia untuk network BRIN/LAN yang diizinkan.</p>
+    <h2>Monitoring remote dengan session RadMon</h2>
+    <p>Buka <code>https://monitoring.example/</code> untuk Grafana monitoring fullscreen/kiosk setelah login session RadMon. Remote anonymous tidak didukung; Grafana direct/anonymous hanya boleh berada pada loopback server.</p>
 
     <h2>Control Plane dan role</h2>
-    <p>Buka <code>http://192.168.1.2:8090/app</code>. Semua role wajib login, termasuk Viewer.</p>
+    <p>Buka <code>https://monitoring.example/app</code>. Semua role wajib login, termasuk Viewer.</p>
     <ul>
       <li><strong>Viewer</strong>: Overview, Stations, History, Archives/Reports read-only.</li>
       <li><strong>Operator</strong>: Viewer + Alarm, Response/Silence, suppression.</li>
@@ -24,7 +24,7 @@
     <p>Control Plane menggunakan Cloudflare Kumo UI. Backend tetap memeriksa session, role, dan PIN untuk aksi sensitif.</p>
 
     <h2>Grafana editable</h2>
-    <p>Administrator pada PC server membuka <code>http://localhost:3300</code>. Login default Grafana adalah <code>admin/admin</code> bila belum diganti. Edit dan Save disimpan sebagai state Grafana authoritative dan langsung digunakan monitoring anonymous.</p>
+    <p>Administrator pada PC server membuka <code>http://localhost:3300</code>. Login Grafana harus memakai secret yang dikelola operator; <code>admin/admin</code>, kosong, atau secret lemah memblokir managed bootstrap. Edit dan Save disimpan sebagai state Grafana authoritative.</p>
     <p>Restart RadMon, Grafana, Windows, atau installer upgrade tidak mengembalikan layout ke factory. Dashboard factory hanya di-seed bila UID belum ada.</p>
 
     <h2>Source health</h2>

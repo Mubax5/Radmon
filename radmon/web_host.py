@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 import logging
 from pathlib import Path
 import sys
 from urllib.parse import urlsplit
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -12,6 +13,7 @@ from fastapi.responses import FileResponse, RedirectResponse, Response
 
 from .config import Settings
 from .grafana_tv import playlist_url
+from .secure_api import SESSION_COOKIE
 
 _HOP_BY_HOP = {
     "connection",
@@ -30,7 +32,13 @@ _REMOTE_BLOCKED_GRAFANA_PREFIXES = (
     "admin",
     "api/login",
     "api/admin",
+    "api/user",
+    "api/org",
+    "api/datasources",
+    "api/dashboards/db",
 )
+_MAX_GRAFANA_REQUEST_BYTES = 2 * 1024 * 1024
+_MAX_GRAFANA_RESPONSE_BYTES = 32 * 1024 * 1024
 _SPA_HEADERS = {
     "Cache-Control": "no-store, max-age=0",
     "Pragma": "no-cache",
@@ -50,20 +58,64 @@ def bundled_web_dist() -> Path:
     return Path(__file__).resolve().parents[1] / "web" / "dist"
 
 
-def _is_loopback(request: Request) -> bool:
+def _trusted_proxy_networks(settings: Settings):
+    result = []
+    for value in getattr(settings, "trusted_proxy_nets", ()):
+        try:
+            result.append(ip_network(str(value), strict=False))
+        except ValueError:
+            LOG.warning("RADMON_TRUSTED_PROXY_NETS berisi network tidak valid; diabaikan")
+    return tuple(result)
+
+
+def _peer_is_trusted_proxy(request: Request, settings: Settings) -> bool:
     host = request.client.host if request.client else ""
     try:
-        return ip_address(host).is_loopback
+        address = ip_address(host)
     except ValueError:
-        return host.lower() == "localhost"
+        return False
+    return any(address in network for network in _trusted_proxy_networks(settings))
 
 
-def _grafana_headers(request: Request, *, trusted_local: bool) -> dict[bytes, bytes]:
+def _effective_client_ip(request: Request, settings: Settings) -> str:
+    host = request.client.host if request.client else ""
+    if not _peer_is_trusted_proxy(request, settings):
+        return host or "unknown"
+    forwarded = request.headers.get("x-forwarded-for", "")
+    # The proxy is trusted explicitly; take the first valid address in the
+    # chain (the original client) and never accept arbitrary forwarded headers
+    # from an untrusted peer.
+    for item in forwarded.split(","):
+        candidate = item.strip()
+        try:
+            ip_address(candidate)
+        except ValueError:
+            continue
+        return candidate
+    return host or "unknown"
+
+
+def _is_loopback(request: Request, settings: Settings) -> bool:
+    host = _effective_client_ip(request, settings)
+    try:
+        address = ip_address(host)
+        direct_loopback = address.is_loopback
+    except ValueError:
+        direct_loopback = host.lower() == "localhost"
+    # A loopback reverse proxy is not implicitly trusted when it forwards an
+    # identity-bearing header. Operators must configure the exact proxy range.
+    if direct_loopback and not _peer_is_trusted_proxy(request, settings):
+        if any(request.headers.get(name) for name in ("x-forwarded-for", "x-forwarded-proto", "x-forwarded-host")):
+            return False
+    return direct_loopback
+
+
+def _grafana_headers(request: Request, *, trusted_local: bool, client_ip: str) -> dict[bytes, bytes]:
     headers: dict[bytes, bytes] = {}
     for key, value in request.headers.raw:
         lower = key.lower()
         name = lower.decode("ascii")
-        if name in _HOP_BY_HOP or name == "content-length":
+        if name in _HOP_BY_HOP or name == "content-length" or name.startswith("x-forwarded-"):
             continue
         if not trusted_local and name in {"authorization", "cookie"}:
             continue
@@ -71,8 +123,7 @@ def _grafana_headers(request: Request, *, trusted_local: bool) -> dict[bytes, by
     if b"host" in headers:
         headers[b"x-forwarded-host"] = headers[b"host"]
     headers[b"x-forwarded-proto"] = request.url.scheme.encode("ascii")
-    if request.client:
-        headers[b"x-forwarded-for"] = request.client.host.encode("ascii")
+    headers[b"x-forwarded-for"] = client_ip.encode("ascii", errors="ignore")
     return headers
 
 
@@ -112,11 +163,30 @@ def attach_web_routes(
     app: FastAPI,
     *,
     settings: Settings,
+    security: Any | None = None,
     web_dist: Path | None = None,
     grafana_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Attach BRIN monitoring gateway and authenticated app static shell."""
     dist = Path(web_dist) if web_dist is not None else bundled_web_dist()
+
+    if not getattr(app.state, "radmon_security_boundary_installed", False):
+        @app.middleware("http")
+        async def web_security_headers(request: Request, call_next):
+            response = await call_next(request)
+            response.headers.setdefault("X-Content-Type-Options", "nosniff")
+            response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+            response.headers.setdefault("Referrer-Policy", "no-referrer")
+            response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+            response.headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'self'; base-uri 'self'; object-src 'none'; "
+                "frame-ancestors 'self'; frame-src 'self'; script-src 'self'; "
+                "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+                "connect-src 'self'; form-action 'self'",
+            )
+            return response
+        app.state.radmon_security_boundary_installed = True
 
     @app.on_event("startup")
     async def start_grafana_client() -> None:
@@ -139,7 +209,10 @@ def attach_web_routes(
         if not index.is_file():
             raise HTTPException(status_code=503, detail="RadMon web interface is not installed")
 
-        requested = (dist / asset_path).resolve() if asset_path else index.resolve()
+        try:
+            requested = (dist / asset_path).resolve() if asset_path else index.resolve()
+        except (OSError, RuntimeError, ValueError):
+            raise HTTPException(status_code=404, detail="resource not found")
         try:
             requested.relative_to(dist.resolve())
         except ValueError:
@@ -159,23 +232,32 @@ def attach_web_routes(
     async def grafana_gateway(grafana_path: str, request: Request):
         path = grafana_path.lstrip("/")
         normalized_path = path.casefold()
-        trusted_local = _is_loopback(request)
+        trusted_local = _is_loopback(request, settings)
         if not trusted_local and any(
             normalized_path == prefix or normalized_path.startswith(prefix + "/")
             for prefix in _REMOTE_BLOCKED_GRAFANA_PREFIXES
         ):
             raise HTTPException(status_code=404, detail="resource not found")
+        if security is not None and not trusted_local:
+            if security.session_user(request.cookies.get(SESSION_COOKIE)) is None:
+                raise HTTPException(status_code=401, detail="authentication required")
 
         upstream_url = f"http://127.0.0.1:{int(settings.grafana_fallback_port)}/{path}"
         if request.url.query:
             upstream_url += f"?{request.url.query}"
 
         body = await request.body()
+        if len(body) > _MAX_GRAFANA_REQUEST_BYTES:
+            raise HTTPException(status_code=413, detail="payload Grafana terlalu besar")
         try:
             upstream = await _grafana_client(app, transport=grafana_transport).request(
                 request.method,
                 upstream_url,
-                headers=_grafana_headers(request, trusted_local=trusted_local),
+                headers=_grafana_headers(
+                    request,
+                    trusted_local=trusted_local,
+                    client_ip=_effective_client_ip(request, settings),
+                ),
                 content=body,
             )
         except httpx.HTTPError as exc:
@@ -187,6 +269,8 @@ def attach_web_routes(
                 _upstream_error_detail(exc),
             )
             raise HTTPException(status_code=502, detail="Grafana monitoring is unavailable") from exc
+        if len(upstream.content) > _MAX_GRAFANA_RESPONSE_BYTES:
+            raise HTTPException(status_code=502, detail="respons Grafana terlalu besar")
 
         response_headers: dict[str, str] = {}
         for key, value in upstream.headers.items():

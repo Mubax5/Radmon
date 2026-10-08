@@ -272,7 +272,9 @@ def test_reports_frontend_contract_uses_native_controls_and_safe_download_url():
     assert "window.location" not in page
     assert "<Dialog" not in page
     assert "draft-preview?${query}" in page
-    assert "disabled={creating || !serid || !selectedRange || !currentPreviewReady}" in page
+    # Report creation must remain independent from the optional draft preview;
+    # the server validates the selected range and the queued PDF is authoritative.
+    assert "disabled={creating || !serid || !selectedRange}" in page
     assert 'grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr)' in styles
     assert "@media (max-width: 767px)" in styles and ".report-workspace { grid-template-columns: minmax(0, 1fr); }" in styles
     assert page.index('className="report-preview-pane"') < page.index('className="action-card report-form-card"')

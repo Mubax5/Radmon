@@ -327,7 +327,10 @@ def attach_web_api_routes(
     def alarm_history(limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0, le=1000000), identity: UserIdentity = Depends(viewer)):
         """Paginated merged source alarm rows and central policy lifecycle."""
         source_fields = {"source_id", "serid", "remote_serid", "event_time", "level", "measured_value", "threshold", "hit_count", "is_active", "source_i_flag", "source_observed_at", "source_observation_version"}
-        policy_fields = {"event_id", "source_id", "serid", "remote_serid", "remote_event_time", "surfaced_at", "event_time", "kind", "status", "reason", "resolution_code", "measured_value", "threshold", "hit_count", "policy_decision", "suppression_id"}
+        # Viewer history is an operational read model, not an operator journal.
+        # Keep opaque correlation IDs needed by the UI, but never expose PIC,
+        # free-form notes/reasons, response actions, or user identifiers.
+        policy_fields = {"event_id", "source_id", "serid", "remote_serid", "remote_event_time", "surfaced_at", "event_time", "kind", "status", "resolution_code", "measured_value", "threshold", "hit_count", "policy_decision", "suppression_id"}
 
         def project(raw: dict[str, Any], fields: set[str]) -> dict[str, Any]:
             return {key: raw[key] for key in fields if key in raw}
@@ -392,7 +395,7 @@ def attach_web_api_routes(
                         "event_id": f"suppression-end:{suppression_id}", "suppression_id": suppression_id,
                         "serid": int(raw["serid"]), "event_type": "policy_lifecycle",
                         "event_time": ended_at, "surfaced_at": ended_at, "kind": "SUPPRESSION_END",
-                        "status": "ENDED", "action": end_reason.split(":", 1)[0], "reason": end_reason,
+                        "status": "ENDED", "action": end_reason.split(":", 1)[0],
                         "acknowledged": False, "suppressed": False,
                     })
             policies.extend(suppression_rows)

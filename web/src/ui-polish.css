@@ -192,7 +192,7 @@
 
 .report-form-card { min-width: 0; }
 .report-preview-pane { min-width: 0; overflow: hidden; }
-.report-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.report-preview-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 .report-preview-heading h2 { margin: 0 0 6px; font-size: 16px; }
 .report-preview-heading span { color: #667085; font-size: 12px; }
 .report-preview-pane > p { color: #667085; font-size: 13px; }
@@ -260,7 +260,7 @@
 }
 
 .native-dialog-close {
-  min-height: 38px;
+  min-height: 44px;
   border: 1px solid var(--border, #d1d5db);
   border-radius: 8px;
   background: var(--surface, #fff);
@@ -618,9 +618,9 @@
 }
 
 .mobile-sheet-close {
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
   display: inline-grid;
   place-items: center;
   border: 0;

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hmac
 import logging
 import time
 from typing import Any, Protocol
@@ -266,7 +267,8 @@ def create_central_app(repository: CentralRepositoryProtocol, settings: Settings
 
     def require_token(authorization: str | None = Header(default=None)) -> None:
         expected = f"Bearer {settings.central_token}"
-        if not settings.central_token or authorization != expected:
+        supplied = authorization if isinstance(authorization, str) and len(authorization) <= 512 else ""
+        if not settings.central_token or not hmac.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="invalid bearer token")
 
     @app.get("/health")

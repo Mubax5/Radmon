@@ -7,8 +7,8 @@ RadMon adalah platform monitoring radiasi untuk central PC **`192.168.1.2`**. Pr
 Dari perangkat yang tersambung ke jaringan BRIN dan mempunyai route ke server:
 
 ```text
-http://192.168.1.2:8090/       -> Grafana monitoring fullscreen/kiosk, tanpa login RadMon
-http://192.168.1.2:8090/app    -> RadMon Control Plane, wajib login
+https://monitoring.example/    -> Grafana monitoring fullscreen/kiosk, wajib login RadMon
+https://monitoring.example/app -> RadMon Control Plane, wajib login
 http://localhost:3300          -> Grafana admin/editor hanya di PC server
 ```
 
@@ -16,7 +16,9 @@ Port **8090** adalah satu-satunya gateway yang dibuka Windows Firewall untuk cli
 
 Panduan pemeriksaan gangguan operator dalam Bahasa Indonesia: [docs/TROUBLESHOOTING-ID.md](docs/TROUBLESHOOTING-ID.md). Untuk langkah start/pemulihan singkat, lihat [docs/OPERATOR-STARTUP-ID.md](docs/OPERATOR-STARTUP-ID.md).
 
-Anonymous hanya mendapat monitoring Grafana read-only. **Viewer tetap wajib login RadMon**. Role aplikasi:
+Remote anonymous tidak didukung. Grafana direct/anonymous, bila diperlukan
+untuk compatibility, hanya boleh berada di loopback server. **Viewer tetap
+wajib login RadMon**. Role aplikasi:
 
 - **Viewer** — Overview, Stations, History, Archives/Reports read-only.
 - **Operator** — Viewer + Alarm, Response/Silence, dan timed Suppression.
@@ -58,8 +60,10 @@ RADMON_BOOTSTRAP_ADMIN_PIN=GANTI_PIN
 ```
 
 4. Pastikan Grafana native tersedia; bila lokasinya non-standar isi `RADMON_GRAFANA_BIN`.
-5. Restart task `RadMon Server` atau reboot Windows setelah konfigurasi lengkap.
-6. Login RadMon di `/app`; setelah Administrator berhasil terbentuk, bootstrap password/PIN dapat dihapus dari `.env`.
+5. Isi `RADMON_GRAFANA_PASSWORD` dengan secret unik atau biarkan marker first-start menghasilkan secret baru; `admin/admin` tidak diterima.
+6. Pasang reverse proxy HTTPS dan isi trusted proxy/origin sebelum akses remote.
+7. Restart task `RadMon Server` atau reboot Windows setelah konfigurasi lengkap.
+8. Login RadMon di `/app`; setelah Administrator berhasil terbentuk, bootstrap password/PIN dapat dihapus dari `.env`.
 
 Production normal **tidak memerlukan Docker Desktop**. `RADMON_GRAFANA_DOCKER_FALLBACK=0` adalah default untuk menjaga penggunaan RAM rendah pada host 6 GB.
 
@@ -70,18 +74,21 @@ Grafana production menggunakan port stabil **3300** tetapi hanya pada loopback s
 Alur editing:
 
 ```text
-localhost:3300 -> login Grafana (default admin/admin) -> Edit -> Save
+localhost:3300 -> login Grafana (secret operator) -> Edit -> Save
                                                 |
                                                 v
                                   state tersimpan di runtime/grafana
                                                 |
                                                 v
-              http://192.168.1.2:8090/ menampilkan dashboard yang sama
+               https://monitoring.example/ menampilkan dashboard yang sama
 ```
 
 Jika dashboard hasil versi RadMon lama masih `editable=false`, bootstrap baru melakukan migrasi satu kali dengan mempertahankan JSON dashboard yang tersimpan (layout/panel/query) dan hanya membuka flag edit. Sesudah itu dashboard Grafana menjadi authoritative. Restart RadMon, Grafana, atau Windows **tidak rollback hasil Save**.
 
-Anonymous Grafana tetap role Viewer; form login Grafana tersedia langsung di `localhost:3300` untuk Administrator pada Dell. Landing monitoring `/` redirect ke Playlist kiosk melalui gateway `8090`. Gateway remote membuang cookie/Authorization Grafana dan memblokir endpoint login/admin, sehingga anonymous monitoring tidak berubah menjadi jalur editor.
+Form login Grafana tersedia langsung di `localhost:3300` untuk Administrator
+pada Dell. Landing monitoring melalui gateway `8090` memerlukan session RadMon
+untuk client remote; gateway membuang cookie/Authorization Grafana dan
+memblokir endpoint login/admin.
 
 ## Database production
 
@@ -144,7 +151,7 @@ RADMON_BACKFILL_BATCH_SIZE=500
 RADMON_BACKFILL_INTERVAL=2
 RADMON_GRAFANA_PORT=3300
 RADMON_GRAFANA_USER=admin
-RADMON_GRAFANA_PASSWORD=admin
+RADMON_GRAFANA_PASSWORD=GENERATE_ON_FIRST_START
 RADMON_GRAFANA_DOCKER_FALLBACK=0
 ```
 

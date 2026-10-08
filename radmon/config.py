@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import os
 from pathlib import Path
+import re
+import secrets
+import tempfile
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
@@ -15,6 +18,66 @@ def _as_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+GRAFANA_PASSWORD_PLACEHOLDER = "GENERATE_ON_FIRST_START"
+_GRAFANA_WEAK_PASSWORDS = frozenset({
+    "admin", "password", "changeme", "change_me", "generate_on_first_start",
+})
+
+
+def is_safe_grafana_password(value: str | None) -> bool:
+    """Check a managed Grafana secret without exposing its value."""
+    password = str(value or "")
+    return len(password) >= 20 and password.casefold() not in _GRAFANA_WEAK_PASSWORDS
+
+
+def ensure_grafana_password(env_file: str | Path) -> bool:
+    """Atomically generate only the explicit first-install password marker.
+
+    Legacy values such as ``admin`` are deliberately not replaced: an upgrade
+    must not silently rotate a credential that operators may already know.
+    """
+    path = Path(env_file)
+    if not path.is_file():
+        return False
+    original = path.read_text(encoding="utf-8")
+    lines = original.splitlines(keepends=True)
+    key_index = None
+    current = None
+    for index, line in enumerate(lines):
+        match = re.match(r"^(\s*RADMON_GRAFANA_PASSWORD\s*=)(.*?)(\r?\n)?$", line)
+        if match:
+            key_index = index
+            current = match.group(2).strip().strip("\"'")
+    if key_index is None or current != GRAFANA_PASSWORD_PLACEHOLDER:
+        return False
+
+    generated = secrets.token_urlsafe(32)
+    line = lines[key_index]
+    newline = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+    lines[key_index] = line.split("=", 1)[0] + "=" + generated + newline
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write("".join(lines))
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.chmod(temporary, 0o600)
+        except OSError:
+            pass
+        os.replace(temporary, path)
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    finally:
+        temporary.unlink(missing_ok=True)
+    return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,8 +111,9 @@ class Settings:
     grafana_url: str = "http://localhost:3000/d/radmon-radiation-monitoring/radiation-monitoring?orgId=1&refresh=2s&kiosk=tv"
     grafana_fallback_port: int = 3300
     grafana_user: str = "admin"
-    grafana_password: str = "admin"
+    grafana_password: str = ""
     grafana_bin: str = ""
+    web_cookie_secure: bool = True
     report_dir: Path = Path("!REPORT!")
     security_db: Path | None = None
     application_dir: Path | None = None
@@ -63,6 +127,10 @@ class Settings:
     archive_timezone: str = "Asia/Jakarta"
     archive_min_retention_years: int = 5
     archive_check_interval: float = 60.0
+    # Empty by default: forwarded client identity is never trusted unless an
+    # operator explicitly names the reverse-proxy networks.
+    trusted_proxy_nets: tuple[str, ...] = ()
+    web_allowed_origins: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = ".env") -> "Settings":
@@ -83,6 +151,12 @@ class Settings:
         archive_check_interval = float(get("RADMON_ARCHIVE_CHECK_INTERVAL", "60"))
         if archive_check_interval <= 0:
             raise ValueError("RADMON_ARCHIVE_CHECK_INTERVAL harus lebih dari 0")
+        trusted_proxy_nets = tuple(
+            item.strip() for item in get("RADMON_TRUSTED_PROXY_NETS", "").split(",") if item.strip()
+        )
+        web_allowed_origins = tuple(
+            item.strip() for item in get("RADMON_WEB_ALLOWED_ORIGINS", "").split(",") if item.strip()
+        )
         return cls(
             serial_port=get("RADMON_SERIAL_PORT", "COM15"),
             detectors=get("RADMON_DETECTORS", ""),
@@ -116,8 +190,9 @@ class Settings:
             ),
             grafana_fallback_port=int(get("RADMON_GRAFANA_PORT", "3300")),
             grafana_user=get("RADMON_GRAFANA_USER", "admin"),
-            grafana_password=get("RADMON_GRAFANA_PASSWORD", "admin"),
+            grafana_password=get("RADMON_GRAFANA_PASSWORD", ""),
             grafana_bin=get("RADMON_GRAFANA_BIN", "").strip(),
+            web_cookie_secure=_as_bool(get("RADMON_WEB_COOKIE_SECURE"), True),
             report_dir=Path(get("RADMON_REPORT_DIR", "!REPORT!")),
             security_db=Path(get("RADMON_SECURITY_DB", "runtime/radmon-security.db")),
             runtime_dir=Path(get("RADMON_RUNTIME_DIR", "runtime")),
@@ -130,6 +205,8 @@ class Settings:
             archive_timezone=archive_timezone,
             archive_min_retention_years=archive_retention,
             archive_check_interval=archive_check_interval,
+            trusted_proxy_nets=trusted_proxy_nets,
+            web_allowed_origins=web_allowed_origins,
         )
 
     def for_application_paths(self, paths: "ApplicationPaths") -> "Settings":

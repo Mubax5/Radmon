@@ -334,6 +334,16 @@ def test_native_grafana_is_loopback_only_and_persistent(tmp_path: Path) -> None:
     assert str(tmp_path / "runtime" / "grafana" / "data") in env["GF_PATHS_DATA"]
 
 
+def test_docker_fallback_receives_managed_grafana_admin_secret(tmp_path: Path) -> None:
+    settings = Settings(
+        grafana_user="grafana-admin",
+        grafana_password="a-strong-managed-secret-12345",
+    )
+    env = PersistentGrafanaBootstrap(settings, project_root=tmp_path)._docker_environment()
+    assert env["RADMON_GRAFANA_USER"] == "grafana-admin"
+    assert env["RADMON_GRAFANA_PASSWORD"] == "a-strong-managed-secret-12345"
+
+
 def test_grafana_never_silently_moves_away_from_port_3300(tmp_path: Path) -> None:
     bootstrap = PersistentGrafanaBootstrap(Settings(grafana_fallback_port=3300), project_root=tmp_path)
     blocker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

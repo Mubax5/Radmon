@@ -41,6 +41,14 @@ function sourceVariant(state: string): "success" | "warning" | "error" | "second
   return "secondary";
 }
 
+function sourceStateLabel(state: string): string {
+  if (state === "CONNECTED") return "Terhubung";
+  if (state === "RECOVERED") return "Pulih";
+  if (state === "DEGRADED") return "Menurun";
+  if (state === "OFFLINE") return "Offline";
+  return "Status tidak diketahui";
+}
+
 function SourceCards({ sources }: { sources: SourceHealth[] }) {
   if (!sources.length) return <LayerCard className="empty-card">Belum ada rekaman kesehatan source LAN.</LayerCard>;
   return (
@@ -52,15 +60,15 @@ function SourceCards({ sources }: { sources: SourceHealth[] }) {
               <h3>{source.source_id}</h3>
               <div className="cell-subtle">{source.host}</div>
             </div>
-            <Badge variant={sourceVariant(source.state)}>{source.state}</Badge>
+            <Badge variant={sourceVariant(source.state)}>{sourceStateLabel(source.state)}</Badge>
           </div>
           <div className="card-meta">
             <span>Terakhir berhasil: {formatTimestamp(source.last_success)} · {freshnessLabel(source.last_success)}</span>
             <span>Live poll terakhir: {formatTimestamp(source.last_live_poll)}</span>
             {source.last_failure ? <span>Kegagalan terakhir: {formatTimestamp(source.last_failure)}</span> : null}
-            {source.last_history_import ? <span>Import history: {formatTimestamp(source.last_history_import)}</span> : null}
+            {source.last_history_import ? <span>Impor riwayat: {formatTimestamp(source.last_history_import)}</span> : null}
             {source.consecutive_failures ? <span>Kegagalan beruntun: {source.consecutive_failures}</span> : null}
-            {source.last_error ? <span>Error: {source.last_error}</span> : null}
+            {source.last_error ? <span>Kesalahan terakhir: {source.last_error}</span> : null}
           </div>
         </LayerCard>
       ))}
@@ -87,7 +95,7 @@ function SourceTable({ sources }: { sources: SourceHealth[] }) {
           {sources.map((source) => (
             <Table.Row key={source.source_id}>
               <Table.Cell><strong>{source.source_id}</strong><div className="cell-subtle">{source.host}</div></Table.Cell>
-              <Table.Cell><Badge variant={sourceVariant(source.state)}>{source.state}</Badge></Table.Cell>
+            <Table.Cell><Badge variant={sourceVariant(source.state)}>{sourceStateLabel(source.state)}</Badge></Table.Cell>
               <Table.Cell>{formatTimestamp(source.last_success)}<div className="cell-subtle">{freshnessLabel(source.last_success)}</div></Table.Cell>
               <Table.Cell>{formatTimestamp(source.last_live_poll)}</Table.Cell>
               <Table.Cell>{source.consecutive_failures}</Table.Cell>
@@ -138,12 +146,12 @@ export function SystemPage() {
         ) : undefined}
       />
       {error ? <ErrorCard message={error} /> : null}
-      {!data ? <LoadingCard /> : (
+      {!data && !error ? <LoadingCard /> : data ? (
         <>
           <div className="metric-grid system-metrics source-health-summary">
             <MetricCard label="Service central" value={data.service} badge={<Badge variant="success">Berjalan</Badge>} className="system-value-card" />
             <MetricCard label="Source sehat" value={summary.healthy} badge={<Badge variant="success">Terhubung</Badge>} />
-            <MetricCard label="Degraded" value={summary.degraded} badge={<Badge variant={summary.degraded ? "warning" : "secondary"}>Source</Badge>} />
+            <MetricCard label="Menurun" value={summary.degraded} badge={<Badge variant={summary.degraded ? "warning" : "secondary"}>Sumber</Badge>} />
             <MetricCard label="Offline" value={summary.offline} badge={<Badge variant={summary.offline ? "error" : "secondary"}>Source</Badge>} />
           </div>
 
@@ -163,12 +171,16 @@ export function SystemPage() {
               <h2>Administrasi Grafana</h2>
               <p>Kelola dashboard Grafana pada server ini. Pemantauan stasiun tetap tersedia melalui RadMon.</p>
               <div className="form-actions">
-                <Button variant="secondary" onClick={() => window.open(data.grafana_admin_url, "_blank", "noopener,noreferrer")}>Buka admin Grafana lokal</Button>
+                <Button variant="secondary" disabled={!data.grafana_admin_url} onClick={() => {
+                  if (data.grafana_admin_url) window.open(data.grafana_admin_url, "_blank", "noopener,noreferrer");
+                }}>
+                  {data.grafana_admin_url ? "Buka admin Grafana lokal" : "Admin Grafana tidak tersedia"}
+                </Button>
               </div>
             </LayerCard>
           </PageSection>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

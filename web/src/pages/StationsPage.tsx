@@ -19,6 +19,11 @@ type Overview = {
   stations: Station[];
 };
 
+function countValue(counts: Record<string, number>, key: string): number | "—" {
+  const value = counts?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : "—";
+}
+
 const STATUS_ITEMS = {
   all: "Semua status",
   normal: "Normal",
@@ -109,9 +114,9 @@ export function StationsPage() {
         <>
           <div className="metric-grid station-summary">
             <MetricCard label="Terkonfigurasi" value={overview.stations.length} badge={<span className="cell-subtle">Semua detektor</span>} />
-            <MetricCard label="Normal" value={overview.counts.normal || 0} badge={<span className="cell-subtle">Saat ini</span>} />
+            <MetricCard label="Normal" value={countValue(overview.counts, "normal")} badge={<span className="cell-subtle">Saat ini</span>} />
             <MetricCard label="Perlu perhatian" value={abnormal} badge={<span className="cell-subtle">Peringatan, alarm, offline</span>} />
-            <MetricCard label="Offline" value={overview.counts.offline || 0} badge={<span className="cell-subtle">Data live usang atau tidak ada</span>} />
+            <MetricCard label="Offline" value={countValue(overview.counts, "offline")} badge={<span className="cell-subtle">Data live usang atau tidak ada</span>} />
           </div>
 
           <LayerCard className="filter-card station-search">

@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import re
+import threading
+import time
 import uuid
 from typing import Any
 
@@ -16,10 +18,15 @@ from .reports import ReportService
 LOG = logging.getLogger(__name__)
 
 
+class _ReportJobCancelled(RuntimeError):
+    pass
+
+
 class WebReportJobs:
     """Durable report metadata with bounded, asynchronous PDF generation."""
 
     MAX_RANGE = ReportService.MAX_RANGE
+    MAX_PENDING_PER_USER = 4
     _JOB_ID = re.compile(r"[0-9a-f]{32}\Z")
 
     def __init__(self, security, audit: AuditTrail, repository: Any, settings, *, summary_reader=None) -> None:
@@ -31,6 +38,10 @@ class WebReportJobs:
         self.report_root = Path(settings.report_dir).resolve()
         self.artifact_dir = self.report_root / "web"
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="radmon-report")
+        self._shutdown_event = threading.Event()
+        self._shutdown_started = False
+        self._futures: dict[str, Any] = {}
+        self._futures_lock = threading.Lock()
         self._ensure_schema()
         self._recover_pending_jobs()
 
@@ -69,15 +80,22 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
             )
         for job_id, serid, start_at, end_at in queued:
             try:
-                self._executor.submit(
-                    self._generate,
-                    str(job_id),
-                    int(serid),
-                    datetime.fromisoformat(str(start_at)),
-                    datetime.fromisoformat(str(end_at)),
+                self._submit(
+                    str(job_id), int(serid),
+                    datetime.fromisoformat(str(start_at)), datetime.fromisoformat(str(end_at)),
                 )
             except (TypeError, ValueError):
                 self._set_status(job_id, "failed", error="metadata report tidak valid")
+
+    def _submit(self, job_id: str, serid: int, start: datetime, end: datetime) -> None:
+        if self._shutdown_started:
+            raise RuntimeError("worker report sedang berhenti")
+        future = self._executor.submit(self._generate, job_id, serid, start, end)
+        if future is not None:
+            with self._futures_lock:
+                self._futures[job_id] = future
+                if getattr(future, "done", lambda: False)():
+                    self._futures.pop(job_id, None)
 
     @staticmethod
     def _item(row: tuple[Any, ...]) -> dict[str, Any]:
@@ -115,6 +133,12 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
         job_id = uuid.uuid4().hex
         created_at = datetime.now(timezone.utc).isoformat()
         with self.security._connection() as connection:
+            pending = int(connection.execute(
+                "SELECT COUNT(*) FROM web_report_jobs WHERE username = ? AND status IN ('queued', 'running')",
+                (identity.username.strip().lower(),),
+            ).fetchone()[0])
+            if pending >= self.MAX_PENDING_PER_USER:
+                raise ValueError("terlalu banyak report yang masih berjalan")
             connection.execute(
                 "INSERT INTO web_report_jobs (job_id, username, serid, start_at, end_at, status, created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
                 (job_id, identity.username, int(serid), start.isoformat(), end.isoformat(), created_at),
@@ -123,7 +147,11 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
         if item is None:
             raise RuntimeError("report job tidak tersimpan")
         self.audit.record("REPORT_REQUEST", identity, "report", job_id, after={"serid": int(serid), "start_at": start, "end_at": end})
-        self._executor.submit(self._generate, job_id, int(serid), start, end)
+        try:
+            self._submit(job_id, int(serid), start, end)
+        except RuntimeError as exc:
+            self._set_status(job_id, "failed", error="worker report tidak tersedia")
+            raise RuntimeError("worker report tidak tersedia") from exc
         return item
 
     def preview_pdf(self, *, serid: int, start: datetime, end: datetime) -> bytes:
@@ -171,20 +199,47 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
 
     def _generate(self, job_id: str, serid: int, start: datetime, end: datetime) -> None:
         self._set_status(job_id, "running")
+        temp: Path | None = None
         try:
+            if self._shutdown_event.is_set():
+                raise _ReportJobCancelled()
             artifact_dir = self._safe_artifact_dir()
             name = f"radmon-{job_id}.pdf"
-            destination = (artifact_dir / name).resolve()
+            raw_destination = artifact_dir / name
+            if raw_destination.is_symlink():
+                raise ValueError("artifact report tidak valid")
+            destination = raw_destination.resolve()
             destination.relative_to(artifact_dir)
-            ReportService(
+            content = ReportService(
                 self.repository,
                 replace(self.settings, serid=serid),
                 summary_reader=self.summary_reader,
-            ).export_pdf(start, end, destination)
+            ).pdf_bytes(start, end)
+            if self._shutdown_event.is_set():
+                raise _ReportJobCancelled()
+            temp = destination.with_suffix(".pdf.tmp")
+            if temp.is_symlink():
+                raise ValueError("artifact report tidak valid")
+            with temp.open("wb") as handle:
+                handle.write(content)
+                handle.flush()
+                import os
+                os.fsync(handle.fileno())
+            if self._shutdown_event.is_set():
+                raise _ReportJobCancelled()
+            temp.replace(destination)
+        except _ReportJobCancelled:
+            self._set_status(job_id, "failed", error="pembuatan report dibatalkan saat shutdown")
+            return
         except Exception as exc:
             LOG.exception("web report generation failed job_id=%s", job_id)
             self._set_status(job_id, "failed", error="pembuatan report gagal")
             return
+        finally:
+            if temp is not None:
+                temp.unlink(missing_ok=True)
+            with self._futures_lock:
+                self._futures.pop(job_id, None)
         self._set_status(job_id, "completed", artifact_name=name)
 
     def _set_status(self, job_id: str, status: str, *, artifact_name: str | None = None, error: str | None = None) -> None:
@@ -205,14 +260,46 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
         if item["artifact_name"] != expected_name:
             raise ValueError("artifact report tidak valid")
         artifact_dir = self._safe_artifact_dir()
-        path = (artifact_dir / expected_name).resolve()
+        raw_path = artifact_dir / expected_name
+        if raw_path.is_symlink():
+            raise ValueError("artifact report tidak valid")
+        path = raw_path.resolve()
         try:
             path.relative_to(artifact_dir)
         except ValueError as exc:
             raise ValueError("artifact report tidak valid") from exc
-        if not path.is_file():
+        if path.is_symlink() or not path.is_file():
             raise FileNotFoundError("artifact report tidak ditemukan")
         return item, path
 
-    def shutdown(self) -> None:
-        self._executor.shutdown(wait=False, cancel_futures=False)
+    def shutdown(self, timeout: float = 15.0) -> None:
+        """Cancel queued work, checkpoint active work, and wait boundedly.
+
+        Queued rows remain durable and are resumed by ``_recover_pending_jobs``
+        after a restart. Active jobs publish only complete PDFs through a rename;
+        cancellation removes their temporary file and records a terminal state.
+        """
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+        self._shutdown_event.set()
+        with self._futures_lock:
+            futures = list(self._futures.values())
+        for future in futures:
+            if hasattr(future, "cancel"):
+                future.cancel()
+        try:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:  # small test doubles / older Python
+            self._executor.shutdown(wait=False)
+        deadline = time.monotonic() + max(0.1, float(timeout))
+        while time.monotonic() < deadline:
+            with self._futures_lock:
+                active = bool(self._futures)
+            if not active:
+                break
+            time.sleep(0.01)
+        with self._futures_lock:
+            active = bool(self._futures)
+        if active:
+            LOG.warning("report workers did not stop within %.1fs", max(0.1, float(timeout)))

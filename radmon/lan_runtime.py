@@ -113,7 +113,18 @@ class LanRuntime:
                         except Exception as fb_exc:
                             LOGGER.debug("[LIVE] source=%s fallback failed %s", source.source_id, fb_exc)
                     try:
-                        state = self.services.source_health.record_failure(source, result.error)
+                        if getattr(result, "remote_connected", False):
+                            # The remote answered. Keep connectivity truthful and
+                            # expose a separate policy/cache health state.
+                            state = self.services.source_health.record_success(
+                                source,
+                                live=True,
+                                alarm=True,
+                                history=False,
+                                policy_error=getattr(result, "policy_error", None) or result.error,
+                            )
+                        else:
+                            state = self.services.source_health.record_failure(source, result.error)
                     except Exception as health_exc:
                         LOGGER.warning("[LIVE] source=%s health record_failed %s", source.source_id, health_exc)
                         state = {"state": "DEGRADED"}
@@ -128,7 +139,7 @@ class LanRuntime:
                     self._publish_web_event({
                         "type": "live_update",
                         "source_id": source.source_id,
-                        "connected": False,
+                        "connected": bool(getattr(result, "remote_connected", False)),
                         "alarms_new": int(result.mirrored_alarms or 0),
                     })
                     # Backoff but stay responsive to stop.
@@ -175,7 +186,7 @@ class LanRuntime:
                 self._publish_web_event({
                     "type": "live_update",
                     "source_id": source.source_id,
-                    "connected": False,
+                    "connected": bool(getattr(result, "remote_connected", False)),
                     "alarms_new": 0,
                 })
                 backoff = min(30.0, self.interval * (2 ** min(consecutive_errors, 4)))

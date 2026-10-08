@@ -11,7 +11,7 @@ from typing import Callable
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from .config import Settings
+from .config import Settings, ensure_grafana_password
 from .grafana_persistent import PersistentGrafanaBootstrap
 from .paths import ApplicationPaths
 
@@ -306,6 +306,7 @@ def run_start(mode: str = "admin") -> int:
     paths = ApplicationPaths.discover()
     for folder in (paths.config_dir, paths.runtime_dir, paths.archive_dir, paths.report_dir, paths.log_dir):
         folder.mkdir(parents=True, exist_ok=True)
+    ensure_grafana_password(paths.env_file)
     settings = Settings.from_env(paths.env_file).for_application_paths(paths)
     states = RadMonLauncher(settings, paths).start()
     show_startup_report(states, mode=mode)

@@ -6,6 +6,8 @@ import hashlib
 import io
 import json
 from pathlib import Path
+from pathlib import PurePosixPath
+import re
 import shutil
 import tempfile
 from typing import Any, Callable
@@ -36,6 +38,13 @@ RECAP_COLUMNS = (
 
 class ArchiveCorruptionError(RuntimeError):
     pass
+
+
+MAX_ARCHIVE_MEMBERS = 64
+MAX_ARCHIVE_MEMBER_BYTES = 512 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_BYTES = 1024 * 1024 * 1024
+MAX_ARCHIVE_MANIFEST_BYTES = 4 * 1024 * 1024
+_QUARTER_ID = re.compile(r"[0-9]{4}-Q[1-4]\Z")
 
 
 def _serialize(value: Any) -> Any:
@@ -92,31 +101,104 @@ def _quarter_from_id(quarter_id: str, timezone_name: str = "Asia/Jakarta") -> Qu
     return Quarter(year=year, number=number, start=start, end=end)
 
 
+def _bounded_zip_infos(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
+    """Validate ZIP metadata before any member is decompressed."""
+    infos = archive.infolist()
+    if len(infos) > MAX_ARCHIVE_MEMBERS:
+        raise ArchiveCorruptionError("archive memiliki terlalu banyak member")
+    result: dict[str, zipfile.ZipInfo] = {}
+    total = 0
+    for info in infos:
+        name = str(info.filename)
+        path = PurePosixPath(name)
+        if (
+            not name
+            or "\\" in name
+            or "\x00" in name
+            or path.is_absolute()
+            or ".." in path.parts
+            or name in result
+            or info.is_dir()
+        ):
+            if name in result:
+                # Keep the legacy diagnostic wording useful for callers that
+                # classify a duplicate payload as an integrity/checksum issue;
+                # the duplicate is still rejected before any payload is used.
+                raise ArchiveCorruptionError(f"checksum mismatch: duplicate archive member {name}")
+            raise ArchiveCorruptionError("nama member archive tidak aman")
+        mode = (int(info.external_attr) >> 16) & 0o170000
+        if mode == 0o120000:
+            raise ArchiveCorruptionError("archive symlink tidak diizinkan")
+        size = int(info.file_size)
+        if size < 0 or size > MAX_ARCHIVE_MEMBER_BYTES:
+            raise ArchiveCorruptionError("member archive terlalu besar")
+        total += size
+        if total > MAX_ARCHIVE_TOTAL_BYTES:
+            raise ArchiveCorruptionError("payload archive terlalu besar")
+        if size > 1024 * 1024 and int(info.compress_size) > 0:
+            if size / int(info.compress_size) > 1000:
+                raise ArchiveCorruptionError("rasio kompresi archive tidak aman")
+        result[name] = info
+    return result
+
+
+def _read_bounded_member(archive: zipfile.ZipFile, name: str, maximum: int) -> bytes:
+    try:
+        with archive.open(name) as handle:
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                total += len(chunk)
+                if total > maximum:
+                    raise ArchiveCorruptionError(f"member archive terlalu besar: {name}")
+                chunks.append(chunk)
+            return b"".join(chunks)
+    except KeyError as exc:
+        raise ArchiveCorruptionError(f"archive member missing: {name}") from exc
+
+
 def verify_archive(path: Path | str, expected_quarter: Quarter | None = None) -> dict[str, Any]:
     archive_path = Path(path)
     if not archive_path.is_file():
         raise ArchiveCorruptionError(f"archive tidak ditemukan: {archive_path}")
     try:
         with zipfile.ZipFile(archive_path) as archive:
-            names = set(archive.namelist())
-            manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
-            sql_name = f"radmon-{manifest['quarter_id']}.sql"
+            infos = _bounded_zip_infos(archive)
+            names = set(infos)
+            manifest_bytes = _read_bounded_member(archive, "manifest.json", MAX_ARCHIVE_MANIFEST_BYTES)
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+            if not isinstance(manifest, dict):
+                raise ArchiveCorruptionError("manifest archive tidak valid")
+            quarter_id = str(manifest["quarter_id"])
+            if not _QUARTER_ID.fullmatch(quarter_id):
+                raise ArchiveCorruptionError("archive quarter id tidak valid")
+            sql_name = f"radmon-{quarter_id}.sql"
             required = set(REQUIRED_ARCHIVE_FILES) | {sql_name}
             missing = sorted(required - names)
             if missing:
                 raise ArchiveCorruptionError("archive payload missing: " + ", ".join(missing))
             if expected_quarter is not None and manifest.get("quarter_id") != expected_quarter.quarter_id:
                 raise ArchiveCorruptionError("archive quarter mismatch")
-            for name, metadata in dict(manifest.get("files") or {}).items():
-                if name not in names:
+            files = manifest.get("files")
+            if not isinstance(files, dict):
+                raise ArchiveCorruptionError("manifest files tidak valid")
+            for name, metadata in files.items():
+                if not isinstance(name, str) or name not in names:
                     raise ArchiveCorruptionError(f"manifest file missing: {name}")
+                if not isinstance(metadata, dict):
+                    raise ArchiveCorruptionError(f"manifest metadata tidak valid: {name}")
                 digest = hashlib.sha256()
                 with archive.open(name) as handle:
                     for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                         digest.update(chunk)
                 if digest.hexdigest() != str(metadata.get("sha256") or ""):
                     raise ArchiveCorruptionError(f"checksum mismatch: {name}")
-            for table, expected in dict(manifest.get("row_counts") or {}).items():
+            row_counts = manifest.get("row_counts")
+            if not isinstance(row_counts, dict):
+                raise ArchiveCorruptionError("manifest row_counts tidak valid")
+            for table, expected in row_counts.items():
+                if table not in TABLE_COLUMNS or not isinstance(expected, int) or isinstance(expected, bool) or expected < 0:
+                    raise ArchiveCorruptionError(f"row-count table tidak valid: {table}")
                 member = f"{table}.csv"
                 if member not in names:
                     raise ArchiveCorruptionError(f"row-count payload missing: {member}")
@@ -130,7 +212,9 @@ def verify_archive(path: Path | str, expected_quarter: Quarter | None = None) ->
                     raise ArchiveCorruptionError(
                         f"row count mismatch {table}: expected {expected}, found {count}"
                     )
-    except (zipfile.BadZipFile, KeyError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except ArchiveCorruptionError:
+        raise
+    except (zipfile.BadZipFile, KeyError, json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError) as exc:
         raise ArchiveCorruptionError(f"archive rusak: {archive_path}") from exc
     result = dict(manifest)
     result["archive_path"] = str(archive_path)
@@ -151,13 +235,32 @@ class ArchiveCatalog:
     def list_archives(self, limit: int = 100) -> list[dict[str, Any]]:
         return self.store.list_archives(limit)
 
+    def safe_archive_path(self, quarter_id: str, recorded_path: str | None = None) -> Path:
+        """Resolve only the canonical retained archive for a quarter."""
+        if not _QUARTER_ID.fullmatch(str(quarter_id)):
+            raise ArchiveCorruptionError("archive quarter id tidak valid")
+        canonical = self.archive_dir.resolve() / str(quarter_id)[:4] / f"radmon-{quarter_id}.zip"
+        if canonical.is_symlink():
+            raise ArchiveCorruptionError("archive symlink tidak diizinkan")
+        expected = canonical.resolve()
+        try:
+            expected.relative_to(self.archive_dir.resolve())
+        except ValueError as exc:
+            raise ArchiveCorruptionError("archive path berada di luar direktori arsip") from exc
+        if recorded_path is not None and Path(str(recorded_path)).resolve() != expected:
+            raise ArchiveCorruptionError("archive path tidak sesuai katalog")
+        if not expected.is_file() or expected.is_symlink():
+            raise FileNotFoundError(f"archive file tidak ditemukan: {quarter_id}")
+        return expected
+
     def recap(self, quarter_id: str) -> list[dict[str, Any]]:
         item = self.get(quarter_id)
         if item is None or not item.get("archive_path"):
             raise FileNotFoundError(f"archive quarter tidak ditemukan: {quarter_id}")
-        verify_archive(Path(str(item["archive_path"])), expected_quarter=_quarter_from_id(quarter_id, self.timezone_name))
+        path = self.safe_archive_path(quarter_id, str(item["archive_path"]))
+        verify_archive(path, expected_quarter=_quarter_from_id(quarter_id, self.timezone_name))
         rows: list[dict[str, Any]] = []
-        with zipfile.ZipFile(str(item["archive_path"])) as archive:
+        with zipfile.ZipFile(path) as archive:
             with archive.open("monthly-recap.csv") as raw:
                 with io.TextIOWrapper(raw, encoding="utf-8", newline="") as text:
                     for row in csv.DictReader(text):

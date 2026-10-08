@@ -255,7 +255,8 @@ def test_grafana_provisioning_uses_mysql_and_collision_safe_bundled_port():
     assert "type: mysql" in datasource
     assert "database: ipradmon" in datasource
     assert "RADMON_DB" in datasource
-    assert '${RADMON_GRAFANA_PORT:-3300}:3000' in compose
+    assert '127.0.0.1:${RADMON_GRAFANA_PORT:-3300}:3000' in compose
+    assert "GF_SECURITY_ADMIN_PASSWORD" in compose
     assert "GF_AUTH_ANONYMOUS_ENABLED" in compose
     assert "GF_AUTH_ANONYMOUS_ORG_ROLE" in compose
     assert "/var/lib/grafana/dashboards" not in compose

@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 from pathlib import Path
+import re
 import secrets
 import sqlite3
 import threading
@@ -15,6 +16,14 @@ from typing import Any, Callable
 
 class SecurityError(RuntimeError):
     pass
+
+
+class AuthenticationRateLimited(SecurityError):
+    """Authentication was throttled without locking the account globally."""
+
+    def __init__(self, retry_after: int) -> None:
+        self.retry_after = max(1, int(retry_after))
+        super().__init__("terlalu banyak percobaan login; coba lagi nanti")
 
 
 class Role(str, Enum):
@@ -44,6 +53,23 @@ _SCHEMA_MIGRATION_LOCK = threading.Lock()
 
 class SecurityStore:
     PBKDF2_ITERATIONS = 260_000
+    LOGIN_WINDOW = timedelta(minutes=15)
+    LOGIN_IP_LIMIT = 30
+    LOGIN_ACCOUNT_IP_LIMIT = 5
+    LOGIN_IP_COOLDOWN = timedelta(minutes=2)
+    LOGIN_ACCOUNT_IP_COOLDOWN = timedelta(seconds=45)
+    _USERNAME = re.compile(r"[a-z0-9][a-z0-9._@+-]{0,63}\Z")
+    # This is a public dummy verifier used to keep unknown-user login timing
+    # close to the existing-user path. It is not a credential and is never
+    # accepted for a real account.
+    _DUMMY_SALT = bytes.fromhex("00112233445566778899aabbccddeeff")
+    _DUMMY_DIGEST = hashlib.pbkdf2_hmac(
+        "sha256", b"", _DUMMY_SALT, PBKDF2_ITERATIONS
+    )
+    _DUMMY_HASH = (
+        f"pbkdf2_sha256${PBKDF2_ITERATIONS}${_DUMMY_SALT.hex()}$"
+        f"{_DUMMY_DIGEST.hex()}"
+    )
 
     def __init__(self, path: Path | str, *, now: Callable[[], datetime] | None = None) -> None:
         self._init_base(path, now=now)
@@ -77,6 +103,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_username ON sessions(username);
+CREATE TABLE IF NOT EXISTS login_throttle (
+  throttle_key TEXT PRIMARY KEY,
+  failures INTEGER NOT NULL DEFAULT 0,
+  window_started_at TEXT NOT NULL,
+  locked_until TEXT,
+  updated_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit_events (
   audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
   occurred_at TEXT NOT NULL,
@@ -196,15 +229,121 @@ CREATE TABLE IF NOT EXISTS archive_quarters (
             algorithm, iterations_text, salt_hex, digest_hex = encoded.split("$", 3)
             if algorithm != "pbkdf2_sha256":
                 return False
+            iterations = int(iterations_text)
+            # A corrupted/tampered local database must not be able to turn a
+            # login attempt into an unbounded PBKDF2 workload.
+            if not 1_000 <= iterations <= 1_000_000:
+                return False
+            if len(salt_hex) % 2 or not 8 <= len(salt_hex) // 2 <= 64:
+                return False
+            if len(digest_hex) != 64:
+                return False
+            salt = bytes.fromhex(salt_hex)
             digest = hashlib.pbkdf2_hmac(
                 "sha256",
                 value.encode("utf-8"),
-                bytes.fromhex(salt_hex),
-                int(iterations_text),
+                salt,
+                iterations,
             )
             return hmac.compare_digest(digest.hex(), digest_hex)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             return False
+
+    @classmethod
+    def _username(cls, value: object) -> str | None:
+        try:
+            name = str(value).strip().lower()
+        except Exception:
+            return None
+        return name if cls._USERNAME.fullmatch(name) else None
+
+    @staticmethod
+    def _client_key(value: object) -> str:
+        try:
+            text = str(value or "").strip().lower()
+        except Exception:
+            text = ""
+        if not text:
+            return "unknown"
+        # The request client address is not trusted for authorization, but it
+        # is still bounded before it becomes a SQLite key.
+        return text[:128]
+
+    @staticmethod
+    def _parse_time(value: object) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value))
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    def _throttle_status(
+        self,
+        connection: sqlite3.Connection,
+        key: str,
+        now: datetime,
+        *,
+        limit: int,
+        cooldown: timedelta,
+    ) -> int:
+        row = connection.execute(
+            "SELECT failures, window_started_at, locked_until FROM login_throttle WHERE throttle_key = ?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return 0
+        locked_until = self._parse_time(row[2])
+        if locked_until is not None and locked_until > now:
+            return max(1, int((locked_until - now).total_seconds() + 0.999))
+        window_started = self._parse_time(row[1])
+        if window_started is None or now - window_started >= self.LOGIN_WINDOW:
+            connection.execute("DELETE FROM login_throttle WHERE throttle_key = ?", (key,))
+            return 0
+        failures = max(0, int(row[0] or 0))
+        if failures >= limit:
+            locked_until = now + cooldown
+            connection.execute(
+                "UPDATE login_throttle SET locked_until = ?, updated_at = ? WHERE throttle_key = ?",
+                (locked_until.isoformat(), now.isoformat(), key),
+            )
+            return max(1, int(cooldown.total_seconds()))
+        return 0
+
+    def _record_login_failure(
+        self,
+        connection: sqlite3.Connection,
+        key: str,
+        now: datetime,
+        *,
+        limit: int,
+        cooldown: timedelta,
+    ) -> int:
+        row = connection.execute(
+            "SELECT failures, window_started_at FROM login_throttle WHERE throttle_key = ?",
+            (key,),
+        ).fetchone()
+        window_started = self._parse_time(row[1]) if row else None
+        failures = int(row[0] or 0) if row else 0
+        if window_started is None or now - window_started >= self.LOGIN_WINDOW:
+            window_started = now
+            failures = 0
+        failures += 1
+        locked_until = now + cooldown if failures >= limit else None
+        connection.execute(
+            """
+INSERT INTO login_throttle(throttle_key, failures, window_started_at, locked_until, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(throttle_key) DO UPDATE SET
+  failures = excluded.failures,
+  window_started_at = excluded.window_started_at,
+  locked_until = excluded.locked_until,
+  updated_at = excluded.updated_at
+""",
+            (key, failures, window_started.isoformat(),
+             locked_until.isoformat() if locked_until else None, now.isoformat()),
+        )
+        return max(1, int(cooldown.total_seconds())) if locked_until else 0
 
     def create_user(
         self,
@@ -216,13 +355,15 @@ CREATE TABLE IF NOT EXISTS archive_quarters (
         *,
         actor: str | None = None,
     ) -> UserIdentity:
-        name = username.strip().lower()
-        if not name or len(name) > 64:
+        name = self._username(username)
+        if name is None:
             raise ValueError("username tidak valid")
-        if len(password) < 8:
+        if not isinstance(password, str) or not 8 <= len(password) <= 256:
             raise ValueError("password minimal 8 karakter")
-        if not pin.isdigit() or not 4 <= len(pin) <= 8:
+        if not isinstance(pin, str) or not pin.isdigit() or not 4 <= len(pin) <= 8:
             raise ValueError("PIN harus 4-8 digit")
+        if not isinstance(display_name, str) or not 1 <= len(display_name.strip()) <= 128:
+            raise ValueError("nama tampilan tidak valid")
         selected_role = role if isinstance(role, Role) else Role(role)
         now = self._now().isoformat()
         with self._connection() as connection:
@@ -257,22 +398,71 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
             return None
         return self.create_user(username, username, Role.ADMINISTRATOR, password, pin)
 
-    def authenticate(self, username: str, password: str) -> UserIdentity | None:
-        name = username.strip().lower()
+    def authenticate(
+        self,
+        username: str,
+        password: str,
+        *,
+        client_ip: str | None = None,
+    ) -> UserIdentity | None:
+        name = self._username(username) or "<invalid>"
+        supplied = password if isinstance(password, str) else str(password or "")
+        ip_key = self._client_key(client_ip)
+        throttle_keys = (
+            (f"ip:{ip_key}", self.LOGIN_IP_LIMIT, self.LOGIN_IP_COOLDOWN),
+            (f"account-ip:{ip_key}:{name}", self.LOGIN_ACCOUNT_IP_LIMIT, self.LOGIN_ACCOUNT_IP_COOLDOWN),
+        )
+        now = self._now()
         with self._connection() as connection:
+            connection.execute(
+                "DELETE FROM login_throttle WHERE updated_at < ?",
+                ((now - timedelta(days=1)).isoformat(),),
+            )
+            retry_after = max(
+                self._throttle_status(connection, key, now, limit=limit, cooldown=cooldown)
+                for key, limit, cooldown in throttle_keys
+            )
+            if retry_after:
+                raise AuthenticationRateLimited(retry_after)
             row = connection.execute(
                 "SELECT display_name, role, password_hash, enabled FROM users WHERE username = ?",
                 (name,),
             ).fetchone()
-        if not row or not int(row[3]) or not self._verify_secret(password, row[2]):
-            return None
-        return UserIdentity(name, str(row[0]), Role(str(row[1])))
+            encoded = str(row[2]) if row is not None else self._DUMMY_HASH
+            valid = self._verify_secret(supplied, encoded)
+            enabled = bool(row is not None and int(row[3]))
+            role: Role | None = None
+            if valid and enabled:
+                try:
+                    role = Role(str(row[1]))
+                except ValueError:
+                    valid = False
+            if valid and role is not None and name != "<invalid>":
+                connection.execute(
+                    "DELETE FROM login_throttle WHERE throttle_key IN (?, ?)",
+                    (throttle_keys[0][0], throttle_keys[1][0]),
+                )
+                return_value = UserIdentity(name, str(row[0]), role)
+                # The transaction is committed by the context manager before
+                # returning, so a successful login also clears stale counters.
+                return return_value
+            retries = [
+                self._record_login_failure(connection, key, now, limit=limit, cooldown=cooldown)
+                for key, limit, cooldown in throttle_keys
+            ]
+            retry_after = max(retries)
+            if retry_after:
+                raise AuthenticationRateLimited(retry_after)
+        return None
 
     def verify_pin(self, username: str, pin: str) -> bool:
+        name = self._username(username)
+        if name is None or not isinstance(pin, str) or len(pin) > 256:
+            return False
         with self._connection() as connection:
             row = connection.execute(
                 "SELECT pin_hash, enabled FROM users WHERE username = ?",
-                (username.strip().lower(),),
+                (name,),
             ).fetchone()
         return bool(row and int(row[1]) and self._verify_secret(pin, str(row[0])))
 
@@ -282,20 +472,26 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
         self.clear_sensitive_lease(username)
 
     def reset_password(self, username: str, password: str) -> None:
-        if len(password) < 8:
+        if not isinstance(password, str) or not 8 <= len(password) <= 256:
             raise ValueError("password minimal 8 karakter")
+        name = self._username(username)
+        if name is None:
+            raise ValueError("user tidak ditemukan")
         with self._connection() as connection:
             connection.execute(
                 "UPDATE users SET password_hash = ?, updated_at = ? WHERE username = ?",
-                (self._hash_secret(password), self._now().isoformat(), username.strip().lower()),
+                (self._hash_secret(password), self._now().isoformat(), name),
             )
-        self.revoke_user_sessions(username)
-        self.clear_sensitive_lease(username)
+        self.revoke_user_sessions(name)
+        self.clear_sensitive_lease(name)
 
     def reset_pin(self, username: str, pin: str) -> None:
-        self._reset_pin_base(username, pin)
-        self.revoke_user_sessions(username)
-        self.clear_sensitive_lease(username)
+        name = self._username(username)
+        if name is None:
+            raise ValueError("user tidak ditemukan")
+        self._reset_pin_base(name, pin)
+        self.revoke_user_sessions(name)
+        self.clear_sensitive_lease(name)
 
     def update_user(self, username: str, *, display_name: str | None = None, role: Role | str | None = None) -> dict[str, object]:
         name = username.strip().lower()
@@ -423,7 +619,9 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
     def create_session(self, username: str, ttl_seconds: int = 28_800) -> str:
-        name = username.strip().lower()
+        name = self._username(username)
+        if name is None:
+            raise SecurityError("user tidak aktif")
         with self._connection() as connection:
             row = connection.execute(
                 "SELECT enabled FROM users WHERE username = ?", (name,)
@@ -432,7 +630,7 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
                 raise SecurityError("user tidak aktif")
             token = secrets.token_urlsafe(32)
             now = self._now()
-            expires = now + timedelta(seconds=max(60, int(ttl_seconds)))
+            expires = now + timedelta(seconds=min(86_400, max(60, int(ttl_seconds))))
             connection.execute(
                 "INSERT INTO sessions (token_hash, username, expires_at, created_at) VALUES (?, ?, ?, ?)",
                 (self._token_hash(token), name, expires.isoformat(), now.isoformat()),
@@ -441,6 +639,8 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
 
     def session_user(self, token: str | None) -> UserIdentity | None:
         if not token:
+            return None
+        if not isinstance(token, str) or len(token) > 256:
             return None
         now = self._now()
         with self._connection() as connection:
@@ -454,13 +654,17 @@ WHERE s.token_hash = ?
             ).fetchone()
             if not row:
                 return None
-            expires = datetime.fromisoformat(str(row[4]))
-            if not int(row[3]) or expires <= now:
+            expires = self._parse_time(row[4])
+            try:
+                role = Role(str(row[2]))
+            except ValueError:
+                role = None
+            if expires is None or not int(row[3]) or role is None or expires <= now:
                 connection.execute(
                     "DELETE FROM sessions WHERE token_hash = ?", (self._token_hash(token),)
                 )
                 return None
-        return UserIdentity(str(row[0]), str(row[1]), Role(str(row[2])))
+        return UserIdentity(str(row[0]), str(row[1]), role)
 
     def revoke_session(self, token: str | None) -> None:
         identity = self.session_user(token) if token else None
@@ -650,7 +854,9 @@ ON CONFLICT(quarter_id) DO UPDATE SET
 
     def _set_user_enabled_base(self, username: str, enabled: bool) -> None:
         with self._connection() as connection:
-            name = username.strip().lower()
+            name = self._username(username)
+            if name is None:
+                raise ValueError("user tidak ditemukan")
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute("SELECT role FROM users WHERE username = ?", (name,)).fetchone()
             if row is None:
@@ -663,10 +869,15 @@ ON CONFLICT(quarter_id) DO UPDATE SET
             connection.execute('UPDATE users SET enabled = ?, updated_at = ? WHERE username = ?', (1 if enabled else 0, self._now().isoformat(), name))
 
     def _reset_pin_base(self, username: str, pin: str) -> None:
-        if not pin.isdigit() or not 4 <= len(pin) <= 8:
+        if not isinstance(pin, str) or not pin.isdigit() or not 4 <= len(pin) <= 8:
             raise ValueError('PIN harus 4-8 digit')
+        name = self._username(username)
+        if name is None:
+            raise ValueError('user tidak ditemukan')
         with self._connection() as connection:
-            connection.execute('UPDATE users SET pin_hash = ?, updated_at = ? WHERE username = ?', (self._hash_secret(pin), self._now().isoformat(), username.strip().lower()))
+            cursor = connection.execute('UPDATE users SET pin_hash = ?, updated_at = ? WHERE username = ?', (self._hash_secret(pin), self._now().isoformat(), name))
+            if cursor.rowcount != 1:
+                raise ValueError('user tidak ditemukan')
 
     def _revoke_session_base(self, token: str | None) -> None:
         if not token:

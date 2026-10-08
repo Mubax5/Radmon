@@ -51,9 +51,15 @@ RADMON_BOOTSTRAP_ADMIN_PIN=GANTI_PIN
 
 RADMON_GRAFANA_PORT=3300
 RADMON_GRAFANA_USER=admin
-RADMON_GRAFANA_PASSWORD=admin
+# Instalasi baru mengganti marker ini saat first start dengan secret unik.
+RADMON_GRAFANA_PASSWORD=GENERATE_ON_FIRST_START
 RADMON_GRAFANA_BIN=
 RADMON_GRAFANA_DOCKER_FALLBACK=0
+
+# Isi hanya jika ada reverse proxy HTTPS yang dikendalikan operator.
+RADMON_WEB_COOKIE_SECURE=1
+RADMON_TRUSTED_PROXY_NETS=ISI_NETWORK_PROXY_TERPERCAYA
+RADMON_WEB_ALLOWED_ORIGINS=https://monitoring.example
 ```
 
 Jika Grafana native terpasang di lokasi yang tidak ditemukan otomatis, isi `RADMON_GRAFANA_BIN` dengan path `grafana-server.exe`.
@@ -65,8 +71,8 @@ Sesudah `.env` valid, restart Scheduled Task `RadMon Server` atau reboot PC. Ser
 Dari perangkat yang tersambung ke BRIN-NET dan mempunyai route ke server:
 
 ```text
-http://192.168.1.2:8090/       monitoring Grafana fullscreen/kiosk, tanpa login RadMon
-http://192.168.1.2:8090/app    RadMon Control Plane, wajib login
+https://monitoring.example/    monitoring Grafana fullscreen/kiosk, wajib login RadMon
+https://monitoring.example/app RadMon Control Plane, wajib login
 ```
 
 Di PC server:
@@ -75,9 +81,16 @@ Di PC server:
 http://localhost:3300          Grafana normal/admin/editor
 ```
 
-Browser remote tidak mengakses `3300` langsung. RadMon reverse-proxy request Grafana melalui gateway `8090`, membuang credential/cookie Grafana dari request remote, memblokir endpoint login/admin Grafana, dan menulis ulang redirect localhost agar tetap berada pada origin `192.168.1.2:8090`.
+Browser remote tidak mengakses `3300` langsung. Reverse proxy HTTPS meneruskan
+request ke gateway RadMon internal pada `8090`; RadMon membuang
+credential/cookie Grafana dari request remote, memblokir endpoint login/admin
+Grafana, dan menulis ulang redirect localhost agar tetap berada pada origin
+HTTPS yang sama. Remote HTTP tidak boleh dipakai untuk login.
 
-Viewer, Operator, dan Administrator semuanya merupakan user RadMon yang wajib login. Anonymous hanya boleh melihat Grafana monitoring.
+Viewer, Operator, dan Administrator semuanya merupakan user RadMon yang wajib
+login. Akses remote anonymous tidak didukung. Anonymous viewer Grafana, bila
+aktif untuk compatibility, hanya berada pada loopback `127.0.0.1` dan tidak
+boleh dibuka melalui firewall atau query proxy remote.
 
 Jika BRIN-NET berada di VLAN/subnet berbeda, Windows host sudah tidak membatasi ke `LocalSubnet`; tetapi routing/ACL Wi-Fi BRIN tetap harus mengizinkan client menuju `192.168.1.2:8090`. Software RadMon tidak dapat melewati client isolation atau ACL jaringan yang menolak route tersebut.
 
@@ -87,7 +100,11 @@ Production normal tidak membutuhkan Docker Desktop. RadMon memakai Grafana nativ
 
 Data Grafana berada di persistent runtime storage. Bootstrap hanya membuat datasource/dashboard/playlist yang belum ada. Dashboard existing tidak dikembalikan ke factory JSON. Jika dashboard dari versi lama masih read-only, RadMon melakukan migrasi satu kali untuk membuka editing sambil mempertahankan isi dashboard tersimpan.
 
-Administrator dapat login ke `http://localhost:3300` menggunakan akun Grafana (default `admin/admin` bila belum diganti), mengedit dashboard, lalu Save. Monitoring anonymous memakai UID/dashboard yang sama sehingga perubahan langsung terlihat dan tetap ada setelah restart RadMon/Grafana/Windows maupun upgrade installer.
+Administrator dapat login ke `http://localhost:3300` menggunakan akun Grafana
+yang diisi operator; nilai `admin/admin`, kosong, atau secret lemah akan
+memblokir managed bootstrap. Monitoring memakai UID/dashboard yang sama
+sehingga perubahan langsung terlihat dan tetap ada setelah restart
+RadMon/Grafana/Windows maupun upgrade installer.
 
 Port production Grafana sengaja stabil di `3300`, tetapi hanya loopback. Bila 3300 dipakai proses asing, perbaiki konflik port tersebut.
 
@@ -101,15 +118,22 @@ app\RadMon.exe --server
 
 Mode ini menjalankan collector LAN, secure API, archive/alarm policy, web platform, Grafana gateway, dan bootstrap Grafana tanpa membuka PySide desktop. Task Scheduler dikonfigurasi `StartWhenAvailable` dan restart setiap satu menit bila proses berhenti.
 
-Shortcut **RadMon** hanya membuka browser ke authenticated web control plane. Shortcut **RadMon Monitoring** membuka landing monitoring anonymous. Menutup browser tidak mematikan server.
+Shortcut **RadMon** membuka browser ke authenticated web control plane. Shortcut
+**RadMon Monitoring** membuka landing monitoring yang tetap memerlukan session
+untuk client remote. Menutup browser tidak mematikan server.
 
 ## Upgrade
 
 1. Backup instalasi production.
 2. Jalankan `RadMon-Setup.exe` terbaru sebagai Administrator.
-3. Installer mengganti `app\` tetapi mempertahankan `config\.env`, `runtime`, `archives`, dan `reports`.
+3. Updater terverifikasi memindahkan release lama ke backup per-release,
+   mempertahankan `config\.env`, `runtime`, `archives`, dan `reports`, lalu
+   memeriksa marker release dan health stabil. Jika installer/health gagal,
+   tree lama dipulihkan; jangan menghapus backup sebelum verifikasi.
 4. Scheduled Task dan firewall gateway didaftarkan ulang dan dijalankan kembali.
-5. Verifikasi `/`, `/app`, Grafana `localhost:3300`, source health, alarm response/suppression, dan report dari PC server serta satu client BRIN-NET lain.
+5. Verifikasi HTTPS `/`, `/app`, Grafana `localhost:3300`, source health, alarm
+   response/suppression, dan report dari PC server serta satu client BRIN-NET
+   lain. Uji rollback updater di staging Windows sebelum upgrade production.
 
 Jangan mengganti label `gd50`, `gd52`, atau `gd38`; checkpoint dan policy state menggunakan `source_id` tersebut.
 

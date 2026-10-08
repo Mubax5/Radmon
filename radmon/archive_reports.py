@@ -139,7 +139,13 @@ class ArchiveReportRepository:
         item: dict[str, Any],
         member: str,
     ):
-        path = Path(str(item["archive_path"]))
+        safe_path = getattr(self.catalog, "safe_archive_path", None)
+        if callable(safe_path):
+            path = safe_path(str(item.get("quarter_id") or ""), str(item["archive_path"]))
+        else:
+            path = Path(str(item["archive_path"]))
+        if member not in {"device.csv", "measurement.csv", "alarm.csv"}:
+            raise ArchiveCorruptionError("archive report member tidak diizinkan")
         verify_archive(path)
         with zipfile.ZipFile(path) as archive:
             with archive.open(member) as raw:
@@ -269,6 +275,10 @@ class ArchiveReportRepository:
                         "doserate": float(raw["doserate"]) if raw.get("doserate") not in (None, "") else None,
                         "dose": float(raw["dose"]) if raw.get("dose") not in (None, "") else None,
                     })
+                    if len(rows) > 50_000:
+                        raise ArchiveCorruptionError(
+                            "jumlah measurement archive melebihi batas report"
+                        )
             parts.append(_summary_from_rows(rows))
         return _combine_summaries(parts)
 

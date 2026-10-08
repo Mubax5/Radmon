@@ -10,6 +10,17 @@ from .security import SecurityStore, UserIdentity
 
 
 _SENSITIVE_MARKERS = ("password", "pin", "token", "secret")
+_PRIVATE_FIELDS = {"pic", "note", "operator_id", "user_id", "started_by", "ended_by"}
+
+
+def _log_text(value: Any, maximum: int = 512) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    # Audit rows are also copied to a human-readable application log. Strip
+    # control characters so supplied identifiers/reasons cannot forge lines.
+    text = "".join(char if char >= " " and char not in "\x7f" else " " for char in text)
+    return text[:maximum]
 
 
 def _safe(value: Any) -> Any:
@@ -19,7 +30,11 @@ def _safe(value: Any) -> Any:
         result: dict[str, Any] = {}
         for key, item in value.items():
             lowered = str(key).lower()
-            if any(marker in lowered for marker in _SENSITIVE_MARKERS):
+            if (
+                lowered in _PRIVATE_FIELDS
+                or lowered.endswith("_pic")
+                or any(marker in lowered for marker in _SENSITIVE_MARKERS)
+            ):
                 result[str(key)] = "[REDACTED]"
             else:
                 result[str(key)] = _safe(item)
@@ -53,8 +68,13 @@ class AuditTrail:
         occurred_at = datetime.now(timezone.utc).isoformat()
         before_json = json.dumps(_safe(before), ensure_ascii=False, sort_keys=True) if before is not None else None
         after_json = json.dumps(_safe(after), ensure_ascii=False, sort_keys=True) if after is not None else None
-        username = identity.username if identity else None
-        role = identity.role.value if identity else None
+        username = _log_text(identity.username, 128) if identity else None
+        role = _log_text(identity.role.value, 64) if identity else None
+        action = _log_text(action, 128) or "unknown"
+        target_type = _log_text(target_type, 128)
+        target_id = _log_text(target_id, 256)
+        source = _log_text(source, 128)
+        reason = _log_text(reason, 1000)
         if connection is None:
             with self.store._connection() as db:
                 db.execute(

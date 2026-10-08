@@ -103,5 +103,5 @@ export function LoadingCard({ label = "Memuat…" }: { label?: string } = {}) {
 }
 
 export function ErrorCard({ message }: { message: string }) {
-  return <LayerCard className="error-card">{message}</LayerCard>;
+  return <LayerCard className="error-card" role="alert">{message}</LayerCard>;
 }

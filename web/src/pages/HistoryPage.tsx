@@ -36,6 +36,7 @@ export function HistoryPage() {
   const [stations, setStations] = useState<Station[]>([]);
   const [selected, setSelected] = useState<number | null>(null);
   const [rows, setRows] = useState<HistoryRow[]>([]);
+  const [rowsStation, setRowsStation] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -167,8 +168,10 @@ export function HistoryPage() {
     // smooth chart update without full page reload: keep stale rows visible, use refreshing
     // do NOT setRows([]) here for seamless carousel; refreshing indicator will show.
     setSelected(next);
+    setError("");
     syncUrl(next);
     if (!next) {
+      setRowsStation(null);
       setLoading(false);
     }
   }
@@ -215,11 +218,10 @@ export function HistoryPage() {
     const key = cacheKey(selected);
     const cached = cacheRef.current.get(key);
     // instant station switch if cached and not initial hard load
-    if (cached && !initial) {
+    if (cached) {
       setRows(cached);
+      setRowsStation(selected);
       setError("");
-    } else if (cached && initial && rowsRef.current.length === 0) {
-      setRows(cached);
     }
     // decide loading vs refreshing without full page reload: keep content mounted
     const shouldShowLoading = initial && rowsRef.current.length === 0 && !cached;
@@ -231,6 +233,7 @@ export function HistoryPage() {
         cacheRef.current.set(key, items);
         if (requestId === requestIdRef.current) {
           setRows(items);
+          setRowsStation(selected);
           setError("");
         }
       })
@@ -277,8 +280,9 @@ export function HistoryPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [goPrev, goNext]);
 
+  const currentRows = selected != null && rowsStation === selected ? rows : [];
   const history = useMemo(() => {
-    const points: TrendPoint[] = rows
+    const points: TrendPoint[] = currentRows
       .flatMap((row) => {
         const value = numericDoseRate(row);
         return value == null || !row.dtom ? [] : [{ at: String(row.dtom), value }];
@@ -291,12 +295,15 @@ export function HistoryPage() {
     const max = values.length ? Math.max(...values) : null;
     const average = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
     return { points, latest, min, max, average };
-  }, [rows]);
+  }, [currentRows]);
 
   const unit = selectedStation?.unit ?? "uSv/h";
   const fmt = (value: number | null) => value == null ? "—" : `${formatDoseValue(value)} ${unit}`;
-  const chronological = [...rows].sort((a, b) => Date.parse(String(b.dtom ?? "")) - Date.parse(String(a.dtom ?? "")));
+  const chronological = [...currentRows].sort((a, b) => Date.parse(String(b.dtom ?? "")) - Date.parse(String(a.dtom ?? "")));
   const offlineLastReadings = selectedStation?.status === "offline";
+  const waitingForSelected = selected != null && rowsStation !== selected && !error;
+  const historyUnavailable = !loading && currentRows.length === 0 && Boolean(error);
+  const noStations = !loading && !error && !hasStations;
   const historyDescription = offlineLastReadings
     ? `Stasiun OFFLINE — ${history.points.length} pembacaan terakhir yang tersimpan ditampilkan dengan timestamp asli. Data terakhir ${selectedStation?.last_data_age_label ?? "usianya tidak diketahui"}.`
     : `${history.points.length} pengukuran aktual dalam riwayat stasiun.`;
@@ -439,7 +446,7 @@ export function HistoryPage() {
         document.body,
       ) : null}
       {error ? <ErrorCard message={error} /> : null}
-      {loading && rows.length === 0 ? <LoadingCard /> : (
+      {(loading || waitingForSelected) && currentRows.length === 0 ? <LoadingCard label="Memuat riwayat stasiun…" /> : historyUnavailable ? null : noStations ? <LayerCard className="empty-card">Belum ada stasiun untuk ditampilkan.</LayerCard> : (
         <>
           <div className="metric-grid history-summary">
             <MetricCard label="Terbaru" value={fmt(history.latest)} />

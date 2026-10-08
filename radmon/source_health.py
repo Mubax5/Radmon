@@ -35,11 +35,21 @@ CREATE TABLE IF NOT EXISTS source_health (
   last_alarm_poll TEXT,
   last_history_import TEXT,
   last_error TEXT,
+  policy_state TEXT NOT NULL DEFAULT 'OK',
+  last_policy_error TEXT,
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
 """
             )
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(source_health)").fetchall()
+            }
+            if "policy_state" not in columns:
+                connection.execute("ALTER TABLE source_health ADD COLUMN policy_state TEXT NOT NULL DEFAULT 'OK'")
+            if "last_policy_error" not in columns:
+                connection.execute("ALTER TABLE source_health ADD COLUMN last_policy_error TEXT")
 
     @staticmethod
     def _to_dict(row) -> dict[str, Any] | None:
@@ -48,7 +58,7 @@ CREATE TABLE IF NOT EXISTS source_health (
         keys = (
             "source_id", "host", "state", "last_success", "last_failure",
             "last_live_poll", "last_alarm_poll", "last_history_import",
-            "last_error", "consecutive_failures", "updated_at",
+            "last_error", "policy_state", "last_policy_error", "consecutive_failures", "updated_at",
         )
         item = dict(zip(keys, row))
         item["consecutive_failures"] = int(item.get("consecutive_failures") or 0)
@@ -60,7 +70,7 @@ CREATE TABLE IF NOT EXISTS source_health (
                 """
 SELECT source_id, host, state, last_success, last_failure,
        last_live_poll, last_alarm_poll, last_history_import,
-       last_error, consecutive_failures, updated_at
+       last_error, policy_state, last_policy_error, consecutive_failures, updated_at
 FROM source_health WHERE source_id = ?
 """,
                 (source_id,),
@@ -73,7 +83,7 @@ FROM source_health WHERE source_id = ?
                 """
 SELECT source_id, host, state, last_success, last_failure,
        last_live_poll, last_alarm_poll, last_history_import,
-       last_error, consecutive_failures, updated_at
+       last_error, policy_state, last_policy_error, consecutive_failures, updated_at
 FROM source_health ORDER BY source_id
 """
             ).fetchall()
@@ -93,18 +103,29 @@ FROM source_health ORDER BY source_id
             self.transition_sink(dict(item))
         return item
 
-    def record_success(self, source, *, live: bool, alarm: bool, history: bool) -> dict[str, Any]:
+    def record_success(
+        self,
+        source,
+        *,
+        live: bool,
+        alarm: bool,
+        history: bool,
+        policy_error: str | None = None,
+    ) -> dict[str, Any]:
         current = self.get(source.source_id)
         previous = str(current["state"]) if current else None
         at = self.now().astimezone(timezone.utc).isoformat()
         state = "RECOVERED" if previous in {"DEGRADED", "OFFLINE"} else "CONNECTED"
+        policy_state = "DEGRADED" if policy_error else "OK"
+        policy_detail = str(policy_error)[:1000] if policy_error else None
         with self.store._connection() as connection:
             connection.execute(
                 """
 INSERT INTO source_health
   (source_id, host, state, last_success, last_failure, last_live_poll,
-   last_alarm_poll, last_history_import, last_error, consecutive_failures, updated_at)
-VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, 0, ?)
+   last_alarm_poll, last_history_import, last_error, policy_state,
+   last_policy_error, consecutive_failures, updated_at)
+VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?, 0, ?)
 ON CONFLICT(source_id) DO UPDATE SET
   host = excluded.host,
   state = excluded.state,
@@ -113,12 +134,15 @@ ON CONFLICT(source_id) DO UPDATE SET
   last_alarm_poll = CASE WHEN ? THEN excluded.last_alarm_poll ELSE source_health.last_alarm_poll END,
   last_history_import = CASE WHEN ? THEN excluded.last_history_import ELSE source_health.last_history_import END,
   last_error = NULL,
+  policy_state = excluded.policy_state,
+  last_policy_error = excluded.last_policy_error,
   consecutive_failures = 0,
   updated_at = excluded.updated_at
 """,
                 (
                     source.source_id, source.host, state, at,
-                    at if live else None, at if alarm else None, at if history else None, at,
+                    at if live else None, at if alarm else None, at if history else None,
+                    policy_state, policy_detail, at,
                     1 if live else 0, 1 if alarm else 0, 1 if history else 0,
                 ),
             )
@@ -157,8 +181,9 @@ WHERE source_id = ?
                 """
 INSERT INTO source_health
   (source_id, host, state, last_success, last_failure, last_live_poll,
-   last_alarm_poll, last_history_import, last_error, consecutive_failures, updated_at)
-VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?, ?)
+   last_alarm_poll, last_history_import, last_error, policy_state,
+   last_policy_error, consecutive_failures, updated_at)
+VALUES (?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, 'OK', NULL, ?, ?)
 ON CONFLICT(source_id) DO UPDATE SET
   host = excluded.host,
   state = excluded.state,

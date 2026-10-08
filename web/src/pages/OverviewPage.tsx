@@ -48,11 +48,16 @@ export function OverviewPage() {
 
   if (!data && !error) return <LoadingCard />;
 
+  const countValue = (key: string): number | "—" => {
+    const value = data?.counts?.[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : "—";
+  };
+
   const cards = data ? [
-    ["Normal", data.counts.normal || 0, "success"],
-    ["Peringatan", data.counts.warning || 0, "warning"],
-    ["Alarm", data.counts.alarm || 0, "error"],
-    ["Offline", data.counts.offline || 0, "secondary"],
+    ["Normal", countValue("normal"), "success"],
+    ["Peringatan", countValue("warning"), "warning"],
+    ["Alarm", countValue("alarm"), "error"],
+    ["Offline", countValue("offline"), "secondary"],
   ] as const : [];
   const openAlarm = user && user.role !== "Viewer"
     ? (station: Station) => navigate("alarms", { serid: station.serid, event: station.active_event_id ?? undefined })
