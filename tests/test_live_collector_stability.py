@@ -364,3 +364,71 @@ def test_central_live_upsert_uses_one_connection_with_history_then_rolling_commi
     assert sum("insert ignore into recent (" in sql for sql in statements) == 2
     assert sum("insert ignore into measurement" in sql for sql in statements) == 2
     assert sum("delete" in sql and "from recent" in sql for sql in statements) <= 1
+
+
+def test_central_live_upsert_retries_transient_recent_conflict_without_rewriting_history() -> None:
+    class Cursor:
+        def __init__(self) -> None:
+            self.rowcount = 1
+            self.conflicts = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(str(sql).lower().split())
+            if normalized.startswith("select name, location, hwaddress, hwtype from device"):
+                return
+            if normalized.startswith("delete from recent") and self.conflicts == 0:
+                self.conflicts += 1
+                raise RuntimeError(
+                    "Record has changed since last read in table 'recent'; try restarting transaction"
+                )
+
+        def fetchone(self):
+            return None
+
+    class Connection:
+        def __init__(self) -> None:
+            self.cursor_obj = Cursor()
+            self.commits = 0
+            self.rollbacks = 0
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            self.rollbacks += 1
+
+        def close(self):
+            pass
+
+    connection = Connection()
+    store = BatchedMariaCentralStore(Settings(), connection_factory=lambda: connection)
+    changed = store.upsert_live_rows(
+        "gd52",
+        [{
+            "serid": 5201,
+            "name": "Station 5201",
+            "location": "Gd.52",
+            "warnlevel": 23.0,
+            "alarmlevel": 25.0,
+            "maxidlemin": 30,
+            "unit": "µSv/h",
+            "dtom": datetime(2026, 9, 15, 6, 30),
+            "doserate": 0.2,
+            "dose": 0.01,
+            "lastmeasec": 2,
+        }],
+    )
+
+    assert changed == 1
+    assert connection.cursor_obj.conflicts == 1
+    assert connection.commits == 2
+    assert connection.rollbacks == 1

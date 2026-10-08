@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any, Callable, Iterable
 
@@ -13,6 +14,21 @@ PROTECTED_HISTORY_TABLES = ("measurement", "alarm", "rawdata")
 # Keep a small, durable set of genuine samples for offline last-readings views.
 OFFLINE_LAST_READING_LIMIT = 30
 OFFLINE_LAST_TABLE = "recent_last"
+ROLLING_MIRROR_LOCK = threading.RLock()
+
+
+def is_retryable_recent_conflict(error: BaseException) -> bool:
+    """Return whether MariaDB reported a transient derived-cache conflict."""
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "record has changed since last read",
+            "try restarting transaction",
+            "deadlock found",
+            "lock wait timeout",
+        )
+    )
 
 
 class RollingRecentManager:
@@ -178,7 +194,25 @@ VALUES (?, ?, ?, ?, ?, ?)
             mirrored += 1
         return mirrored
 
-    def cleanup_with_cursor(self, cursor: Any, *, force: bool = False) -> int:
+    def _database_cutoff(self, cursor: Any) -> Any | None:
+        """Read one WIB cutoff from MariaDB for a coherent reconcile pass."""
+        cursor.execute(f"SELECT {self._cutoff_sql} AS cutoff")
+        row = cursor.fetchone()
+        value = self._row_value(row, "cutoff", 0)
+        return value if getattr(value, "year", None) is not None else None
+
+    def _cutoff_clause(self, cutoff: Any | None) -> tuple[str, tuple[Any, ...]]:
+        if cutoff is None:
+            return self._cutoff_sql, ()
+        return "?", (cutoff,)
+
+    def cleanup_with_cursor(
+        self,
+        cursor: Any,
+        *,
+        force: bool = False,
+        cutoff: Any | None = None,
+    ) -> int:
         """Delete expired rolling rows and trim the bounded offline cache.
 
         ``recent`` remains the three-hour hot path. ``recent_last`` keeps at most
@@ -220,21 +254,14 @@ LIMIT {OFFLINE_LAST_READING_LIMIT + 1}
         except Exception:
             LOG.warning("offline last-readings cache cleanup unavailable")
 
+        cutoff_sql, cutoff_params = self._cutoff_clause(cutoff)
+        # ``recent_last`` is the only bounded offline cache. The hot table is
+        # strictly the rolling window; preserving old rows here creates a
+        # moving retention boundary and makes startup validation race the clock.
         cursor.execute(
             f"""DELETE FROM recent
-WHERE dtom < {self._cutoff_sql}
-  AND EXISTS (
-    SELECT 1 FROM recent newer
-    WHERE newer.serid <=> recent.serid
-      AND newer.dtom > recent.dtom
-  )
-  AND (
-    SELECT COUNT(*)
-    FROM recent kept
-    WHERE kept.serid <=> recent.serid
-      AND kept.dtom > recent.dtom
-      AND kept.dtom < {self._cutoff_sql}
-  ) >= {OFFLINE_LAST_READING_LIMIT}"""
+WHERE dtom < {cutoff_sql}""",
+            cutoff_params,
         )
         deleted = int(getattr(cursor, "rowcount", 0) or 0)
         self._last_cleanup = now
@@ -343,26 +370,35 @@ LEFT JOIN radmon_runtime_status rs ON rs.serid = d.serid
 """
         )
 
-    def _backfill(self, cursor: Any, *, table: str = "recent") -> None:
+    def _backfill(
+        self,
+        cursor: Any,
+        *,
+        table: str = "recent",
+        cutoff: Any | None = None,
+    ) -> None:
         # The hot table needs the indexed three-hour window. The durable offline
         # cache is strictly per-detector latest-N and must never receive the
         # complete recent window as a side effect of startup.
         if table != OFFLINE_LAST_TABLE:
+            cutoff_sql, cutoff_params = self._cutoff_clause(cutoff)
             cursor.execute(
                 f"""
 INSERT IGNORE INTO {table} (serid, dtom, doserate, dose, previnterval, stat)
 SELECT serid, dtom, doserate, dose, previnterval, stat
 FROM measurement
-WHERE dtom >= {self._cutoff_sql}
-"""
+WHERE dtom >= {cutoff_sql}
+""",
+                cutoff_params,
             )
-        # Per-detector LIMIT queries retain only bounded genuine old readings;
-        # this does not scan the full historical measurement table.
-        cursor.execute("SELECT DISTINCT serid FROM device ORDER BY serid")
-        for raw_serid in cursor.fetchall():
-            serid = self._row_value(raw_serid, "serid", 0)
-            cursor.execute(
-                f"""
+        if table == OFFLINE_LAST_TABLE:
+            # Per-detector LIMIT queries retain only bounded genuine old
+            # readings; this does not scan the full historical table.
+            cursor.execute("SELECT DISTINCT serid FROM device ORDER BY serid")
+            for raw_serid in cursor.fetchall():
+                serid = self._row_value(raw_serid, "serid", 0)
+                cursor.execute(
+                    f"""
 INSERT IGNORE INTO {table}
   (serid, dtom, doserate, dose, previnterval, stat)
 SELECT serid, dtom, doserate, dose, previnterval, stat
@@ -371,32 +407,22 @@ WHERE serid = ?
 ORDER BY dtom DESC
 LIMIT {OFFLINE_LAST_READING_LIMIT}
 """,
-                (serid,),
-            )
+                    (serid,),
+                )
 
-    def _validate_rolling(self, cursor: Any) -> None:
+    def _validate_rolling(self, cursor: Any, *, cutoff: Any | None = None) -> None:
         columns = self._table_columns(cursor, "recent")
         if columns != set(ROLLING_COLUMNS):
             raise RuntimeError(
                 "Schema recent rolling tidak sesuai: " + ", ".join(sorted(columns))
             )
-        # The newest bounded offline samples may sit outside retention; only rows
-        # older than that bounded set indicate a retention leak.
+        # ``recent_last`` owns offline retention. Any expired row in the hot
+        # table is a derived-cache retention violation.
+        cutoff_sql, cutoff_params = self._cutoff_clause(cutoff)
         cursor.execute(
             f"""SELECT COUNT(*) FROM recent r
-WHERE r.dtom < {self._cutoff_sql}
-  AND EXISTS (
-    SELECT 1 FROM recent newer
-    WHERE newer.serid <=> r.serid
-      AND newer.dtom > r.dtom
-  )
-  AND (
-    SELECT COUNT(*)
-    FROM recent kept
-    WHERE kept.serid <=> r.serid
-      AND kept.dtom > r.dtom
-      AND kept.dtom < {self._cutoff_sql}
-  ) >= {OFFLINE_LAST_READING_LIMIT}"""
+WHERE r.dtom < {cutoff_sql}""",
+            cutoff_params,
         )
         row = cursor.fetchone()
         expired = int(self._row_value(row, "COUNT(*)", 0) or 0)
@@ -408,20 +434,23 @@ WHERE r.dtom < {self._cutoff_sql}
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
+                # One cutoff is shared by backfill, cleanup, and validation so
+                # a row cannot cross the boundary between those statements.
+                cutoff = self._database_cutoff(cursor)
                 current_columns = self._table_columns(cursor, "recent")
                 if current_columns == set(ROLLING_COLUMNS):
                     self._ensure_recent_indexes(cursor, "recent")
                     self._ensure_last_readings_table(cursor)
                     cursor.execute("DELETE FROM recent")
                     cursor.execute(f"DELETE FROM {OFFLINE_LAST_TABLE}")
-                    self._backfill(cursor)
-                    self._backfill(cursor, table=OFFLINE_LAST_TABLE)
+                    self._backfill(cursor, cutoff=cutoff)
+                    self._backfill(cursor, table=OFFLINE_LAST_TABLE, cutoff=cutoff)
                     self._create_view(cursor)
                     # A slow multi-minute backfill lets the rolling cutoff
                     # advance past rows copied at its start; evict them before
                     # validation instead of failing a healthy reconcile.
-                    self.cleanup_with_cursor(cursor, force=True)
-                    self._validate_rolling(cursor)
+                    self.cleanup_with_cursor(cursor, force=True, cutoff=cutoff)
+                    self._validate_rolling(cursor, cutoff=cutoff)
                     cursor.execute("DROP TABLE IF EXISTS recent_radmon_legacy")
                     connection.commit()
                     self._last_cleanup = self._monotonic()
@@ -430,7 +459,7 @@ WHERE r.dtom < {self._cutoff_sql}
                 cursor.execute("DROP TABLE IF EXISTS recent_radmon_next")
                 cursor.execute("CREATE TABLE recent_radmon_next LIKE measurement")
                 self._ensure_recent_indexes(cursor, "recent_radmon_next")
-                self._backfill(cursor, table="recent_radmon_next")
+                self._backfill(cursor, table="recent_radmon_next", cutoff=cutoff)
                 cursor.execute("DROP VIEW IF EXISTS vrecent")
                 cursor.execute("DROP TABLE IF EXISTS recent_radmon_legacy")
                 if current_columns:
@@ -442,9 +471,9 @@ WHERE r.dtom < {self._cutoff_sql}
                     cursor.execute("RENAME TABLE recent_radmon_next TO recent")
                 self._create_view(cursor)
                 self._ensure_last_readings_table(cursor)
-                self._backfill(cursor, table=OFFLINE_LAST_TABLE)
-                self.cleanup_with_cursor(cursor, force=True)
-                self._validate_rolling(cursor)
+                self._backfill(cursor, table=OFFLINE_LAST_TABLE, cutoff=cutoff)
+                self.cleanup_with_cursor(cursor, force=True, cutoff=cutoff)
+                self._validate_rolling(cursor, cutoff=cutoff)
                 cursor.execute("DROP TABLE IF EXISTS recent_radmon_legacy")
             connection.commit()
             self._last_cleanup = self._monotonic()
@@ -461,14 +490,15 @@ WHERE r.dtom < {self._cutoff_sql}
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
+                cutoff = self._database_cutoff(cursor)
                 cursor.execute("DELETE FROM recent")
                 self._ensure_last_readings_table(cursor)
                 cursor.execute(f"DELETE FROM {OFFLINE_LAST_TABLE}")
-                self._backfill(cursor)
-                self._backfill(cursor, table=OFFLINE_LAST_TABLE)
+                self._backfill(cursor, cutoff=cutoff)
+                self._backfill(cursor, table=OFFLINE_LAST_TABLE, cutoff=cutoff)
                 self._create_view(cursor)
-                self.cleanup_with_cursor(cursor, force=True)
-                self._validate_rolling(cursor)
+                self.cleanup_with_cursor(cursor, force=True, cutoff=cutoff)
+                self._validate_rolling(cursor, cutoff=cutoff)
             connection.commit()
             self._last_cleanup = self._monotonic()
         except Exception:
@@ -481,7 +511,8 @@ WHERE r.dtom < {self._cutoff_sql}
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                deleted = self.cleanup_with_cursor(cursor, force=force)
+                cutoff = self._database_cutoff(cursor)
+                deleted = self.cleanup_with_cursor(cursor, force=force, cutoff=cutoff)
             connection.commit()
             return deleted
         except Exception:

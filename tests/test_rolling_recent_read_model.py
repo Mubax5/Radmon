@@ -71,9 +71,8 @@ def test_cleanup_deletes_only_expired_recent_rows():
     sql = "\n".join(statement for statement, _ in connection.cursor_obj.calls).lower()
     assert "delete" in sql and "from recent" in sql
     assert "interval 3 hour" in sql
-    # Offline last-known per detector must survive retention cleanup.
-    assert "newer.dtom > recent.dtom" in sql
-    assert "newer.serid <=> recent.serid" in sql
+    # Offline last-known samples live in recent_last, not the hot table.
+    assert "from recent_last" in sql
     for protected in ("measurement", "alarm", "rawdata"):
         assert f"delete from {protected}" not in sql
         assert f"truncate table {protected}" not in sql
@@ -81,13 +80,13 @@ def test_cleanup_deletes_only_expired_recent_rows():
     assert connection.commits == 1
 
 
-def test_rolling_validator_allows_old_latest_and_current_rows_but_rejects_old_nonlatest():
+def test_rolling_validator_rejects_any_expired_hot_row():
     from radmon.recent_read_model import ROLLING_COLUMNS, RollingRecentManager
 
     class _ValidationCursor(_RecordingCursor):
-        def __init__(self, expired_nonlatest):
+        def __init__(self, expired):
             super().__init__()
-            self.expired_nonlatest = expired_nonlatest
+            self.expired = expired
 
         def fetchall(self):
             if "information_schema.columns" in self.calls[-1][0].lower():
@@ -95,33 +94,23 @@ def test_rolling_validator_allows_old_latest_and_current_rows_but_rejects_old_no
             return []
 
         def fetchone(self):
-            return (self.expired_nonlatest,)
+            return (self.expired,)
 
-    # One old row with no newer sample is the intentional last-known reading;
-    # a current sample is also valid. An expired row superseded by a later row
-    # is the only retention violation.
-    cases = (
-        ("old latest row", 0, False),
-        ("old non-latest row", 1, True),
-        ("current row", 0, False),
-    )
-    for _, expired_nonlatest, should_raise in cases:
-        cursor = _ValidationCursor(expired_nonlatest)
-        manager = RollingRecentManager(Settings())
-        if should_raise:
-            import pytest
+    import pytest
 
-            with pytest.raises(RuntimeError, match="recent masih memiliki 1 row"):
-                manager._validate_rolling(cursor)
-        else:
-            manager._validate_rolling(cursor)
-        sql = cursor.calls[-1][0].lower()
-        assert "r.dtom <" in sql
-        assert "newer.dtom > r.dtom" in sql
-        assert "newer.serid <=> r.serid" in sql
+    cursor = _ValidationCursor(1)
+    with pytest.raises(RuntimeError, match="recent masih memiliki 1 row"):
+        RollingRecentManager(Settings())._validate_rolling(cursor)
+    sql = cursor.calls[-1][0].lower()
+    assert "r.dtom <" in sql
+    assert "from recent r" in sql
+    assert "newer.dtom > r.dtom" not in sql
+
+    current_cursor = _ValidationCursor(0)
+    RollingRecentManager(Settings())._validate_rolling(current_cursor)
 
 
-def test_cleanup_is_targeted_to_expired_superseded_recent_rows():
+def test_cleanup_removes_all_expired_hot_rows_and_keeps_history_untouched():
     from radmon.recent_read_model import RollingRecentManager
 
     cursor = _RecordingCursor()
@@ -129,9 +118,8 @@ def test_cleanup_is_targeted_to_expired_superseded_recent_rows():
     sql = cursor.calls[-1][0].lower()
     assert sql.startswith("delete from recent")
     assert "dtom <" in sql
-    assert "exists ( select 1 from recent newer" in sql
-    assert "newer.dtom > recent.dtom" in sql
-    assert "newer.serid <=> recent.serid" in sql
+    assert "exists ( select 1 from recent newer" not in sql
+    assert "from recent kept" not in sql
     assert all(table not in sql for table in ("measurement", "alarm", "rawdata"))
 
 
@@ -203,6 +191,10 @@ def test_ensure_schema_evicts_backfill_boundary_rows_before_validation():
     instead of failing a healthy reconcile with vrecent already recreated."""
     from radmon.recent_read_model import ROLLING_COLUMNS, RollingRecentManager
 
+    from datetime import datetime
+
+    cutoff = datetime(2026, 10, 8, 4, 5, 0)
+
     class _SchemaCursor(_RecordingCursor):
         def fetchall(self):
             if self.calls and "information_schema.columns" in self.calls[-1][0].lower():
@@ -210,6 +202,8 @@ def test_ensure_schema_evicts_backfill_boundary_rows_before_validation():
             return []
 
         def fetchone(self):
+            if self.calls and "select date_sub" in self.calls[-1][0].lower():
+                return (cutoff,)
             if self.calls and self.calls[-1][0].lower().startswith("select count(*)"):
                 return (0,)
             return None
@@ -232,6 +226,13 @@ def test_ensure_schema_evicts_backfill_boundary_rows_before_validation():
         i for i, sql in enumerate(statements) if sql.startswith("select count(*) from recent")
     )
     assert create_view < cleanup_delete < validate_select
+    cutoff_params = [
+        params
+        for sql, params in connection.cursor_obj.calls
+        if "dtom >= ?" in sql or "dtom < ?" in sql
+    ]
+    assert cutoff_params
+    assert all(params == (cutoff,) for params in cutoff_params)
     assert connection.commits == 1
     assert connection.rollbacks == 0
 

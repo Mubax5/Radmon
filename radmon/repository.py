@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
 from datetime import datetime
 from typing import Any, Callable
 
 from .config import Settings
 from .db import connect_mariadb
 from .models import LatestReading, Measurement, StationConfig
-from .recent_read_model import OFFLINE_LAST_READING_LIMIT, RollingRecentManager
+from .recent_read_model import (
+    OFFLINE_LAST_READING_LIMIT,
+    ROLLING_MIRROR_LOCK,
+    RollingRecentManager,
+    is_retryable_recent_conflict,
+)
 from .stations import station_by_id, station_catalog
 
 
@@ -299,9 +305,22 @@ LIMIT 1
             connection.commit()
 
             try:
-                with connection.cursor() as cursor:
-                    upsert_recent(cursor, measurement, dose=dose, interval=interval)
-                connection.commit()
+                with ROLLING_MIRROR_LOCK:
+                    for attempt in range(3):
+                        try:
+                            with connection.cursor() as cursor:
+                                upsert_recent(cursor, measurement, dose=dose, interval=interval)
+                            connection.commit()
+                            break
+                        except Exception as exc:
+                            connection.rollback()
+                            if not is_retryable_recent_conflict(exc) or attempt == 2:
+                                raise
+                            LOG.warning(
+                                "rolling recent conflict; retrying single-measurement mirror attempt=%s",
+                                attempt + 2,
+                            )
+                            time.sleep(0.05 * (attempt + 1))
             except Exception:
                 connection.rollback()
                 LOG.exception(
@@ -310,7 +329,8 @@ LIMIT 1
                     measurement.measured_at,
                 )
             try:
-                self._recent_manager.cleanup()
+                with ROLLING_MIRROR_LOCK:
+                    self._recent_manager.cleanup()
             except Exception:
                 # Cleanup failure may leave a slightly wider window; it must not undo history.
                 pass

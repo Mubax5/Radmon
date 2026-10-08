@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
+import time
 from typing import Any, Protocol
 
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -9,7 +10,12 @@ from pydantic import BaseModel, Field
 
 from .config import Settings
 from .db import connect_mariadb
-from .recent_read_model import OFFLINE_LAST_READING_LIMIT, RollingRecentManager
+from .recent_read_model import (
+    OFFLINE_LAST_READING_LIMIT,
+    ROLLING_MIRROR_LOCK,
+    RollingRecentManager,
+    is_retryable_recent_conflict,
+)
 
 
 LOG = logging.getLogger(__name__)
@@ -112,10 +118,23 @@ ON DUPLICATE KEY UPDATE
 
             if inserted_items:
                 try:
-                    with connection.cursor() as cursor:
-                        self._recent_manager.mirror_samples(cursor, inserted_items)
-                        self._recent_manager.cleanup_with_cursor(cursor)
-                    connection.commit()
+                    with ROLLING_MIRROR_LOCK:
+                        for attempt in range(3):
+                            try:
+                                with connection.cursor() as cursor:
+                                    self._recent_manager.mirror_samples(cursor, inserted_items)
+                                    self._recent_manager.cleanup_with_cursor(cursor)
+                                connection.commit()
+                                break
+                            except Exception as exc:
+                                connection.rollback()
+                                if not is_retryable_recent_conflict(exc) or attempt == 2:
+                                    raise
+                                LOG.warning(
+                                    "rolling recent conflict; retrying ingest mirror attempt=%s",
+                                    attempt + 2,
+                                )
+                                time.sleep(0.05 * (attempt + 1))
                 except Exception:
                     connection.rollback()
                     LOG.exception(

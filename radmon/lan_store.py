@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime
 import logging
+import time
 from typing import Any, Callable, Iterable
 
 from .lan import MariaCentralStore, _shared_serids
-from .recent_read_model import RollingRecentManager
+from .recent_read_model import (
+    ROLLING_MIRROR_LOCK,
+    RollingRecentManager,
+    is_retryable_recent_conflict,
+)
 
 
 LOG = logging.getLogger(__name__)
@@ -161,10 +166,26 @@ VALUES (?, ?, ?, ?, ?, ?)""",
             # durable; mirror/cleanup failure cannot roll it back.
             if rolling_rows:
                 try:
-                    with connection.cursor() as cursor:
-                        self._recent_manager.mirror_samples(cursor, rolling_rows)
-                        self._recent_manager.cleanup_with_cursor(cursor)
-                    connection.commit()
+                    # All live-source threads share this process-wide derived
+                    # cache. Serialize mirror + cleanup and retry only MariaDB's
+                    # transient optimistic-concurrency conflict.
+                    with ROLLING_MIRROR_LOCK:
+                        for attempt in range(3):
+                            try:
+                                with connection.cursor() as cursor:
+                                    self._recent_manager.mirror_samples(cursor, rolling_rows)
+                                    self._recent_manager.cleanup_with_cursor(cursor)
+                                connection.commit()
+                                break
+                            except Exception as exc:
+                                connection.rollback()
+                                if not is_retryable_recent_conflict(exc) or attempt == 2:
+                                    raise
+                                LOG.warning(
+                                    "rolling recent conflict; retrying mirror attempt=%s",
+                                    attempt + 2,
+                                )
+                                time.sleep(0.05 * (attempt + 1))
                 except Exception:
                     connection.rollback()
                     LOG.exception(

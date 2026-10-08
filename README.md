@@ -91,6 +91,7 @@ Database tetap **`ipradmon`** dengan schema production aktual:
 device
 measurement
 recent
+recent_last
 vrecent
 alarm
 applog
@@ -101,6 +102,8 @@ rawdata
 `measurement`, `alarm`, dan data historis lain tetap menjadi source of truth jangka panjang untuk History, Reports, export, archive, dan retensi minimum 5 tahun. RadMon **tidak mengurangi retention atau menghapus histori itu** ketika melakukan monitoring realtime.
 
 Khusus central PC, `recent` adalah **rolling sample table tiga jam** dengan field `serid, dtom, doserate, dose, previnterval, stat`. Primary key `(serid, dtom)` membuat mirror sample idempotent dan index `dtom` membuat cleanup retention murah. Row yang lebih tua dari tiga jam dihapus **hanya dari `recent`**; copy authoritative-nya tetap berada di `measurement`.
+
+`recent_last` adalah cache terpisah yang menyimpan paling banyak 30 pembacaan asli terbaru per detector untuk tampilan offline. Cache ini bukan source of truth, tidak memperpanjang window `recent`, dan tidak mengubah atau menghapus `measurement`.
 
 `vrecent` adalah view monitoring yang menggabungkan rolling `recent` dengan metadata `device` dan current runtime status. Grafana realtime, sparkline, trend dose tiga jam, dan current status membaca `vrecent` sehingga hot path tidak menyisir tabel `measurement` lima tahun. Panel event **Alarm Terbaru · 24 Jam** tetap membaca `alarm` karena event log itu mempunyai window yang berbeda dari rolling dose series.
 

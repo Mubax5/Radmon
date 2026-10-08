@@ -25,7 +25,7 @@ class RecordingCursor:
         return (0,)
 
 
-def test_mirror_keeps_real_timestamp_and_value_in_bounded_cache_and_hot_path():
+def test_mirror_keeps_real_timestamp_in_cache_and_hot_path_until_cleanup():
     cursor = RecordingCursor()
     RollingRecentManager.mirror_sample(
         cursor,
@@ -42,15 +42,16 @@ def test_mirror_keeps_real_timestamp_and_value_in_bounded_cache_and_hot_path():
     assert cursor.calls[0][1] == cursor.calls[-1][1] == (5701, datetime(2026, 6, 23, 10, 0, 0), 0.17, 0.01, 2, 0)
 
 
-def test_cleanup_is_indexed_and_preserves_exactly_bounded_old_samples():
+def test_cleanup_keeps_offline_cache_bounded_and_hot_path_strictly_rolling():
     cursor = RecordingCursor()
     manager = RollingRecentManager(Settings())
     manager.cleanup_with_cursor(cursor, force=True)
     sql = cursor.calls[-1][0].lower()
 
-    assert f"{OFFLINE_LAST_READING_LIMIT}" in sql
-    assert "from recent kept" in sql
-    assert "newer.dtom > recent.dtom" in sql
+    assert f"{OFFLINE_LAST_READING_LIMIT}" not in sql
+    assert "from recent kept" not in sql
+    assert "newer.dtom > recent.dtom" not in sql
+    assert "delete from recent" in sql
     assert "interval 3 hour" in sql
     assert all(table not in sql for table in ("measurement", "alarm", "rawdata"))
 
