@@ -312,12 +312,16 @@ def attach_web_api_routes(
 
     @app.get("/api/v1/web/active-alarms")
     def current_alarms(identity: UserIdentity = Depends(viewer)):
-        from .active_alarms import active_alarms
+        from .active_alarms import active_alarm_snapshot
         try:
-            items = active_alarms(alarm_mirror, alarm_policy)
+            snapshot = active_alarm_snapshot(alarm_mirror, alarm_policy)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        return {"items": items, "total": len(items), "observed_at": datetime.now().astimezone()}
+        return {
+            **snapshot,
+            "total": len(snapshot["items"]),
+            "observed_at": datetime.now().astimezone(),
+        }
 
     @app.get("/api/v1/web/alarm-history")
     def alarm_history(limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0, le=1000000), identity: UserIdentity = Depends(viewer)):

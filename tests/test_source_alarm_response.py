@@ -22,6 +22,8 @@ class SourceFixture:
 
     def commit(self):
         if self.commit_error:
+            # Simulate a server-side commit followed by a lost client response.
+            self.committed = True
             raise RuntimeError("commit failed")
         self.committed = True
 
@@ -137,6 +139,44 @@ def test_readback_mismatch_is_an_error_not_a_success():
         )
 
     assert db.committed is True
+
+
+def test_ambiguous_commit_uses_bounded_exact_readback_without_second_write():
+    db = SourceFixture(commit_error=True)
+    remote = _remote(db)
+
+    result = remote.respond_alarm_result(
+        5201,
+        db.row[1],
+        action="Konfirmasi",
+        pic="Operator",
+        note="Diperiksa",
+        at=datetime(2026, 10, 8, 12, 35, 1),
+    )
+
+    assert result.status == "ALREADY_HANDLED"
+    assert db.row[3] == 1
+    assert sum(sql.lower().lstrip().startswith("update") for sql in db.sqls) == 1
+    assert sum(sql.lower().lstrip().startswith("select") for sql in db.sqls) <= 3
+
+
+def test_unreachable_source_never_becomes_a_success():
+    def unavailable():
+        raise ConnectionError("source unreachable")
+
+    remote = RemoteMariaDBSource(
+        LanSource("gd52", "192.168.1.52", 3306, "u", "p", "ipradmon"),
+        connection_factory=unavailable,
+    )
+    with pytest.raises(ConnectionError, match="unreachable"):
+        remote.respond_alarm_result(
+            5201,
+            datetime(2026, 10, 8, 12, 34, 56),
+            action="Konfirmasi",
+            pic="Operator",
+            note="Diperiksa",
+            at=datetime(2026, 10, 8, 12, 35, 1),
+        )
 
 
 def test_missing_exact_timestamp_does_not_update_another_alarm():

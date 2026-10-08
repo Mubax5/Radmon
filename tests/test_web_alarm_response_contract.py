@@ -113,3 +113,18 @@ def test_source_alarm_rows_have_real_source_ack_not_policy_event_response():
     assert "/api/v1/control/alarms/${encodeURIComponent(event.source_id)}/${event.serid}/ack" in alarms
     assert "source_i_flag !== 1" in alarms
     assert "i_flag diperbarui" in alarms
+
+
+def test_response_trigger_is_gated_by_the_source_projection_and_fails_closed():
+    actions = read("Actions.tsx")
+    page = read("pages/AlarmsPage.tsx")
+    active = read("activeAlarms.ts")
+    assert "sourceEvents" in actions
+    assert 'sourceStatus !== "ready"' in actions
+    assert "Tidak ada alarm yang berbunyi." in actions
+    assert "Coba lagi status sumber" in actions
+    assert "source_items" in page
+    assert "belum terverifikasi" in page
+    assert "source_active_count" not in page  # count is read from the canonical source item list
+    assert "isSourceAlarmActionable" in active
+    assert "source_actionable === false" in active

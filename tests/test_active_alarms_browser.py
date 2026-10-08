@@ -12,7 +12,8 @@ def test_native_selector_uses_canonical_sources_and_tracks_polling():
     playwright = pytest.importorskip('playwright.sync_api')
     active = [dict(event_id='source:gd52:5702:time', event_type='source_alarm',
                    source_id='gd52', serid=5702, remote_serid=52, status='ACTIVE', kind='SOURCE_ALARM',
-                   event_time='2026-10-07T11:27:10', surfaced_at='2026-10-07T11:27:10', measured_value=76.82)]
+                   event_time='2026-10-07T11:27:10', surfaced_at='2026-10-07T11:27:10', measured_value=76.82,
+                   is_active=True, source_i_flag=0, source_actionable=True)]
     requests = []
 
     with playwright.sync_playwright() as p:
@@ -25,7 +26,8 @@ def test_native_selector_uses_canonical_sources_and_tracks_polling():
         def route(request):
             path = request.request.url.split(str(server.server_port), 1)[-1]
             if path.startswith('/api/v1/web/active-alarms'):
-                request.fulfill(json={'items': active, 'total': len(active)})
+                source_items = [item for item in active if item.get('event_type') == 'source_alarm']
+                request.fulfill(json={'items': active, 'source_items': source_items, 'source_active_count': len(source_items), 'total': len(active)})
             elif path.startswith('/api/v1/web/alarm-history'):
                 request.fulfill(json={'items': [], 'total': 501, 'limit': 500, 'offset': 0})
             elif path.startswith('/api/v1/control/alarm-events/since'):
@@ -66,9 +68,19 @@ def test_native_selector_uses_canonical_sources_and_tracks_polling():
             page.get_by_role('button', name='Batal', exact=True).click()
             page.get_by_role('button', name='Muat ulang', exact=True).click()
             page.wait_for_function("document.querySelectorAll('.active-alarm-list .alarm-card').length === 0")
-            page.locator('.action-card').first.get_by_role('button', name='Respons alarm', exact=True).click()
-            assert select.input_value() == '' and select.locator('option').count() == 1
-            assert select.is_disabled()
+            response_button = page.locator('.action-card').first.get_by_role('button', name='Respons alarm', exact=True)
+            assert response_button.is_disabled()
+            assert page.get_by_text('Tidak ada alarm yang berbunyi.', exact=True).is_visible()
+            assert not page.get_by_test_id('alarm-response-dialog').is_visible()
+
+            # A policy-only ACTIVE row remains informational and cannot open
+            # the source response dialog.
+            active.append(dict(event_id='policy-only', event_type='policy_lifecycle',
+                               serid=5702, status='ACTIVE', kind='ALARM',
+                               surfaced_at='2026-10-07T11:27:10'))
+            page.get_by_role('button', name='Muat ulang', exact=True).click()
+            response_button = page.locator('.action-card').first.get_by_role('button', name='Respons alarm', exact=True)
+            assert response_button.is_disabled()
         finally:
             browser.close()
             server.shutdown()

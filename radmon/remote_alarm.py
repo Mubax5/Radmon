@@ -202,8 +202,11 @@ class AlarmControlService:
         before = self.mirror.get(source_id, serid, event_time)
         if before is None:
             raise RuntimeError('alarm tidak ditemukan')
-        if before.get('is_active') is False and before.get('source_i_flag') != 1:
-            raise RuntimeError('alarm sudah ditangani')
+        # The direct source action is valid only for the exact mirrored row
+        # still sounding at i_flag=0. A stale policy row or a normalised source
+        # row must never cause a remote write.
+        if before.get('is_active') is not True or before.get('source_i_flag') != 0:
+            raise RuntimeError('alarm sumber tidak lagi berbunyi; muat ulang status')
         remote_serid = int(before.get('remote_serid') or serid)
         at = self.now()
         target_id = f'{source_id}:{serid}:{event_time.isoformat()}'

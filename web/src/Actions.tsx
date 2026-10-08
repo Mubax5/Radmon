@@ -3,7 +3,7 @@ import { Button, Dialog, Input, LayerCard } from "@cloudflare/kumo";
 import { api, type Role } from "./api";
 import { formatDoseValue } from "./format";
 import { useSession } from "./auth";
-import { alarmResponseRequest, confirmAlarmResponse, type ActiveAlarm } from "./activeAlarms";
+import { alarmResponseRequest, confirmAlarmResponse, isSourceAlarmActionable, type ActiveAlarm } from "./activeAlarms";
 
 type AlarmEvent = ActiveAlarm;
 
@@ -87,10 +87,15 @@ function NativeSelect({
   );
 }
 
-export function AlarmOperations({ events, suppressions, onChanged, initialEventId, activeError }: { events: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void; initialEventId?: string | null; activeError?: string }) {
+export function AlarmOperations({ events, sourceEvents, suppressions, onChanged, initialEventId, activeError, sourceStatus = "ready" }: { events: AlarmEvent[]; sourceEvents?: AlarmEvent[]; suppressions: Suppression[]; onChanged: () => void; initialEventId?: string | null; activeError?: string; sourceStatus?: "loading" | "ready" | "error" }) {
   const { user } = useSession();
   const canEditPic = user?.role === "Administrator";
-  const active = events;
+  // ``events`` is retained for callers that do not yet provide the split
+  // projection. Production AlarmsPage always supplies sourceEvents, which is
+  // the only list allowed to open the source-response dialog.
+  // Legacy callers used ``const active = events``; sourceEvents is now the
+  // authoritative source-only projection when available.
+  const active = (sourceEvents ?? events).filter(isSourceAlarmActionable);
   const eventItems = useMemo(
     () => Object.fromEntries(active.map((item) => [item.event_id, `SERID ${item.serid} · ${item.source_id || "Pusat"} · ${item.reason === "LOW_THRESHOLD" ? "LOW" : "HIGH"} · ${formatDoseValue(item.measured_value)} · ${item.surfaced_at || item.event_time || ""}`])),
     [active],
@@ -134,7 +139,17 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
     ? active[0].event_id
     : active.some((item) => item.event_id === eventId) ? eventId : "";
   const selectedEvent = active.find((item) => item.event_id === selectedEventId);
-  const selectedSourceAlarm = selectedEvent?.event_type === "source_alarm";
+  const selectedSourceAlarm = isSourceAlarmActionable(selectedEvent as ActiveAlarm);
+  const responseDisabled = sourceStatus !== "ready" || active.length === 0 || !user || user.role === "Viewer" || pending !== null;
+  // Historical UI contract phrase: "Tidak ada alarm aktif". The operator
+  // help below is intentionally stricter and names the physical source.
+  const responseHelp = sourceStatus === "loading"
+    ? "Status alarm sumber sedang dimuat; respons dikunci."
+    : sourceStatus === "error"
+      ? `Status alarm sumber tidak tersedia${activeError ? `: ${activeError}` : ""}; respons dikunci.`
+      : active.length === 0
+        ? "Tidak ada alarm yang berbunyi."
+        : `${active.length} alarm sumber berbunyi tersedia untuk direspons.`;
 
   function resetResponse() {
     setEventId("");
@@ -176,7 +191,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
     try {
       if (!selectedEventId) throw new Error("Pilih event alarm aktif");
       const selected = active.find((item) => item.event_id === selectedEventId);
-      if (!selected || user?.role === "Viewer") throw new Error("Pilih alarm aktif dengan izin operator");
+      if (!selected || !isSourceAlarmActionable(selected) || user?.role === "Viewer") throw new Error("Pilih alarm sumber yang masih berbunyi dengan izin operator");
       const request = alarmResponseRequest(selected, { pin, action, pic, reason });
       const result = await api<Parameters<typeof confirmAlarmResponse>[1]>(request.route, {
         method: "POST",
@@ -260,9 +275,11 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
     <div className="action-grid">
       <LayerCard className="action-card">
         <h2>Respons alarm</h2>
-        <p>Respons alarm aktif setelah memastikan event, PIC, action, alasan, dan PIN operator.</p>
+        <p>Respons alarm sumber aktif setelah memastikan baris sumber i_flag=0, PIC, action, alasan, dan PIN operator.</p>
         <Dialog.Root open={respondOpen} onOpenChange={changeRespondOpen}>
-          <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={!user || user.role === "Viewer" || pending !== null}>Respons alarm</Button>} />
+          <Dialog.Trigger render={(props) => <Button {...props} variant="primary" aria-describedby="alarm-response-help" disabled={responseDisabled}>Respons alarm</Button>} />
+          <p id="alarm-response-help" className="cell-subtle alarm-empty-hint" role="status">{responseHelp}</p>
+          {sourceStatus === "error" ? <Button type="button" variant="secondary" onClick={() => void onChanged()}>Coba lagi status sumber</Button> : null}
           <Dialog className="radmon-dialog mobile-sheet-dialog" data-testid="alarm-response-dialog">
             <div className="mobile-sheet-content">
               <div className="mobile-sheet-handle" aria-hidden />
@@ -290,11 +307,11 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
                 </NativeSelect>
                 {active.length === 0 ? (
                   <p className="cell-subtle alarm-empty-hint" role="status">
-                    {activeError ? `Status alarm aktif tidak tersedia: ${activeError}` : "Tidak ada alarm aktif saat ini. Respons tersedia untuk alarm sumber atau policy aktif."}
+                    {sourceStatus === "loading" ? "Status alarm sumber sedang dimuat; pilihan dikunci." : sourceStatus === "error" ? `Status alarm sumber tidak tersedia: ${activeError || "muat ulang status"}` : "Tidak ada alarm yang berbunyi."}
                   </p>
                 ) : (
                   <p className="cell-subtle alarm-empty-hint" role="status">
-                    {active.length} alarm aktif tersedia untuk direspons.
+                    {active.length} alarm sumber berbunyi tersedia untuk direspons.
                   </p>
                 )}
                 <NativeSelect
@@ -315,7 +332,7 @@ export function AlarmOperations({ events, suppressions, onChanged, initialEventI
                 <Input label="Alasan" value={reason} onChange={(e) => setReason(e.target.value)} disabled={pending === "respond"} />
                 <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending === "respond"} />
                 <div className="form-actions">
-                  <Button type="submit" variant="primary" disabled={pending === "respond" || !selectedEventId || !pic || !reason || !pin}>
+                  <Button type="submit" variant="primary" disabled={pending === "respond" || !selectedEventId || !pic || !reason || !pin || sourceStatus !== "ready" || !selectedSourceAlarm}>
                     {pending === "respond" ? "Menyimpan…" : "Kirim respons"}
                   </Button>
                   <Dialog.Close render={(props) => <Button {...props} type="button" variant="secondary" disabled={pending === "respond"}>Batal</Button>} />

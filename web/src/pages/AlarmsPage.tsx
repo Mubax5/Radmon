@@ -7,7 +7,7 @@ import { formatDoseValue, formatPolicyMeasurement } from "../format";
 import { describeLifecycle, kindLabel, statusLabel } from "./alarmLifecycle";
 import { useWebRefresh } from "../live";
 import { useSession } from "../auth";
-import type { ActiveAlarm } from "../activeAlarms";
+import { isSourceAlarmActionable, type ActiveAlarm } from "../activeAlarms";
 import {
   ErrorCard,
   LoadingCard,
@@ -35,6 +35,9 @@ export type PolicyEvent = Record<string, unknown> & {
   level?: string;
   source_id?: string;
   policy_event?: PolicyEvent;
+  is_active?: boolean;
+  source_i_flag?: number;
+  source_actionable?: boolean;
 };
 
 type AlarmHistoryResponse = { items: PolicyEvent[]; total: number; limit: number; offset: number; has_more: boolean };
@@ -89,7 +92,7 @@ function SourceAlarmResponse({ event, onChanged }: { event: PolicyEvent; onChang
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState("");
   useEffect(() => { setPic(user?.display_name ?? ""); }, [user?.display_name]);
-  if (!user || user.role === "Viewer" || event.event_type !== "source_alarm" || event.status !== "ACTIVE" || !event.source_id || !event.event_time) return null;
+  if (!user || user.role === "Viewer" || !isSourceAlarmActionable(event as ActiveAlarm)) return null;
   async function submit(formEvent: React.FormEvent) {
     formEvent.preventDefault();
     if (pending || !event.source_id || !event.event_time) return;
@@ -212,6 +215,7 @@ export function AlarmsPage() {
   const [soundOn, setSoundOn] = useState(false);
   const [items, setItems] = useState<PolicyEvent[] | null>(null);
   const [activeItems, setActiveItems] = useState<ActiveAlarm[]>([]);
+  const [sourceItems, setSourceItems] = useState<ActiveAlarm[]>([]);
   const [activeLoaded, setActiveLoaded] = useState(false);
   const [activeError, setActiveError] = useState("");
   const [historyOffset, setHistoryOffset] = useState(0);
@@ -228,13 +232,17 @@ export function AlarmsPage() {
   const load = (offset = historyOffset) => Promise.allSettled([
     api<AlarmHistoryResponse>(`/api/v1/web/alarm-history?limit=500&offset=${offset}`),
     api<Suppression[]>("/api/v1/control/suppressions?active_only=true"),
-    api<{ items: ActiveAlarm[] }>("/api/v1/web/active-alarms").then((currentAlarms) => {
+    api<{ items: ActiveAlarm[]; source_items?: ActiveAlarm[] }>("/api/v1/web/active-alarms").then((currentAlarms) => {
       setActiveLoaded(true);
       setActiveItems(currentAlarms.items);
+      // Older isolated fixtures may only return items. The production API
+      // always returns source_items, which is the authoritative split.
+      setSourceItems((currentAlarms.source_items ?? currentAlarms.items.filter(isSourceAlarmActionable)).filter(isSourceAlarmActionable));
       setActiveError("");
     }).catch((reason: unknown) => {
       setActiveLoaded(true);
-      setActiveItems([]);
+      // Preserve the last successful snapshot, but mark it unavailable so a
+      // read failure can never masquerade as a confirmed zero-source state.
       setActiveError(reason instanceof Error ? reason.message : "Tidak dapat memuat alarm aktif");
     }),
   ])
@@ -262,8 +270,15 @@ export function AlarmsPage() {
     const events = items ?? [];
     const retriggerLocked = events.filter((event) => event.kind === "RETRIGGER_LOCKED").length;
     const suppressed = events.filter((event) => event.kind === "SUPPRESSED").length;
-    return { active: activeItems, retriggerLocked, suppressed, total: events.length };
-  }, [items, activeItems]);
+    return {
+      active: activeItems,
+      sourceActive: sourceItems,
+      policyActive: activeItems.filter((event) => event.event_type === "policy_lifecycle"),
+      retriggerLocked,
+      suppressed,
+      total: events.length,
+    };
+  }, [items, activeItems, sourceItems]);
 
   const isInitialLoading = items === null && !activeLoaded && !error;
   const eventsFailedOnFirstLoad = items === null && Boolean(error);
@@ -311,18 +326,20 @@ export function AlarmsPage() {
       ) : null}
       {items || activeLoaded ? (
         <>
-          <PageSection
-            title="Alarm aktif"
-            description="Event aktif yang perlu ditinjau. Gunakan notifikasi suara/desktop di bagian atas; respons operator dan suppression tersedia pada kontrol tindakan di bawah."
-            className="active-alarm-section"
-          >
-            <div className="active-alarm-list" aria-live="polite">
-              {activeError ? <ErrorCard message={`Status alarm aktif tidak tersedia: ${activeError}`} /> : <EventCards events={summary.active as PolicyEvent[]} onChanged={() => void load()} />}
-            </div>
-          </PageSection>
+           <PageSection
+             title="Alarm aktif"
+             description="Alarm sumber berbunyi berasal dari baris alat dengan i_flag=0. Event policy ditampilkan terpisah sebagai informasi dan tidak membuka respons sumber."
+             className="active-alarm-section"
+           >
+             <div className="active-alarm-list" aria-live="polite">
+               {!activeLoaded ? <LoadingCard label="Memuat status alarm sumber…" /> : activeError ? <><ErrorCard message={`Status alarm sumber tidak tersedia: ${activeError}. Status terakhir belum terverifikasi; alarm tidak dianggap sunyi.`} />{summary.sourceActive.length ? <><p className="cell-subtle">Snapshot alarm sumber terakhir (belum terverifikasi):</p><EventCards events={summary.sourceActive as PolicyEvent[]} onChanged={() => void load()} /></> : null}</> : <EventCards events={summary.sourceActive as PolicyEvent[]} onChanged={() => void load()} />}
+             </div>
+             {!activeError && summary.policyActive.length ? <div className="active-alarm-list" aria-label="Policy aktif informasional"><p className="cell-subtle">Policy aktif (informasi; tidak dapat membuka respons sumber):</p><EventCards events={summary.policyActive as PolicyEvent[]} onChanged={() => void load()} /></div> : null}
+           </PageSection>
 
           <div className="metric-grid alarm-summary">
-            <MetricCard label="Aktif" value={activeError ? "—" : summary.active.length} badge={<Badge variant={activeError ? "warning" : summary.active.length ? "error" : "success"}>{activeError ? "Status tidak tersedia" : summary.active.length ? "Perlu tindakan" : "Tidak ada alarm aktif"}</Badge>} />
+             <MetricCard label="Aktif (sumber)" value={activeError || !activeLoaded ? "—" : summary.sourceActive.length} badge={<Badge variant={activeError || !activeLoaded ? "warning" : summary.sourceActive.length ? "error" : "success"}>{activeError || !activeLoaded ? "Status tidak tersedia" : summary.sourceActive.length ? "Perlu tindakan" : "Tidak ada alarm yang berbunyi"}</Badge>} />
+             {summary.policyActive.length ? <MetricCard label="Policy aktif (informasi)" value={summary.policyActive.length} badge={<span className="cell-subtle">Tidak membuka respons sumber</span>} /> : null}
             <MetricCard label="Alarm ditahan sementara" value={summary.retriggerLocked} badge={<span className="cell-subtle">Menunggu pemicu baru</span>} />
             <MetricCard label="Alarm diredam" value={summary.suppressed} badge={<span className="cell-subtle">Sesuai pengaturan</span>} />
             <MetricCard label="Catatan terbaru" value={summary.total} badge={<span className="cell-subtle">Riwayat alarm</span>} />
@@ -335,7 +352,7 @@ export function AlarmsPage() {
                 <Button variant="secondary" onClick={() => void loadSuppressions()}>Muat ulang suppression</Button>
               </div>
             ) : null}
-            <AlarmOperations events={activeItems} activeError={activeError} suppressions={suppressions} onChanged={() => void load()} initialEventId={requestedEventId} />
+             <AlarmOperations events={activeItems} sourceEvents={sourceItems} sourceStatus={!activeLoaded ? "loading" : activeError ? "error" : "ready"} activeError={activeError} suppressions={suppressions} onChanged={() => void load()} initialEventId={requestedEventId} />
           </PageSection>
 
           <PageSection title="Riwayat alarm" description="Lihat alarm alat dan perubahan pengaturan alarm berdasarkan waktu.">

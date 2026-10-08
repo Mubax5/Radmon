@@ -71,6 +71,55 @@ def test_multi_source_identity_and_truly_empty(tmp_path):
     assert len(rows) == 2 and len({r['event_id'] for r in rows}) == 2
 
 
+def test_source_projection_is_independent_from_policy_active_status(tmp_path):
+    client, mirror, policy, _ = setup(tmp_path)
+    at = datetime(2026, 10, 7, 11, 27, 10)
+    policy.evaluate_live({
+        'serid': 5702, 'dtom': at, 'doserate': 76.82,
+        'warnlevel': 23, 'alarmlevel': 25,
+    })
+
+    # A central policy event without a mirrored source row is informational;
+    # it must not create an actionable source selection.
+    response = client.get('/api/v1/web/active-alarms').json()
+    assert response['source_items'] == []
+    assert response['source_active_count'] == 0
+    assert response['items'][0]['event_type'] == 'policy_lifecycle'
+
+    # The same policy/high reading can be normalised while the physical source
+    # latch remains i_flag=0. That source row is still actionable.
+    source(mirror, at=at, flag=0)
+    response = client.get('/api/v1/web/active-alarms').json()
+    assert response['source_active_count'] == 1
+    assert len(response['source_items']) == 1
+    assert response['source_items'][0]['source_i_flag'] == 0
+    assert response['source_items'][0]['source_actionable'] is True
+
+
+def test_handled_source_row_is_rejected_before_remote_response(tmp_path):
+    client, mirror, _, calls = setup(tmp_path)
+    at = source(mirror, flag=1)
+    result = client.post('/api/v1/control/alarms/gd52/5702/ack', json={
+        'event_time': at.isoformat(), 'pin': '1357', 'action': 'Konfirmasi',
+        'pic': 'Operator', 'note': 'stale',
+    })
+    assert result.status_code == 409
+    assert calls == []
+
+
+def test_source_latch_wins_over_inconsistent_local_active_projection(tmp_path):
+    client, mirror, _, _ = setup(tmp_path)
+    at = source(mirror, flag=0)
+    with mirror.store._connection() as db:
+        db.execute(
+            'UPDATE remote_alarm_state SET is_active=1, source_i_flag=1 WHERE source_id=? AND serid=? AND event_time=?',
+            ('gd52', 5702, at.isoformat()),
+        )
+    response = client.get('/api/v1/web/active-alarms').json()
+    assert response['source_items'] == []
+    assert response['source_active_count'] == 0
+
+
 def test_correlated_active_policy_is_one_action_and_other_source_survives(tmp_path):
     client, mirror, policy, _ = setup(tmp_path)
     at = source(mirror)

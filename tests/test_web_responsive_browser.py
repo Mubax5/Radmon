@@ -111,9 +111,9 @@ class RadMonUIHandler(BaseHTTPRequestHandler):
             )
 
         if path == "/api/v1/web/active-alarms":
-            return _send_json(self, {"items": [
-                {"event_type": "policy_lifecycle", "event_id": "alarm-1", "serid": 5001, "status": "ACTIVE", "kind": "ALARM", "measured_value": 27.1, "threshold": 25.0, "surfaced_at": "2026-09-14T03:40:00+00:00"},
-            ], "total": 1})
+            source = {"event_type": "source_alarm", "event_id": "source:gd50:5001:2026-09-14T03:40:00+00:00", "source_id": "gd50", "serid": 5001, "remote_serid": 50, "status": "ACTIVE", "kind": "SOURCE_ALARM", "measured_value": 27.1, "threshold": 25.0, "event_time": "2026-09-14T03:40:00+00:00", "surfaced_at": "2026-09-14T03:40:00+00:00", "is_active": True, "source_i_flag": 0, "source_actionable": True}
+            policy = {"event_type": "policy_lifecycle", "event_id": "alarm-1", "serid": 5001, "status": "ACTIVE", "kind": "ALARM", "measured_value": 27.1, "threshold": 25.0, "surfaced_at": "2026-09-14T03:40:00+00:00"}
+            return _send_json(self, {"items": [source, policy], "source_items": [source], "source_active_count": 1, "total": 2})
 
         if path == "/api/v1/web/alarm-history":
             return _send_json(

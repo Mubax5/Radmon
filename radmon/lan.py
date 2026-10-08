@@ -592,6 +592,35 @@ FROM alarm WHERE serid = ? AND dtoa = ?"""
         keys = ("serid", "dtoa", "ack", "i_flag", "i_op", "pic", "note")
         return dict(row) if isinstance(row, dict) else dict(zip(keys, row))
 
+    def _fresh_source_alarm_row(self, serid: int, dtoa: datetime) -> dict[str, Any] | None:
+        """Read one exact source row on a fresh connection, without writing."""
+        connection = self._connection()
+        try:
+            with connection.cursor() as cursor:
+                return self._read_source_alarm_row(cursor, serid, dtoa)
+        finally:
+            connection.close()
+
+    def _bounded_source_alarm_readback(self, serid: int, dtoa: datetime) -> tuple[dict[str, Any] | None, Exception | None]:
+        """Bound ambiguous-outcome readback; never retry the source UPDATE."""
+        last_error: Exception | None = None
+        for _ in range(2):
+            try:
+                return self._fresh_source_alarm_row(serid, dtoa), None
+            except Exception as exc:  # source connectivity/readback is untrusted
+                last_error = exc
+        return None, last_error
+
+    @staticmethod
+    def _valid_source_response_readback(after: dict[str, Any] | None, before: dict[str, Any]) -> bool:
+        return bool(
+            after is not None
+            and int(after.get("i_flag") or 0) == 1
+            and after.get("ack") == before.get("ack")
+            and after.get("i_op") is not None
+            and after.get("pic") is not None
+        )
+
     def respond_alarm_result(self, serid: int, dtoa: datetime, *, action: str, pic: str, note: str, at: datetime) -> SourceAlarmResponse:
         """Write one exact source row and prove the committed result.
 
@@ -636,11 +665,34 @@ WHERE serid = ? AND dtoa = ? AND i_flag = 0""",
                         return self._source_alarm_response(after_race, "ALREADY_HANDLED")
                     return self._source_alarm_response(after_race, "ROW_MISMATCH")
 
-            connection.commit()
+            try:
+                connection.commit()
+            except Exception as commit_error:
+                # The server may have committed while the client observed a
+                # timeout/lost connection. Do not write again: read this exact
+                # primary-key row at most twice on fresh connections.
+                committed = True
+                after, read_error = self._bounded_source_alarm_readback(serid, dtoa)
+                if self._valid_source_response_readback(after, before):
+                    return self._source_alarm_response(after, "ALREADY_HANDLED")
+                if read_error is not None:
+                    raise RuntimeError("source response commit outcome unverified; targeted read-back failed") from read_error
+                raise RuntimeError("source response commit outcome unverified; i_flag read-back is not 1") from commit_error
             committed = True
 
-            with connection.cursor() as cursor:
-                after = self._read_source_alarm_row(cursor, serid, dtoa)
+            try:
+                with connection.cursor() as cursor:
+                    after = self._read_source_alarm_row(cursor, serid, dtoa)
+            except Exception as read_error:
+                # A committed write with a broken post-commit connection is
+                # also ambiguous. Reconcile the exact row only; never claim
+                # success from the failed poll and never issue a second write.
+                after, retry_error = self._bounded_source_alarm_readback(serid, dtoa)
+                if self._valid_source_response_readback(after, before):
+                    return self._source_alarm_response(after, "ALREADY_HANDLED")
+                if retry_error is not None:
+                    raise RuntimeError("source response committed but outcome unverified; targeted read-back failed") from retry_error
+                raise RuntimeError("source response committed but i_flag read-back is not 1") from read_error
             if after is None or int(after.get("i_flag") or 0) != 1:
                 raise RuntimeError("source response committed but i_flag read-back is not 1")
             if after.get("ack") != before.get("ack"):
