@@ -2,7 +2,7 @@
 
 **Tanggal review:** 8 Oktober 2026<br>
 **Baseline:** `127c1907`<br>
-**Evidence code parent:** `65b358db`<br>
+**Evidence code parent:** `1b2e2c32`<br>
 **Status:** implementasi sudah diverifikasi di workspace dan belum dideploy ke
 produksi. Dokumen ini adalah catatan engineering dan readiness, bukan sertifikasi
 keamanan atau jaminan tidak ada kerentanan yang belum diketahui.
@@ -69,14 +69,14 @@ remote tanpa session RadMon ditolak. Port 3300 tidak boleh dipublish ke LAN.
 Validasi yang tersedia pada workspace:
 
 - `py -3 -m compileall -q radmon` berhasil.
-- Full pytest setelah integrasi: **684 passed, 1 skipped, 39 warnings**.
+- Full pytest setelah integrasi: **684 passed, 1 skipped, 38 warnings**.
   Dua contract assertion lama direkonsiliasi terhadap semantik UI yang benar;
   tidak ada failure backend/security/UI contract yang tersisa.
 - Frontend `npm.cmd run check` dan `npm.cmd run build` berhasil.
 - Test UI: **20 passed** (7 UI state, 5 dialog, 2 format, 6 notification).
 - `packaging/radmon_update.ps1 -SelfTest`: **passed**, termasuk simulated
   rollback tree aplikasi dan stable readiness gate.
-- GitHub Actions `CI` run **37750410637** pada commit parent: **success**.
+- GitHub Actions `CI` run **37752687736** pada commit parent: **success**.
 - GitHub Actions `Windows RadMon EXE` run **37750410745**: **success**;
   build EXE/installer, updater smoke, native install smoke, upgrade terhadap
   server berjalan, dan upload/publish workflow selesai.
