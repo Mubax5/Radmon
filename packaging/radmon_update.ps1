@@ -124,6 +124,112 @@ function Test-InstallerChecksum {
     return $actual
 }
 
+function Get-CentralReadiness {
+    param(
+        [int]$TimeoutSeconds = 2
+    )
+
+    try {
+        $response = Invoke-WebRequest `
+            -UseBasicParsing `
+            -Uri "http://127.0.0.1:8090/health" `
+            -TimeoutSec ([Math]::Max(1, $TimeoutSeconds)) `
+            -Headers @{ "User-Agent" = $UserAgent }
+        $health = $response.Content | ConvertFrom-Json
+        if ($response.StatusCode -eq 200 -and [string]$health.status -eq "ok") {
+            return [pscustomobject]@{
+                Ready = $true
+                Detail = "HTTP $($response.StatusCode), health status '$($health.status)'"
+            }
+        }
+        return [pscustomobject]@{
+            Ready = $false
+            Detail = "HTTP $($response.StatusCode), health status '$($health.status)'"
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Ready = $false
+            Detail = $_.Exception.Message
+        }
+    }
+}
+
+function Get-CentralDiagnostics {
+    param(
+        [string]$Root
+    )
+
+    $taskInfo = $null
+    try {
+        $taskInfo = Get-ScheduledTaskInfo -TaskName "RadMon Server" -ErrorAction Stop
+    }
+    catch {
+    }
+    $taskSummary = if ($null -eq $taskInfo) {
+        "task=unavailable"
+    }
+    else {
+        "task=lastResult:$($taskInfo.LastTaskResult),lastRun:$($taskInfo.LastRunTime)"
+    }
+
+    $appDir = Join-Path $Root "app"
+    $processIds = @(
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.ExecutablePath -and
+                ([System.IO.Path]::GetFullPath([string]$_.ExecutablePath) -like (([System.IO.Path]::GetFullPath($appDir)).TrimEnd('\') + '\*'))
+            } |
+            ForEach-Object { $_.ProcessId }
+    ) -join ","
+    $listeners = @(
+        Get-NetTCPConnection -State Listen -LocalPort 8090 -ErrorAction SilentlyContinue |
+            ForEach-Object { "pid=$($_.OwningProcess);local=$($_.LocalAddress):$($_.LocalPort)" }
+    ) -join ","
+    return "$taskSummary; appPids=$processIds; listeners=$listeners"
+}
+
+function Wait-CentralReadiness {
+    param(
+        [int]$TimeoutSeconds = 60,
+        [int]$StableChecks = 3,
+        [int]$IntervalSeconds = 2,
+        [scriptblock]$Probe = $null
+    )
+
+    $timeout = [Math]::Max(1, $TimeoutSeconds)
+    $requiredChecks = [Math]::Max(1, $StableChecks)
+    $interval = [Math]::Max(0, $IntervalSeconds)
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeout)
+    $consecutiveHealthy = 0
+    $lastDetail = "no health response"
+
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $probeResult = if ($null -eq $Probe) { Get-CentralReadiness } else { & $Probe }
+        if ($probeResult.Ready) {
+            $consecutiveHealthy++
+            if ($consecutiveHealthy -ge $requiredChecks) {
+                return $probeResult.Detail
+            }
+        }
+        else {
+            $consecutiveHealthy = 0
+            $lastDetail = $probeResult.Detail
+        }
+
+        $remaining = $deadline - [DateTime]::UtcNow
+        if ($remaining.TotalSeconds -gt 0 -and $interval -gt 0) {
+            $sleepSeconds = [Math]::Min($interval, [int][Math]::Ceiling($remaining.TotalSeconds))
+            if ($sleepSeconds -gt 0) {
+                Start-Sleep -Seconds $sleepSeconds
+            }
+        }
+    }
+
+    $diagnostics = Get-CentralDiagnostics -Root $InstallRoot
+    throw "RadMon control plane did not become ready and stable within $timeout seconds. Last health result: $lastDetail. $diagnostics"
+}
+
 function Invoke-UpdaterSelfTest {
     $root = Join-Path ([System.IO.Path]::GetTempPath()) ("radmon-updater-selftest-" + [Guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $root | Out-Null
@@ -150,6 +256,17 @@ function Invoke-UpdaterSelfTest {
         if ($parsed -ne $sampleHash) {
             throw "Checksum parser self-test failed"
         }
+
+        $script:radmonUpdaterSelfTestProbeCalls = 0
+        $syntheticProbe = {
+            $script:radmonUpdaterSelfTestProbeCalls++
+            [pscustomobject]@{ Ready = $true; Detail = "synthetic health" }
+        }
+        $syntheticDetail = Wait-CentralReadiness -TimeoutSeconds 2 -StableChecks 3 -IntervalSeconds 0 -Probe $syntheticProbe
+        if ($syntheticDetail -ne "synthetic health" -or $script:radmonUpdaterSelfTestProbeCalls -ne 3) {
+            throw "Bounded stable readiness self-test failed"
+        }
+        Remove-Variable -Name radmonUpdaterSelfTestProbeCalls -Scope Script -ErrorAction SilentlyContinue
     }
     finally {
         Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
@@ -229,6 +346,8 @@ try {
         throw "Upgrade completed but installed release marker is $installedSha instead of $remoteSha"
     }
 
+    $readiness = Wait-CentralReadiness -TimeoutSeconds 60 -StableChecks 3 -IntervalSeconds 2
+    Write-UpdaterLog "Control plane readiness verified after upgrade: $readiness."
     Write-UpdaterLog "Automatic upgrade completed successfully: $remoteSha."
 
     Get-ChildItem -Path $updatesRoot -Directory -ErrorAction SilentlyContinue |

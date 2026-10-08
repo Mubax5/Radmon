@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import re
@@ -19,7 +19,7 @@ LOG = logging.getLogger(__name__)
 class WebReportJobs:
     """Durable report metadata with bounded, asynchronous PDF generation."""
 
-    MAX_RANGE = timedelta(days=366)
+    MAX_RANGE = ReportService.MAX_RANGE
     _JOB_ID = re.compile(r"[0-9a-f]{32}\Z")
 
     def __init__(self, security, audit: AuditTrail, repository: Any, settings, *, summary_reader=None) -> None:
@@ -108,11 +108,7 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
     def create(self, identity, *, serid: int, start: datetime, end: datetime) -> dict[str, Any]:
         start = self._as_utc(start)
         end = self._as_utc(end)
-        if end <= start:
-            raise ValueError("report end must be after start")
-        if end - start > self.MAX_RANGE:
-            # Long-running reports are bounded independently of any client path.
-            raise ValueError("rentang report terlalu panjang")
+        ReportService.validate_range(start, end)
         if not self._station_exists(int(serid)):
             raise ValueError("station tidak ditemukan")
         ReportService(self.repository, replace(self.settings, serid=int(serid)), summary_reader=self.summary_reader).preflight(start, end)
@@ -133,10 +129,7 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
     def preview_pdf(self, *, serid: int, start: datetime, end: datetime) -> bytes:
         start = self._as_utc(start)
         end = self._as_utc(end)
-        if end <= start:
-            raise ValueError("report end must be after start")
-        if end - start > self.MAX_RANGE:
-            raise ValueError("rentang report terlalu panjang")
+        ReportService.validate_range(start, end)
         if not self._station_exists(int(serid)):
             raise ValueError("station tidak ditemukan")
         return ReportService(

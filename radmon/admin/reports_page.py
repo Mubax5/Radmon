@@ -83,6 +83,7 @@ class ReportsPage(QWidget):
         controls.addWidget(self.start)
         controls.addWidget(QLabel("To"))
         controls.addWidget(self.end)
+        controls.addWidget(QLabel("Maximum report range: 24 hours (WIB)"))
         controls.addWidget(self.live)
         controls.addWidget(period_button)
         controls.addWidget(preview_button)
@@ -186,6 +187,7 @@ class ReportsPage(QWidget):
         try:
             start, end = self.range()
             self.report_service.settings = self.settings
+            self.report_service.validate_range(start, end)
             payload = self.report_service.pdf_bytes(start, end)
             with tempfile.NamedTemporaryFile(prefix="radmon-preview-", suffix=".pdf", delete=False) as handle:
                 handle.write(payload)

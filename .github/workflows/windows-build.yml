@@ -268,22 +268,29 @@ jobs:
           Get-ScheduledTask -TaskName "RadMon Updater" -ErrorAction Stop | Out-Null
 
            $readinessDeadline = [DateTime]::UtcNow.AddSeconds(45)
-           $health = $null
-           $lastHealthError = $null
-           $healthReady = $false
-           do {
-             try {
-               $response = Invoke-WebRequest -Uri "http://127.0.0.1:8090/health" -TimeoutSec 2 -UseBasicParsing
-               $health = $response.Content | ConvertFrom-Json
-               if ($response.StatusCode -eq 200 -and $health.status -eq "ok") {
-                 $healthReady = $true
-                 break
-               }
-              $lastHealthError = "HTTP $($response.StatusCode), health status '$($health.status)'"
-            }
-            catch {
-              $lastHealthError = $_.Exception.Message
-            }
+            $health = $null
+            $lastHealthError = $null
+            $healthReady = $false
+            $stableHealthChecks = 0
+            do {
+              try {
+                $response = Invoke-WebRequest -Uri "http://127.0.0.1:8090/health" -TimeoutSec 2 -UseBasicParsing
+                $health = $response.Content | ConvertFrom-Json
+                if ($response.StatusCode -eq 200 -and $health.status -eq "ok") {
+                  $stableHealthChecks++
+                  if ($stableHealthChecks -ge 3) {
+                    $healthReady = $true
+                    break
+                  }
+                } else {
+                  $stableHealthChecks = 0
+                  $lastHealthError = "HTTP $($response.StatusCode), health status '$($health.status)'"
+                }
+             }
+             catch {
+               $stableHealthChecks = 0
+               $lastHealthError = $_.Exception.Message
+             }
             if ([DateTime]::UtcNow -lt $readinessDeadline) {
               Start-Sleep -Milliseconds 500
             }

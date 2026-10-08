@@ -63,6 +63,10 @@ def test_report_request_validates_station_and_range_and_audits_only_requests(tmp
         jobs.create(identity, serid=5201, start=start, end=start)
     with pytest.raises(ValueError, match="terlalu panjang"):
         jobs.create(identity, serid=5201, start=start, end=start + timedelta(days=367))
+    exact_day = jobs.create(identity, serid=5201, start=start, end=start + timedelta(hours=24))
+    assert exact_day["status"] == "queued"
+    with pytest.raises(ValueError, match="24 jam"):
+        jobs.create(identity, serid=5201, start=start, end=start + timedelta(hours=24, seconds=1))
 
     created = jobs.create(identity, serid=5201, start=start, end=start + timedelta(hours=1))
     events = audit.list_events()

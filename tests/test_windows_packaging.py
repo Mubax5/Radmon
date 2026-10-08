@@ -150,6 +150,33 @@ def test_windows_installer_upgrade_readiness_requires_successful_http_200_probe(
     assert "if (-not $healthReady)" in upgrade_smoke
 
 
+def test_updater_refuses_marker_success_until_central_is_boundedly_ready_and_stable():
+    updater = (ROOT / "packaging/radmon_update.ps1").read_text(encoding="utf-8")
+    readiness = updater.index("function Wait-CentralReadiness")
+    success = updater.index("Automatic upgrade completed successfully")
+    assert readiness < success
+    assert "http://127.0.0.1:8090/health" in updater
+    assert "Invoke-WebRequest" in updater
+    assert "$response.StatusCode -eq 200" in updater
+    assert "health.status -eq \"ok\"" in updater
+    assert "$deadline = [DateTime]::UtcNow.AddSeconds($timeout)" in updater
+    assert "$consecutiveHealthy++" in updater
+    assert "$requiredChecks" in updater
+    assert "[scriptblock]$Probe = $null" in updater
+    assert "Wait-CentralReadiness -TimeoutSeconds 60 -StableChecks 3 -IntervalSeconds 2" in updater
+    assert "Get-CentralDiagnostics" in updater
+    assert "Start-Job" not in updater
+
+
+def test_windows_upgrade_smoke_requires_consecutive_post_install_health_checks():
+    workflow = (ROOT / ".github/workflows/windows-build.yml").read_text(encoding="utf-8")
+    upgrade_smoke = workflow.split("Smoke test installer upgrade over running RadMon", 1)[1]
+    assert "$stableHealthChecks = 0" in upgrade_smoke
+    assert "$stableHealthChecks++" in upgrade_smoke
+    assert "$stableHealthChecks -ge 3" in upgrade_smoke
+    assert "$stableHealthChecks = 0" in upgrade_smoke[upgrade_smoke.index("catch") :]
+
+
 def test_windows_installer_release_has_fixed_unversioned_name():
     installer_path = ROOT / "packaging/RadMon.iss"
     assert installer_path.exists(), "Inno Setup installer definition is required"

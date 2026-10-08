@@ -237,6 +237,56 @@ def test_ensure_schema_evicts_backfill_boundary_rows_before_validation():
     assert connection.rollbacks == 0
 
 
+def test_startup_reconciles_an_expired_hot_row_before_validation():
+    """Pin the historical startup failure: cleanup must remove an expired
+    derived-cache row before the retention validator can reject the service.
+    """
+    from datetime import datetime
+
+    from radmon.recent_read_model import ROLLING_COLUMNS, RollingRecentManager
+
+    cutoff = datetime(2026, 10, 8, 4, 5, 0)
+
+    class _StartupCursor(_RecordingCursor):
+        def __init__(self):
+            super().__init__()
+            self.expired_rows = 1
+
+        def execute(self, sql, params=()):
+            super().execute(sql, params)
+            normalized = " ".join(str(sql).split()).lower()
+            if normalized.startswith("delete from recent where dtom <"):
+                self.expired_rows = 0
+
+        def fetchall(self):
+            if self.calls and "information_schema.columns" in self.calls[-1][0].lower():
+                return [(column,) for column in sorted(ROLLING_COLUMNS)]
+            return []
+
+        def fetchone(self):
+            if self.calls and "select date_sub" in self.calls[-1][0].lower():
+                return (cutoff,)
+            if self.calls and self.calls[-1][0].lower().startswith("select count(*) from recent"):
+                return (self.expired_rows,)
+            return None
+
+    class _StartupConnection(_RecordingConnection):
+        def __init__(self):
+            super().__init__()
+            self.cursor_obj = _StartupCursor()
+
+    connection = _StartupConnection()
+    RollingRecentManager(Settings(), connection_factory=lambda: connection).ensure_schema()
+
+    statements = [" ".join(str(sql).split()).lower() for sql, _ in connection.cursor_obj.calls]
+    cleanup = next(i for i, sql in enumerate(statements) if sql.startswith("delete from recent where dtom <"))
+    validate = next(i for i, sql in enumerate(statements) if sql.startswith("select count(*) from recent"))
+    assert connection.cursor_obj.expired_rows == 0
+    assert cleanup < validate
+    assert connection.commits == 1
+    assert connection.rollbacks == 0
+
+
 def test_grafana_continuous_dose_queries_use_vrecent_not_measurement():
     dashboards = build_dashboard_payloads()
     saw_time_series = False

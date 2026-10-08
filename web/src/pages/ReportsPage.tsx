@@ -4,6 +4,7 @@ import { api, listReportJobs, reportDownloadUrl, reportPreviewUrl, requestReport
 import { ErrorCard, LoadingCard, PageHeading, PageSection, formatTimestamp } from "../ui";
 
 const now = new Date();
+const MAX_REPORT_RANGE_MS = 24 * 60 * 60 * 1000;
 const localDateTime = (date: Date) => {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
@@ -12,9 +13,18 @@ const reportRange = (startAt: string, endAt: string) => {
   const start = new Date(startAt);
   const end = new Date(endAt);
   const duration = end.getTime() - start.getTime();
-  return Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && duration > 0 && duration <= 366 * 24 * 60 * 60 * 1000
+  return Number.isFinite(start.getTime()) && Number.isFinite(end.getTime()) && duration > 0 && duration <= MAX_REPORT_RANGE_MS
     ? { start_at: start.toISOString(), end_at: end.toISOString() }
     : null;
+};
+const reportRangeError = (startAt: string, endAt: string) => {
+  const start = new Date(startAt);
+  const end = new Date(endAt);
+  const duration = end.getTime() - start.getTime();
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return "Waktu mulai dan selesai tidak valid.";
+  if (duration <= 0) return "Waktu selesai harus setelah waktu mulai.";
+  if (duration > MAX_REPORT_RANGE_MS) return "Rentang laporan maksimal 24 jam (tepat 24 jam diperbolehkan).";
+  return "";
 };
 
 export function ReportsPage() {
@@ -34,6 +44,7 @@ export function ReportsPage() {
   const [draftError, setDraftError] = useState("");
   const [draftPaused, setDraftPaused] = useState(false);
   const selectedRange = reportRange(startAt, endAt);
+  const selectedRangeError = reportRangeError(startAt, endAt);
   const selectedKey = selectedRange ? JSON.stringify({ serid, ...selectedRange }) : "";
   const currentDraftUrl = draftPreview?.key === selectedKey ? draftPreview.url : null;
   const displayedPreviewUrl = currentDraftUrl ?? (draftPaused ? previewUrl : null);
@@ -159,7 +170,7 @@ export function ReportsPage() {
     event.preventDefault();
     setCreating(true);
     try {
-      if (!selectedRange) throw new Error("Pilih rentang waktu maksimal 366 hari dengan waktu selesai setelah mulai");
+      if (!selectedRange) throw new Error(selectedRangeError || "Pilih rentang waktu maksimal 24 jam dengan waktu selesai setelah mulai");
       const created = await requestReport({ serid: Number(serid), ...selectedRange });
       setPreviewJobId(created.job_id);
       load();
@@ -173,19 +184,22 @@ export function ReportsPage() {
   return <div className="page-stack">
     <PageHeading title="Laporan" description="Buat dan pratinjau laporan PDF untuk stasiun dan rentang waktu pilihan." />
     {error ? <ErrorCard message={error} /> : null}
+    <p className="report-range-hint">Waktu pada PDF ditampilkan sebagai WIB. Rentang laporan maksimal 24 jam; tepat 24 jam diperbolehkan.</p>
+    {selectedRangeError ? <p className="report-range-error" role="alert">{selectedRangeError}</p> : null}
     {!jobs ? <LoadingCard /> : <>
        <div className="report-workspace">
        <section className="report-preview-pane" aria-label="Pratinjau PDF laporan">
           <div className="report-preview-heading"><h2>Pratinjau PDF</h2>{draftError && currentDraftUrl ? <span>PDF sebelumnya — pratinjau terbaru gagal</span> : draftPaused && previewUrl ? <span>PDF sebelumnya — bukan pilihan saat ini</span> : null}</div>
-           <p role={draftError ? "alert" : undefined}>{draftError ? `Pratinjau pilihan gagal: ${draftError}` : draftLoading ? "Memperbarui pratinjau untuk stasiun dan rentang terpilih…" : "Pratinjau mengikuti stasiun dan rentang yang dipilih."}</p>
+            <p role={draftError ? "alert" : undefined}>{draftError ? `Pratinjau pilihan gagal: ${draftError}` : draftLoading ? "Memperbarui pratinjau untuk stasiun dan rentang terpilih…" : "Pratinjau mengikuti stasiun dan rentang yang dipilih."}</p>
+            <p className="report-preview-limit">Pratinjau: maksimal 250 baris. PDF penuh yang dibuat dan diunduh memuat seluruh data dalam rentang terpilih.</p>
          {previewLoading && !displayedPreviewUrl ? <p role="status">Memuat PDF laporan…</p> : null}
          {previewError && !displayedPreviewUrl ? <p role="alert">Pratinjau PDF gagal dimuat: {previewError}</p> : null}
           {displayedPreviewUrl ? <iframe title="Pratinjau PDF laporan" src={displayedPreviewUrl} /> : !previewLoading && !draftLoading ? <div className="report-preview-empty">{draftPaused && previewUrl ? "PDF sebelumnya — bukan pilihan saat ini." : "Pilih rentang untuk membuat pratinjau, atau buat laporan untuk melihat PDF di sini."}</div> : null}
        </section>
        <LayerCard className="action-card report-form-card"><form className="action-form" onSubmit={create}>
          <label className="native-select-field" htmlFor="report-station"><span>Stasiun</span><select id="report-station" className="native-select" value={serid} onChange={(event) => { setDraftPaused(false); setSerid(event.target.value); }} required>{stations.map((station) => <option key={station.serid} value={station.serid}>{station.name} (SERID {station.serid})</option>)}</select></label>
-         <label className="native-input-field" htmlFor="report-start"><span>Mulai</span><input id="report-start" type="datetime-local" value={startAt} onChange={(event) => { setDraftPaused(false); setStartAt(event.target.value); }} required /></label>
-         <label className="native-input-field" htmlFor="report-end"><span>Selesai</span><input id="report-end" type="datetime-local" value={endAt} onChange={(event) => { setDraftPaused(false); setEndAt(event.target.value); }} required /></label>
+          <label className="native-input-field" htmlFor="report-start"><span>Mulai</span><input id="report-start" type="datetime-local" value={startAt} onChange={(event) => { setDraftPaused(false); setStartAt(event.target.value); }} required /></label>
+          <label className="native-input-field" htmlFor="report-end"><span>Selesai</span><input id="report-end" type="datetime-local" value={endAt} onChange={(event) => { setDraftPaused(false); setEndAt(event.target.value); }} required /></label>
           <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !serid || !selectedRange || !currentPreviewReady}>{creating ? "Meminta laporan…" : "Buat laporan"}</Button></div>
        </form></LayerCard>
        </div>

@@ -71,3 +71,40 @@ WHERE serid = ?
             "approximate_dose",
         )
         return dict(zip(keys, row))
+
+    def measurement_rows(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        serid: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Read report detail rows without the generic history-view limit.
+
+        The report worker asks for one bounded, deterministic batch after its
+        indexed count preflight.  Keeping this query beside the aggregate query
+        prevents a report from accidentally inheriting a UI history limit such
+        as 1,000 rows.
+        """
+        connection = self._connection_factory()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+SELECT serid, dtom, doserate, dose, previnterval, stat
+FROM measurement
+WHERE serid = ?
+  AND dtom >= ?
+  AND dtom <= ?
+ORDER BY dtom ASC, serid ASC
+LIMIT ?
+""",
+                    (serid, start, end, max(1, int(limit))),
+                )
+                rows = cursor.fetchall()
+        finally:
+            connection.close()
+
+        keys = ("serid", "dtom", "doserate", "dose", "previnterval", "stat")
+        return [dict(row) if isinstance(row, dict) else dict(zip(keys, row)) for row in rows]

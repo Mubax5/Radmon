@@ -2,6 +2,8 @@ from datetime import datetime, timedelta, timezone
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from radmon.config import Settings
 from radmon.reports import ReportService
 
@@ -125,7 +127,7 @@ def test_preview_uses_database_aggregate_when_repository_provides_it():
     assert "9.90 / 10.10" in html
 
 
-def test_report_service_accepts_production_summary_reader_for_full_range_aggregates():
+def test_report_service_rejects_ranges_longer_than_one_day_before_preview_query():
     class SummaryReader:
         def summary(self, start, end, *, serid):
             return {
@@ -145,8 +147,8 @@ def test_report_service_accepts_production_summary_reader_for_full_range_aggrega
         Settings().for_dummy(),
         summary_reader=SummaryReader(),
     )
-    html = service.preview_html(start, end)
-    assert "7.70 / 8.80" in html
+    with pytest.raises(ValueError, match="24 jam"):
+        service.preview_html(start, end)
 
 
 def test_draft_preview_uses_local_wall_time_and_bounds_high_volume_details():

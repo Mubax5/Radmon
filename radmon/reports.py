@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import csv
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from html import escape
 from io import BytesIO
 from pathlib import Path
@@ -116,6 +116,7 @@ class ReportService:
     PREVIEW_ROW_LIMIT = 250
     MAX_MEASUREMENT_ROWS = 50_000
     MAX_ALARM_ROWS = 10_000
+    MAX_RANGE = timedelta(hours=24)
     REPORT_TIMEZONE = ZoneInfo("Asia/Jakarta")
 
     def __init__(
@@ -129,27 +130,101 @@ class ReportService:
         self.settings = settings
         self.summary_reader = summary_reader
 
+    @classmethod
+    def validate_range(cls, start: datetime, end: datetime) -> timedelta:
+        """Validate the report contract using elapsed time, not wall-clock time.
+
+        Web requests arrive as UTC-aware values while the desktop client normally
+        supplies WIB wall time.  Converting aware values to UTC before comparing
+        them also keeps the limit correct across DST transitions in clients that
+        are not running in WIB.
+        """
+        if not isinstance(start, datetime) or not isinstance(end, datetime):
+            raise ValueError("waktu report tidak valid")
+        try:
+            elapsed = _time_key(end) - _time_key(start)
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("waktu report tidak valid") from None
+        if elapsed <= timedelta(0):
+            raise ValueError(
+                "report end must be after start; waktu selesai harus setelah mulai"
+            )
+        if elapsed > cls.MAX_RANGE:
+            raise ValueError(
+                "rentang report terlalu panjang; maksimal 24 jam "
+                "(tepat 24 jam diperbolehkan)"
+            )
+        return elapsed
+
+    @staticmethod
+    def _row_sort_key(row: dict[str, Any]) -> tuple[Any, ...]:
+        measured_at = row.get("dtom") or row.get("dtoa")
+        time_key = _time_key(measured_at) if isinstance(measured_at, datetime) else datetime.min.replace(tzinfo=timezone.utc)
+        # dtom is not necessarily unique for all source imports.  Keep a stable
+        # secondary identity when repositories expose one instead of relying on
+        # the database's unspecified order for equal timestamps.
+        identity = tuple(
+            str(row.get(name, ""))
+            for name in ("measurement_id", "id", "source_id", "serid", "alarmid")
+        )
+        return (time_key, identity)
+
+    def _measurement_rows(
+        self,
+        start: datetime,
+        end: datetime,
+        *,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        database_start = self._database_time(start)
+        database_end = self._database_time(end)
+        report_reader = getattr(self.summary_reader, "measurement_rows", None)
+        if not callable(report_reader):
+            report_reader = getattr(self.repository, "report_measurement_history", None)
+        if callable(report_reader):
+            rows = report_reader(
+                database_start,
+                database_end,
+                serid=self.settings.serid,
+                limit=max(1, int(limit)),
+            )
+        else:
+            # The report path deliberately requests its own bounded limit.  It
+            # must not inherit the 1,000/5,000 row limits used by history views.
+            rows = self.repository.measurement_history(
+                database_start,
+                database_end,
+                serid=self.settings.serid,
+                limit=max(1, int(limit)),
+            )
+        return sorted(list(rows), key=self._row_sort_key)
+
     def rows(
         self,
         start: datetime,
         end: datetime,
         limit: int = 2_147_483_647,
     ) -> list[dict[str, Any]]:
-        if end <= start:
-            raise ValueError("report end must be after start")
+        self.validate_range(start, end)
         database_start = self._database_time(start)
         database_end = self._database_time(end)
         count = self._count("measurement_count", database_start, database_end)
         if count is not None and count > self.MAX_MEASUREMENT_ROWS:
             raise ValueError(f"jumlah pengukuran melebihi batas {self.MAX_MEASUREMENT_ROWS:,}; pilih rentang waktu lebih sempit")
-        rows = self.repository.measurement_history(
-            database_start,
-            database_end,
-            serid=self.settings.serid,
-            limit=min(limit, self.MAX_MEASUREMENT_ROWS + 1),
+        requested_limit = max(1, int(limit))
+        rows = self._measurement_rows(
+            start,
+            end,
+            limit=min(requested_limit, self.MAX_MEASUREMENT_ROWS + 1),
         )
         if len(rows) > self.MAX_MEASUREMENT_ROWS:
             raise ValueError(f"jumlah pengukuran melebihi batas {self.MAX_MEASUREMENT_ROWS:,}; pilih rentang waktu lebih sempit")
+        # A count is a preflight contract, not permission to silently emit a
+        # partial PDF if an adapter applies its own history-page cap.
+        if count is not None and requested_limit > count and len(rows) < count:
+            raise ValueError(
+                f"data report tidak lengkap: diterima {len(rows):,} dari {count:,} pengukuran"
+            )
         return rows
 
     def _count(self, method_name: str, start: datetime, end: datetime) -> int | None:
@@ -177,8 +252,7 @@ class ReportService:
         return rows
 
     def preflight(self, start: datetime, end: datetime) -> None:
-        if end <= start:
-            raise ValueError("report end must be after start")
+        self.validate_range(start, end)
         database_start = self._database_time(start)
         database_end = self._database_time(end)
         measurements = self._count("measurement_count", database_start, database_end)
@@ -195,6 +269,7 @@ class ReportService:
         *,
         fallback_rows: list[dict[str, Any]] | None = None,
     ) -> ReportSummary:
+        self.validate_range(start, end)
         if self.summary_reader is not None:
             row = self.summary_reader.summary(
                 self._database_time(start),
@@ -209,7 +284,17 @@ class ReportService:
             if row:
                 return _summary_from_mapping(row)
         rows = fallback_rows if fallback_rows is not None else self.rows(start, end)
-        return _summary_from_rows(rows)
+        summary = _summary_from_rows(rows)
+        # A bounded preview still needs to say how many records exist when the
+        # repository exposes the cheap indexed count but not an aggregate reader.
+        count = self._count(
+            "measurement_count",
+            self._database_time(start),
+            self._database_time(end),
+        )
+        if count is not None and count > summary.sample_count:
+            summary = replace(summary, sample_count=count)
+        return summary
 
     def summary(self, start: datetime, end: datetime) -> ReportSummary:
         return self._summary_for_range(start, end)
@@ -235,8 +320,9 @@ class ReportService:
         *,
         limit: int = PREVIEW_ROW_LIMIT,
     ) -> str:
+        self.validate_range(start, end)
         station = self.repository.station_config(self.settings.serid)
-        rows = self.rows(start, end, limit=limit)
+        rows = self._measurement_rows(start, end, limit=min(max(1, int(limit)), self.PREVIEW_ROW_LIMIT))
         summary = self._summary_for_range(start, end, fallback_rows=rows)
         detail_rows: list[str] = []
         running_dose = 0.0
@@ -310,7 +396,7 @@ th {{ background: #efefef; font-weight: bold; }}
 <tr><td>1</td><td>{escape(station.room)}</td><td>{escape(station.location)}</td><td>{escape(description)}</td><td>{self._dt(summary.first_measurement)}</td><td>{self._dt(summary.last_measurement)}</td><td>{self._fmt(summary.average)} / {self._fmt(summary.maximum)}</td></tr>
 </table>
 <h2>Dose rate and Approx. Dose</h2>
-<div class="range">From {start:%Y-%m-%d %H:%M:%S} to {end:%Y-%m-%d %H:%M:%S}</div>
+<div class="range">From {self._dt(start)} to {self._dt(end)}</div>
 {preview_note}
 <table width="100%" align="center" cellspacing="0" cellpadding="0">
 <tr><th>No.</th><th>Tag</th><th>Name</th><th>Location</th><th>Measurement</th><th>Dose rate (µSv/h)</th><th>Approx. Dose (µSv)</th></tr>
@@ -352,18 +438,12 @@ th {{ background: #efefef; font-weight: bold; }}
 
     def pdf_bytes(self, start: datetime, end: datetime, *, preview: bool = False) -> bytes:
         """Generate a complete report PDF, or a bounded draft PDF preview."""
-        if end <= start:
-            raise ValueError("report end must be after start")
+        self.validate_range(start, end)
         if not preview:
             self.preflight(start, end)
         station = self.repository.station_config(self.settings.serid)
         if preview:
-            rows = self.repository.measurement_history(
-                self._database_time(start),
-                self._database_time(end),
-                serid=self.settings.serid,
-                limit=self.PREVIEW_ROW_LIMIT,
-            )
+            rows = self._measurement_rows(start, end, limit=self.PREVIEW_ROW_LIMIT)
         else:
             rows = self.rows(start, end)
         summary = self._summary_for_range(start, end, fallback_rows=rows)
@@ -456,7 +536,14 @@ th {{ background: #efefef; font-weight: bold; }}
             hAlign="CENTER",
         )
         summary_table.setStyle(self._table_style())
-        story.extend([summary_table, Spacer(1, 5 * mm), Paragraph("Dose rate and Approx. Dose", styles["Heading2"]), Paragraph(f"From {self._dt(start)} to {self._dt(end)}", styles["BodyText"]), Spacer(1, 2 * mm)])
+        story.extend([
+            summary_table,
+            Paragraph(f"Sample count: {summary.sample_count:,}", styles["BodyText"]),
+            Spacer(1, 5 * mm),
+            Paragraph("Dose rate and Approx. Dose", styles["Heading2"]),
+            Paragraph(f"From {self._dt(start)} to {self._dt(end)}", styles["BodyText"]),
+            Spacer(1, 2 * mm),
+        ])
 
         measurement_data = [["No.", "Tag", "Name", "Location", "Measurement", "Dose rate (µSv/h)", "Approx. Dose (µSv)"]]
         cumulative_dose = 0.0
@@ -478,8 +565,8 @@ th {{ background: #efefef; font-weight: bold; }}
                     str(station.room),
                     str(station.location),
                     self._dt(measured_at),
-                    self._fmt(rate, 3),
-                    self._fmt(cumulative_dose, 6),
+                    self._fmt(rate),
+                    self._fmt(cumulative_dose),
                 ]
             )
         if len(measurement_data) == 1:

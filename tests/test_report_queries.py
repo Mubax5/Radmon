@@ -8,6 +8,7 @@ class Cursor:
     def __init__(self):
         self.sql = None
         self.params = None
+        self.rows = []
 
     def __enter__(self):
         return self
@@ -29,6 +30,9 @@ class Cursor:
             "sample_count": 43200,
             "approximate_dose": 4.8,
         }
+
+    def fetchall(self):
+        return self.rows
 
 
 class Connection:
@@ -58,4 +62,20 @@ def test_database_summary_reader_aggregates_full_range_in_sql():
     assert "SUM(COALESCE(dose, 0))" in sql
     assert connection.cursor_instance.params == (5202, start, end)
     assert row["sample_count"] == 43200
+    assert connection.closed
+
+
+def test_database_report_detail_reader_has_its_own_bounded_ordered_query():
+    connection = Connection()
+    reader = DatabaseReportSummaryReader(
+        Settings(), connection_factory=lambda: connection
+    )
+    start = datetime(2026, 9, 1, 0, 0)
+    end = datetime(2026, 9, 2, 0, 0)
+    assert reader.measurement_rows(start, end, serid=5202, limit=50_001) == []
+    sql = connection.cursor_instance.sql
+    assert "FROM measurement" in sql
+    assert "ORDER BY dtom ASC, serid ASC" in sql
+    assert "LIMIT ?" in sql
+    assert connection.cursor_instance.params == (5202, start, end, 50_001)
     assert connection.closed
