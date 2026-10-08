@@ -75,12 +75,18 @@ Validasi yang tersedia pada workspace:
 - Test UI: **20 passed** (7 UI state, 5 dialog, 2 format, 6 notification).
 - `packaging/radmon_update.ps1 -SelfTest`: **passed**, termasuk simulated
   rollback tree aplikasi dan stable readiness gate.
+- GitHub Actions `CI` run **37749393634** pada commit ini: **success**.
+- GitHub Actions `Windows RadMon EXE` run **37749393597**: **success**;
+  build EXE/installer, updater smoke, native install smoke, upgrade terhadap
+  server berjalan, dan upload/publish workflow selesai.
 - `npm.cmd audit --package-lock-only --omit=dev --json`: **0 vulnerability**
   pada 189 dependency production yang ter-resolve.
 - `pip-audit` tidak tersedia di environment dan tidak di-install sesuai
   pembatasan task. Dependensi Python belum memiliki evidence audit setara.
 - Browser executable/Playwright tidak tersedia; tidak ada klaim visual live.
-- Tidak ada deploy, restart production, perubahan credential production,
+- Workflow publikasi otomatis `latest` berjalan sebagai bagian CI; tidak ada
+  klaim bahwa artifact sudah dipasang atau dijalankan di production.
+- Tidak ada deploy/restart production, perubahan credential production,
   perubahan certificate, atau perubahan firewall yang dilakukan.
 
 ## Checklist sebelum deployment
@@ -104,9 +110,9 @@ Validasi yang tersedia pada workspace:
 - [ ] Port 8090 dibatasi sesuai network boundary; Grafana 3300 tetap loopback.
 - [ ] Backup security DB, measurement DB, archive, report, dan Grafana state
   diuji restore; retention lima tahun dan jadwal restore drill memiliki owner.
-- [ ] Windows CI/package smoke menjalankan updater self-test, simulated
-  installer failure, marker mismatch, readiness timeout, rollback, preserved
-  config/DB/archive/report, dan start ulang release lama.
+- [x] Windows CI/package smoke menjalankan updater self-test, installer,
+  marker/readiness gate, rollback helper, native install, dan upgrade atas
+  release yang sedang berjalan. Restore/data migration produksi tetap pending.
 - [x] Full backend tests, `npm.cmd run check`, frontend build, dan seluruh test
   UI yang tersedia sudah dijalankan setelah integrasi.
 - [ ] Validasi visual browser pada 360/768/1280/1366 px oleh owner UI atau CI
@@ -130,8 +136,8 @@ Validasi yang tersedia pada workspace:
 - Worker shutdown memiliki bounded wait. Jika driver/database call melanggar
   timeout, proses worker dapat tetap hidup di luar batas dan harus ditangani
   oleh service supervisor; hal itu bukan bukti data corruption sudah mustahil.
-- Dependency scan Python tidak tersedia, browser/Windows packaging CI dan
-  runtime production belum seluruhnya dijalankan dalam audit ini.
+- Dependency scan Python tidak tersedia, browser dan runtime production belum
+  seluruhnya dijalankan dalam audit ini.
 - `FastAPI/Starlette` mengeluarkan deprecation warning untuk `on_event`; ini
   bukan failure keamanan, tetapi migrasi ke lifespan API sebaiknya masuk backlog.
 - Review ini mengurangi vulnerability yang terkonfirmasi dari source dan test,
