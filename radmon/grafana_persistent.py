@@ -4,7 +4,7 @@ from copy import deepcopy
 import os
 import socket
 
-from .grafana_bootstrap import DATASOURCE_UID, GrafanaBootstrap
+from .grafana_bootstrap import GrafanaBootstrap
 from .grafana_tv import PAGE_UIDS, PLAYLIST_UID, build_playlist_payload, playlist_url
 
 

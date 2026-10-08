@@ -151,9 +151,7 @@ export function ReportsPage() {
           if (!controller.signal.aborted) {
              objectUrl = URL.createObjectURL(blob);
              committed = true;
-              setDraftPreview((previous) => {
-                return { key: selectedKey, url: objectUrl! };
-              });
+              setDraftPreview(() => ({ key: selectedKey, url: objectUrl! }));
            }
          })
         .catch((reason: unknown) => { if (!controller.signal.aborted) setDraftError(reason instanceof Error ? reason.message : "Pratinjau gagal dimuat"); })

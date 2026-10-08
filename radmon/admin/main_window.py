@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
     QFormLayout,
-    QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
@@ -30,7 +29,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..grafana_bootstrap import GrafanaBootstrap
 from ..grafana_persistent import PersistentGrafanaBootstrap
 from ..paths import ApplicationPaths
 from ..secure_context import get_context

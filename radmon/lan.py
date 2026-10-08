@@ -7,7 +7,6 @@ import logging
 import os
 from typing import Any, Callable, Iterable
 
-from .repository import upsert_recent
 from .security import SecurityStore
 from .formatting import format_dose_value
 

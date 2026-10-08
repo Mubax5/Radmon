@@ -210,7 +210,7 @@ function EventTable({ events, onChanged }: { events: PolicyEvent[]; onChanged: (
 }
 
 export function AlarmsPage() {
-  const { user } = useSession();
+  useSession();
   const requestedEventId = new URLSearchParams(window.location.search).get("event");
   const [soundOn, setSoundOn] = useState(false);
   const [items, setItems] = useState<PolicyEvent[] | null>(null);

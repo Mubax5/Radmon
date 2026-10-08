@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { LayerCard, Table } from "@cloudflare/kumo";
+import { LayerCard } from "@cloudflare/kumo";
 
 export { ResponsiveStationView, StationCards, StationDetail, StationTable } from "./components/StationViews";
 
@@ -87,31 +87,6 @@ export function freshnessLabel(value?: string | null): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 48) return `${hours} jam lalu`;
   return `${Math.floor(hours / 24)} hari lalu`;
-}
-
-export function JsonTable({ rows, empty }: { rows: Array<Record<string, unknown>>; empty: string }) {
-  if (!rows.length) return <LayerCard className="empty-card">{empty}</LayerCard>;
-  const keys = Object.keys(rows[0]).slice(0, 6);
-  return (
-    <LayerCard className="table-card">
-      <Table>
-        <Table.Header>
-          <Table.Row>{keys.map((key) => <Table.Head key={key}>{key.replaceAll("_", " ")}</Table.Head>)}</Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {rows.map((row, index) => (
-            <Table.Row key={index}>
-              {keys.map((key) => (
-                <Table.Cell key={key}>
-                  {typeof row[key] === "object" ? JSON.stringify(row[key]) : String(row[key] ?? "—")}
-                </Table.Cell>
-              ))}
-            </Table.Row>
-          ))}
-        </Table.Body>
-      </Table>
-    </LayerCard>
-  );
 }
 
 export function LoadingCard({ label = "Memuat…" }: { label?: string } = {}) {

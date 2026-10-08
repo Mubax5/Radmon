@@ -517,13 +517,3 @@ export function CreateUserForm({
     </form>
   );
 }
-
-export function CreateUserPanel({ onCreated }: { onCreated: () => void }) {
-  return (
-    <LayerCard className="action-card user-create-card">
-      <h2>Buat pengguna</h2>
-      <p>Viewer adalah role read-only terautentikasi; akses anonim bukan pengguna RadMon.</p>
-      <CreateUserForm onCreated={onCreated} />
-    </LayerCard>
-  );
-}
