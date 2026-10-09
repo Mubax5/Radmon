@@ -281,7 +281,7 @@ def test_reports_frontend_contract_uses_native_controls_and_safe_download_url():
     assert '<section className="report-preview"' not in page
     assert "report-preview-pane iframe" in styles
     assert 'const currentDraftUrl = draftPreview?.key === selectedKey ? draftPreview.url : null' in page
-    assert 'PDF sebelumnya — bukan pilihan saat ini' in page
+    assert 'Pratinjau sebelumnya — pilihan terbaru gagal' in page
     assert 'const backendDetail = payload.detail' in page
     assert 'new Date(startAt)' in page and 'start.toISOString()' in page
     assert 'reportRows.find((job) => job.status === "completed")?.job_id ?? null' in page

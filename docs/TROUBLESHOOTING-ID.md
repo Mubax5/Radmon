@@ -1,17 +1,22 @@
-# Troubleshooting RadMon untuk Operator
+# Troubleshooting RadMon untuk operator
 
-Panduan ini membedakan gangguan browser, layanan RadMon, Grafana, MariaDB, dan koneksi detector. Periksa status/log terlebih dahulu; jangan menghapus atau mereset database, `grafana.db`, konfigurasi, archive, atau riwayat.
+## Tujuan dan aturan aman
 
-## Jalur akses dan port
+Panduan ini memisahkan gangguan browser, Central/API, Grafana, datasource
+MariaDB, source LAN, dan data detector. Periksa status dan log sebelum
+perubahan. Jangan menghapus database, `grafana.db`, konfigurasi, archive,
+report, checkpoint, atau history sebagai langkah coba-coba.
+
+## Port dan pemeriksaan awal
 
 | Port | Fungsi | Pemeriksaan |
 | --- | --- | --- |
-| `8090` | Gateway web RadMon, `/health`, aplikasi `/app`, dan Grafana melalui proxy | `http://127.0.0.1:8090/health` |
-| `47652` | Listener lokal untuk mencegah dua instance RadMon berjalan bersamaan; bukan halaman web | Periksa listener lokal, jangan dibuka ke LAN |
-| `3300` | Grafana native/editor pada PC server (loopback) | `http://127.0.0.1:3300/api/health` |
-| `3306` | MariaDB central; juga port MariaDB pada setiap PC sumber LAN | Uji TCP ke `127.0.0.1` atau IP sumber dari PC server |
+| `8090` | Gateway RadMon, `/health`, `/app`, dan Grafana proxy | `http://127.0.0.1:8090/health` |
+| `47652` | Listener lokal single-instance; bukan halaman web | Tetap lokal, jangan dibuka ke LAN |
+| `3300` | Grafana native/editor pada PC server | `http://127.0.0.1:3300/api/health` |
+| `3306` | MariaDB central atau source LAN | Uji dari PC central ke host terkait |
 
-Di PowerShell, pemeriksaan awal yang hanya membaca status:
+Pemeriksaan awal yang hanya membaca status:
 
 ```powershell
 Get-NetTCPConnection -State Listen |
@@ -22,60 +27,103 @@ Invoke-RestMethod http://127.0.0.1:3300/api/health
 Test-NetConnection 127.0.0.1 -Port 3306
 ```
 
-`/health` dengan HTTP 200 dan `status: ok` membuktikan Central/API merespons; itu sendiri belum membuktikan datasource Grafana atau setiap sumber LAN sehat. `database: ok` pada `/api/health` adalah kesehatan database internal Grafana, bukan pemeriksaan datasource MariaDB `ipradmon`.
+`/health` dengan HTTP 200 dan `status: ok` membuktikan Central/API merespons;
+itu belum membuktikan setiap source LAN atau datasource Grafana sehat.
+`database: ok` pada Grafana `/api/health` adalah database internal Grafana,
+bukan koneksi datasource `ipradmon`.
 
 ## Bedakan gejala
 
-- **`ERR_CONNECTION_REFUSED`**: browser tidak mendapat jawaban HTTP karena tidak ada listener di alamat/port itu, layanan belum aktif, atau alamat/port salah. Periksa listener dan uji `8090`; jalankan shortcut RadMon satu kali bila Central/API belum sehat.
-- **HTTP `401 Unauthorized`**: server dapat dijangkau, tetapi halaman/API meminta login atau kredensial tidak diterima. `/app` dan data RadMon memerlukan login aplikasi; `GET /auth/me` yang menjawab 401 sebelum login adalah normal. Ini bukan bukti MariaDB mati.
-- **Grafana `/api/health` sehat, datasource tidak sehat**: Grafana hidup tetapi koneksi datasource MySQL gagal. Bootstrap RadMon memeriksa datasource `ipradmon-mysql` pada setiap startup. Jika password secure field hilang atau autentikasi ditolak, bootstrap membaca konfigurasi datasource yang tersimpan dan melakukan PUT password-only dengan UID, endpoint, database, user, serta pengaturan plugin tetap; ia tidak menghapus database Grafana, membuat ulang datasource, atau mengubah plugin autentikasi MariaDB. Kegagalan setelah repair dilaporkan sebagai degraded, bukan dianggap sukses. Administrator juga dapat memeriksa melalui **Grafana → Connections → Data sources → ipradmon → Save & test** atau endpoint `POST http://127.0.0.1:3300/api/datasources/uid/ipradmon-mysql/health`.
-- **Datasource sehat, panel menampilkan `No data`**: query berhasil tetapi tidak menemukan baris untuk detector/rentang waktu itu, atau query dashboard tidak menunjuk datasource/UID yang benar. Buka **Inspect → Query/Response** untuk membedakan hasil kosong dari error SQL. Periksa rentang waktu, `recent` (tren rolling), `recent_last` (maksimum 30 pembacaan asli per detector untuk fallback offline), `vrecent` (status/last-known), dan `measurement` (riwayat).
-- **Panel menampilkan SQL error**: catat teks error yang sudah dimasker. Periksa nama tabel/kolom, hak baca, collation, timeout/lock, lalu eskalasikan. Jangan mengubah schema sumber detector.
+### Browser tidak tersambung atau meminta login
 
-Contoh query baca-saja di Grafana Explore dengan datasource `ipradmon-mysql`; jalankan satu query per waktu:
+- **`ERR_CONNECTION_REFUSED`**: tidak ada listener, service belum aktif, atau
+  alamat/port salah. Periksa `8090`, lalu jalankan shortcut **RadMon** satu kali.
+- **HTTP `401 Unauthorized`**: server terjangkau, tetapi session belum login
+  atau credential tidak diterima. `GET /auth/me` yang 401 sebelum login normal;
+  itu bukan bukti MariaDB mati.
+- **HTTP `426` saat login remote**: periksa TLS termination, cookie secure,
+  `RADMON_TRUSTED_PROXY_NETS`, dan `X-Forwarded-Proto: https`. Jangan mengubah
+  gateway menjadi HTTP remote untuk melewati error.
 
-```sql
-SELECT COUNT(*) AS recent_rows, MAX(dtom) AS latest_sample FROM recent;
-SELECT serid, name, status, dtom, doserate FROM vrecent ORDER BY serid;
-SELECT serid, MAX(dtom) AS latest_history FROM measurement GROUP BY serid;
-```
+### Grafana hidup tetapi datasource gagal
 
-Page 2 **Trends** mempertahankan rentang satu jam (`now-1h`) dan hanya menggambar sampel aktual pada rentang itu. Detector offline tidak diberi garis datar palsu. Tabel **Pembacaan Terakhir · Offline** menampilkan sampai 30 pembacaan asli dari `recent_last`, dengan timestamp asli, umur data, status `OFFLINE · LAST READING`, dan nilai dua desimal. Page 1 tetap menyajikan status/waktu/nilai terakhir yang diketahui; History dan Recent juga menampilkan beberapa pembacaan terakhir saat station offline. Selalu cocokkan nilai dengan waktu sampelnya.
+Jika Grafana `/api/health` sehat namun **Save & test** datasource `ipradmon`
+gagal, masalah berada pada endpoint, database, user/password, network,
+transport encryption, certificate verification, atau authentication plugin.
+RadMon melaporkan kondisi degraded; jangan menyebutnya sehat hanya karena
+halaman Grafana terbuka.
 
-## Pemulihan satu klik dan langkah aman
+Administrator dapat memeriksa **Grafana → Connections → Data sources →
+ipradmon → Save & test** atau datasource health endpoint lokal yang sesuai.
+Jangan menghapus datasource, database Grafana, atau mengubah UID
+`ipradmon-mysql` untuk percobaan.
 
-1. Gunakan shortcut **RadMon** di Desktop/Start Menu. Shortcut menjalankan `%LOCALAPPDATA%\RadMon\app\RadMon.exe --start`, memeriksa layanan lebih dahulu, memakai instance yang sehat, lalu membuka Control Plane. Shortcut **RadMon Monitoring** membuka monitoring melalui gateway.
-2. Jika shortcut tidak tersedia, jalankan satu kali dari PowerShell biasa:
+### Panel Grafana `No data`
+
+**No data bukan satu diagnosis.** Jangan langsung restart RadMon.
+
+1. **Datasource error:** buka **Inspect → Query/Response** atau **Save & test**
+   dan cari error koneksi/SQL. Perbaiki datasource atau eskalasikan kepada
+   Administrator.
+2. **Query berhasil tetapi hasil kosong:** periksa panel, SERID, datasource UID,
+   dan current time window. Page **Trends** menggunakan **Last 1 hour** dan
+   hanya menggambar sampel asli pada window itu. Hasil kosong pada window saat
+   ini tidak membuktikan history hilang.
+
+Gunakan batas data berikut untuk menentukan query yang tepat:
+
+- `recent`: rolling monitoring window maksimal tiga jam;
+- `recent_last`: maksimum 30 pembacaan asli terbaru per detector untuk fallback
+  offline;
+- `vrecent`: current status dan latest rolling/last-known context;
+- `measurement`: history authoritative untuk History, Reports, dan Archive.
+
+Jika detector offline, last reading boleh ditampilkan hanya bila pembacaan asli
+tersedia. Tampilkan nilai, timestamp asli, dan umur data; jangan membuat nilai
+atau timestamp pengganti. Current status harus tetap `OFFLINE` bila sudah
+melewati batas idle.
+
+### Alarm dan tombol response
+
+Pada halaman Alarm, policy central dan source alarm adalah evidence berbeda.
+Tombol response source hanya muncul/berlaku untuk row source dengan `i_flag=0`.
+Response yang berhasil harus membaca kembali row `(serid, dtoa)` dengan
+`i_flag=1`; `ack` legacy tetap tidak diubah.
+
+Jika source timeout, row berubah, commit gagal, atau read-back gagal, jangan
+mengulang response berkali-kali dan jangan menganggap buzzer fisik sudah diam.
+Periksa retry state dan lakukan acceptance hardware terpisah saat commissioning.
+
+## Pemulihan aman
+
+1. Gunakan shortcut **RadMon**. Launcher memeriksa service, memakai instance
+   yang sehat, dan membuka Control Plane.
+2. Jika shortcut tidak tersedia, jalankan satu kali:
 
    ```powershell
    & "$env:LOCALAPPDATA\RadMon\app\RadMon.exe" --start
    ```
 
-   Tunggu laporan status. Jangan menjalankannya berulang-ulang dan jangan menghentikan proses dengan paksa.
-3. Ulangi pemeriksaan `/health`, Grafana, dan port di atas. Bila API belum sehat, periksa log sebelum mencoba langkah berikutnya.
-4. Jika Scheduled Task **RadMon Server** terpasang tetapi tidak berjalan, Administrator dapat memeriksa task dan memulai **sekali**:
+3. Tunggu status, ulangi `/health`, Grafana, dan port di atas.
+4. Jika Scheduled Task terpasang tetapi berhenti, Administrator dapat memulai
+   sekali:
 
    ```powershell
    Get-ScheduledTask -TaskName "RadMon Server"
    Start-ScheduledTask -TaskName "RadMon Server"
    ```
 
-   `Access denied`, mendaftarkan/memperbaiki task, memasang atau memperbarui installer, serta mengubah Windows Firewall memerlukan akun Administrator/elevated PowerShell. Operator biasa dapat menjalankan shortcut dan membaca health/log yang diizinkan.
-5. Jika port MariaDB central `3306` tidak tersedia, eskalasikan ke administrator layanan/database. RadMon launcher tidak memasang ulang atau mereset MariaDB. Jika masalah hanya satu sumber, periksa jaringan/kredensial sumber itu tanpa menghentikan sumber lain.
-6. Setelah perbaikan, uji kembali query langsung di Grafana `127.0.0.1:3300` dan tampilan melalui proxy `127.0.0.1:8090`.
+5. Jika MariaDB central `3306` tidak tersedia, eskalasikan ke administrator
+   layanan/database. Jika hanya satu source gagal, periksa source itu tanpa
+   menghentikan source lain.
 
-Jangan menghapus tabel, menjalankan `TRUNCATE`/`DELETE` manual, menghapus `grafana.db`, membuat ulang user MariaDB, atau mereset datasource/dashboard sebagai langkah coba-coba. `measurement` dan tabel histori adalah rekam data; `recent` adalah read model dengan kebijakan rolling/last-known. Minta administrator meninjau log dan query sebelum perubahan database.
+Jangan menjalankan banyak `--server`, membunuh semua proses Python, menjalankan
+`TRUNCATE`/`DELETE` manual, membuat ulang user database, atau mereset dashboard
+sebagai langkah coba-coba.
 
-## Grafana dan dashboard
+## Source LAN dan jaringan BRIN-NET
 
-- Dari PC server, buka `http://127.0.0.1:3300` untuk pemeriksaan/editor Grafana. Tampilan monitoring melalui gateway tersedia di `http://127.0.0.1:8090/`; client LAN tidak perlu dan tidak seharusnya mengakses port 3300 secara langsung.
-- Dashboard RadMon memakai datasource MySQL UID **`ipradmon-mysql`**, database **`ipradmon`**. Jangan menghapus lalu membuat ulang datasource; perbaikan Administrator harus mempertahankan UID, endpoint, database, user, serta pengaturan non-rahasia. Simpan password hanya melalui konfigurasi lokal/penyimpanan rahasia Grafana; jangan menyalinnya ke tiket atau log.
-- Untuk Page 2, pastikan rentang waktunya **Last 1 hour**. Untuk panel kosong, gunakan **Inspect → Query** untuk memeriksa SQL, UID datasource, time range, dan error/result. Jangan menyimpan perubahan query/dashboard sebelum perubahan ditinjau Administrator.
-- Status datasource yang sehat berarti Grafana berhasil tersambung ke database dengan kredensial datasource. Itu berbeda dari `/api/health` Grafana dan dari koneksi aplikasi RadMon ke MariaDB.
-
-## Koneksi PC sumber LAN
-
-Pada PC central, uji jalur TCP ke setiap sumber yang dikonfigurasi (contoh produksi):
+Jalankan dari PC central:
 
 ```powershell
 Test-NetConnection 192.168.1.50 -Port 3306
@@ -83,17 +131,46 @@ Test-NetConnection 192.168.1.52 -Port 3306
 Test-NetConnection 192.168.1.38 -Port 3306
 ```
 
-Uji dari PC central, bukan hanya dari laptop operator. `TcpTestSucceeded: False` mengarah ke layanan MariaDB sumber, kabel/routing/VLAN, firewall sumber, atau ACL jaringan; TCP sukses belum membuktikan autentikasi/schema database. Administrator dapat melihat status sumber dan waktu poll terakhir di Control Plane setelah login. `/health` menunjukkan status layanan pusat, bukan rincian kesehatan seluruh detector.
+`TcpTestSucceeded: False` dapat berarti service MariaDB source, kabel/routing,
+VLAN, firewall source, atau ACL jaringan. TCP sukses belum membuktikan
+authentication atau schema. Dari client BRIN-NET, uji hanya gateway:
 
-Untuk akses dari client BRIN-NET, uji `Test-NetConnection 192.168.1.2 -Port 8090` dari client. Gateway `8090` adalah jalur web yang dibuka untuk client; `3300`, `3306`, dan `47652` tetap lokal/antar-server sesuai arsitektur. Jika TCP `8090` gagal dari LAN tetapi berhasil di PC server, eskalasikan routing/ACL/firewall kepada administrator jaringan. Jangan membuka port database/Grafana ke seluruh LAN sebagai jalan pintas. Endpoint `8090` internal tidak menggantikan reverse proxy HTTPS untuk login remote; `426` berarti TLS termination, `RADMON_TRUSTED_PROXY_NETS`, dan `X-Forwarded-Proto: https` perlu diperiksa.
+```powershell
+Test-NetConnection 192.168.1.2 -Port 8090
+```
+
+Jangan membuka port database, Grafana, atau single-instance ke seluruh LAN.
+
+## Report dan archive
+
+- Rentang report harus lebih dari nol dan maksimal **24 jam**; tepat 24 jam
+  diperbolehkan.
+- Preview maksimal **250 baris** dan bersifat partial.
+- PDF penuh berisi seluruh measurement sampai batas **50.000 row** dan alarm
+  sampai batas **10.000 row**; report gagal bila batas terlampaui atau data yang
+  diterima tidak lengkap.
+- Timestamp report adalah WIB dan nilai dose rate menggunakan dua desimal.
+
+Jika report gagal, simpan pesan error, SERID, rentang, dan status job. Jangan
+mengedit artifact, archive ZIP, atau SQL dump manual. Untuk archive retry,
+eskalasikan kepada Administrator.
 
 ## Update dan checksum
 
-Updater memeriksa commit release yang dituju dan checksum SHA-256 installer (`RadMon-Setup.exe.sha256`) sebelum menjalankan installer, lalu memverifikasi marker release setelah upgrade. Bila checksum tidak cocok, file hilang, atau marker hasil upgrade tidak sama dengan commit release yang diharapkan, hentikan proses update dan eskalasikan; jangan melewati verifikasi atau menjalankan installer yang tidak terverifikasi. Untuk pemeriksaan manual, cocokkan hasil `Get-FileHash -Algorithm SHA256` dengan file checksum resmi dari release yang sama. Upgrade normal mempertahankan `config`, `runtime`, `archives`, `reports`, database, dan histori.
+Updater memeriksa release ancestry, checksum SHA-256 installer yang sama,
+marker release, lalu tiga health check stabil. Jika checksum, marker, atau
+readiness tidak cocok, hentikan proses dan eskalasikan; jangan melewati
+verifikasi. Detail rollback ada di [UPDATER-ID.md](UPDATER-ID.md).
+
+Upgrade normal mempertahankan `config`, `runtime`, `archives`, `reports`,
+database, dan history. Tidak ada pernyataan bahwa artifact tertentu sudah
+terpasang di production hanya karena release tersedia.
 
 ## Log yang aman dibagikan
 
-Log aplikasi berada di `%LOCALAPPDATA%\RadMon\runtime\logs` (terutama `radmon.log`, `managed-server.stderr.log`, dan log updater). Log Grafana berada di `%LOCALAPPDATA%\RadMon\runtime\grafana\logs` bila Grafana memakai runtime tersebut. Contoh melihat baris terbaru sambil memasker nilai rahasia umum:
+Log aplikasi berada di `%LOCALAPPDATA%\RadMon\runtime\logs`, terutama
+`radmon.log`, `managed-server.stderr.log`, dan log updater. Contoh masking
+dasar:
 
 ```powershell
 $log = "$env:LOCALAPPDATA\RadMon\runtime\logs\radmon.log"
@@ -101,6 +178,10 @@ Get-Content -LiteralPath $log -Tail 120 |
   ForEach-Object { $_ -replace '(?i)(password|secret|token|authorization)(\s*[:=]\s*)\S+', '$1$2[REDACTED]' }
 ```
 
-Periksa timestamp, nama komponen/source, status, dan pesan error. Sebelum mengirim log, periksa hasil masking secara manual dan hapus alamat/token/session/cookie atau data personal yang masih tersisa. Jangan pernah membagikan `.env`, kredensial, header `Authorization`, file database, atau dump tabel.
+Tinjau hasil masking secara manual dan hapus alamat internal, token, session,
+cookie, serta data personal yang tersisa. Jangan membagikan `.env`, credential,
+header `Authorization`, security DB, file database, atau dump tabel.
 
-Jika setelah langkah aman layanan tetap gagal, sertakan waktu kejadian, port/URL yang diuji, status HTTP/TCP, versi release, hasil datasource health (tanpa kredensial), status detector, dan potongan log yang sudah dimasker kepada Administrator RadMon atau administrator database/jaringan sesuai batas gangguan.
+Saat eskalasi, sertakan waktu kejadian, port/URL yang diuji, status HTTP/TCP,
+release yang terpasang, hasil datasource health tanpa credential, status source,
+dan potongan log yang sudah dimasker.

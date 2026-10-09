@@ -1,8 +1,23 @@
 # Rolling `recent` / `vrecent` Monitoring Read Model
 
 Date: 2026-09-15
-Status: Design approved in chat; implementation pending
-Branch: `feat/rolling-recent-vrecent`
+Status: Historical design record; implementation is present in the audited source
+baseline, while production commissioning remains pending
+Origin branch: `feat/rolling-recent-vrecent`
+
+The design was written before implementation. The current code evidence is
+`radmon/recent_read_model.py` (`RollingRecentManager`), startup wiring in
+`radmon/central_service.py`, and rolling/offline regression coverage. The
+audited workspace head for documentation is `403efbce` on 8 October 2026; this
+is not a claim that the code is deployed or that source hardware has been
+commissioned.
+
+**Landed query note:** the current implementation uses bounded `recent` directly
+for Grafana Page 1 sparklines and Page 2 trends, `vrecent` for current/latest
+and status panels, and `recent_last` for the offline last-reading table. Any
+pre-implementation text below that describes Grafana time-series targets as
+reading `measurement` or `vrecent` is retained as historical design intent, not
+as current SQL.
 
 ## Goal
 
@@ -10,7 +25,11 @@ Keep RadMon's long-term detector data intact for reporting and audit use while m
 
 `measurement`, `alarm`, `rawdata`, archive/report data, and other historical relations remain the long-term source of truth and are not purged or reshaped by this work. Only `recent` and `vrecent` are redesigned.
 
-The monitoring read model must cover the longest continuous dose trend currently shown by Grafana: three hours. Old rows may be removed from `recent` once they fall outside that rolling window because their authoritative copies remain in `measurement`.
+The monitoring read model must cover the intended longest continuous dose trend:
+three hours. The current factory Trends dashboard selects the last one hour from
+that bounded table. Old rows may be removed from `recent` once they fall outside
+the three-hour rolling window because their authoritative copies remain in
+`measurement`.
 
 ## Non-goals and safety constraints
 
@@ -177,9 +196,10 @@ After migration:
 
 - current dose panels use the newest per-SERID row from `vrecent`;
 - latest measurement-time panels use the newest per-SERID row from `vrecent`;
-- realtime sparklines use `vrecent`, not `measurement`;
-- three-hour building trends use `vrecent`, not `measurement`;
-- three-hour minimum/maximum/average summaries, if present, aggregate over `vrecent`;
+- realtime sparklines use bounded `recent`, not `measurement`;
+- building trends use bounded `recent`, not `measurement`;
+- current minimum/maximum/average summary panels, if present, aggregate the
+  newest per-SERID rows from `vrecent`;
 - detector online/offline/alarm/warning current-state panels read the latest per-SERID `status` fields from `vrecent`.
 
 The existing "Alarm Terbaru · 24 Jam" event table is intentionally allowed to continue querying `alarm`. Alarm events are a separate low-volume event log with a 24-hour dashboard requirement; forcing 24-hour alarm history into a three-hour rolling dose table would either lose required alarm events or violate the bounded three-hour design. This does not change or purge `alarm`.
@@ -241,23 +261,22 @@ Implementation uses TDD and must add regression coverage for the following invar
 5. cleanup deletes only expired `recent` rows;
 6. cleanup never emits `DELETE`, `TRUNCATE`, or `DROP` against `measurement`, `alarm`, or `rawdata`;
 7. new `vrecent` exposes every field required by current monitoring and current-status Grafana panels;
-8. all Grafana continuous dose/time-series SQL reads from `vrecent` and not `measurement`;
+8. all Grafana continuous dose/time-series SQL reads from bounded `recent` and not `measurement`;
 9. the 24-hour alarm-events panel remains backed by `alarm` and keeps its existing semantics;
 10. remote source `vrecent` compatibility remains unchanged;
 11. archive rebuild creates only the rolling three-hour read model;
 12. restart/migration is idempotent;
 13. full Python tests, frontend type-check/build, browser tests, Grafana payload validation, Windows packaging, installed smoke test, and upgrade-over-running-RadMon smoke test remain green.
 
-## Deployment
+## Deployment note
 
-Implementation is made on `feat/rolling-recent-vrecent` using tests-first changes.
+The deployment procedure below was part of the original design proposal and is
+retained for traceability, not as an instruction to publish or deploy now.
+Current release verification and rollback behavior is documented in
+`docs/UPDATER-ID.md`; production use still requires owner approval, backup and
+restore evidence, and commissioning on PC `.2`.
 
-After verification, the already-established RadMon deployment rule applies:
-
-1. fast-forward verified changes to `main` when explicitly requested/approved by the user;
-2. wait for Windows build/smoke tests;
-3. verify Release `latest` tag points to the exact `main` SHA;
-4. verify the new installer asset is published;
-5. PC `.2` receives it through `RadMon Updater` if that updater task is already installed.
-
-The first production startup after the upgrade performs the safe rolling-read-model migration and three-hour backfill from the existing central historical data.
+The first production startup after an approved upgrade is expected to perform
+the safe rolling-read-model migration and three-hour backfill from existing
+central historical data. That expectation is not evidence that it has already
+run successfully in production.

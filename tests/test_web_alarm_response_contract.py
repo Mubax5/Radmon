@@ -24,42 +24,42 @@ def read(path: str) -> str:
 
 
 def test_single_active_event_is_auto_selected():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx")
     # Pilihan basi dibersihkan saat live refresh menyelesaikan event terpilih.
-    assert "active.some" in actions
+    assert "sourceAlarmEvents.some" in actions
     assert 'setEventId("")' in actions
     # Auto-select satu-satunya event aktif: efek + saat dialog dibuka.
-    assert "active.length === 1" in actions
-    assert "setEventId(active[0].event_id)" in actions
-    assert "respondOpen" in actions
+    assert "sourceAlarmEvents.length === 1" in actions
+    assert "setEventId(sourceAlarmEvents[0].event_id)" in actions
+    assert "dialogOpen" in actions
     # changeRespondOpen mengikat value saat open, mereset saat close.
-    assert "function changeRespondOpen" in actions
-    assert "resetResponse()" in actions
+    assert "function changeDialogOpen" in actions
+    assert "resetForm()" in actions
 
 
 def test_event_select_trigger_shows_serid_label_not_placeholder_only():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx")
     # items mapping id -> label SERID.
     assert "eventItems" in actions
     assert "SERID ${item.serid}" in actions
     # Native select terikat value ke pilihan efektif dan punya selector stabil.
-    assert 'label={`Event aktif (${activeError ? "?" : active.length})`}' in actions
+    assert 'label={`Alarm sumber aktif (${activeError ? "?" : sourceAlarmEvents.length})`}' in actions
     assert 'testId="alarm-event-select"' in actions
     assert 'name="event_id"' in actions
     assert "value={selectedEventId}" in actions
-    assert '<option value="">Pilih event...' in actions
+    assert '<option value="">Pilih alarm sumber…</option>' in actions
     # Tombol kirim terkunci sampai event terikat.
-    assert "!selectedEventId || !pic || !reason || !pin" in actions
+    assert "!selectedEvent || !pic || !reason || !pin" in actions
 
 
 def test_action_is_preset_select_not_free_text_input():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx")
     assert "RESPONSE_ACTION_ITEMS" in actions
     assert "Konfirmasi" in actions
     assert "Eskalasi" in actions
     assert "Selesai" in actions
     # Action dirender sebagai native preset terikat value.
-    assert 'label="Action"' in actions
+    assert 'label="Tindakan"' in actions
     assert 'testId="alarm-action-select"' in actions
     assert 'name="action"' in actions
     assert "value={action}" in actions
@@ -68,7 +68,7 @@ def test_action_is_preset_select_not_free_text_input():
 
 
 def test_response_and_cancel_still_hit_real_endpoints_with_pin():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx")
     response = read("activeAlarms.ts")
     assert "/api/v1/control/alarm-events/${encodeURIComponent(event.event_id)}/response" in response
     assert "alarmResponseRequest(selected" in actions
@@ -80,7 +80,7 @@ def test_response_and_cancel_still_hit_real_endpoints_with_pin():
 
 def test_modal_stacking_keeps_background_mounted_and_select_on_top():
     css = read("radmon.css") + "\n" + read("radmon-overlays.css")
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx")
     # Kontrak lapisan: backdrop 80 < dialog 90 < select portal 100 < toast 110.
     assert "--radmon-layer-backdrop" in css
     assert "--radmon-layer-dialog: 90" in css
@@ -100,23 +100,25 @@ def test_modal_stacking_keeps_background_mounted_and_select_on_top():
     assert "overflow-y: auto" in css
     # Dialog memakai portal Kumo (center, Escape/backdrop menutup via
     # onOpenChange) dan Select tetap portal body agar tidak ke-clip.
-    assert "Dialog.Root open={respondOpen} onOpenChange={changeRespondOpen}" in actions
+    assert "Dialog.Root open={dialogOpen} onOpenChange={changeDialogOpen}" in actions
     assert 'className="radmon-dialog mobile-sheet-dialog"' in actions
     # Saat menyimpan, Escape/backdrop diblokir agar POST tidak ganda/batal diam-diam.
-    assert 'if (!open && pending === "respond") return;' in actions
+    assert "if (!open && pending) return;" in actions
 
 
 def test_source_alarm_rows_have_real_source_ack_not_policy_event_response():
     alarms = read("pages/AlarmsPage.tsx")
+    actions = read("components/AlarmActions.tsx")
+    response = read("activeAlarms.ts")
     assert 'events={activeItems}' in alarms
     assert '"/api/v1/web/active-alarms"' in alarms
-    assert "/api/v1/control/alarms/${encodeURIComponent(event.source_id)}/${event.serid}/ack" in alarms
-    assert "source_i_flag !== 1" in alarms
-    assert "i_flag diperbarui" in alarms
+    assert "/api/v1/control/alarms/${encodeURIComponent(event.source_id)}/${event.serid}/ack" in response
+    assert "source_i_flag !== 1" in response
+    assert "Alarm sumber berhasil ditangani" in actions
 
 
 def test_response_trigger_is_gated_by_the_source_projection_and_fails_closed():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx")
     page = read("pages/AlarmsPage.tsx")
     active = read("activeAlarms.ts")
     assert "sourceEvents" in actions
@@ -128,3 +130,13 @@ def test_response_trigger_is_gated_by_the_source_projection_and_fails_closed():
     assert "source_active_count" not in page  # count is read from the canonical source item list
     assert "isSourceAlarmActionable" in active
     assert "source_actionable === false" in active
+
+
+def test_history_source_action_reuses_canonical_response_panel():
+    page = read("pages/AlarmsPage.tsx")
+    actions = read("components/AlarmActions.tsx")
+    assert "function SourceActionButton" in page
+    assert "Tindak lanjuti sumber" in page
+    assert "onAction={setActionEventId}" in page
+    assert "initialEventId={actionEventId}" in page
+    assert "setDialogOpen(true)" in actions

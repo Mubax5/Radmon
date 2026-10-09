@@ -7,8 +7,9 @@ import logging
 import os
 from typing import Any, Callable, Iterable
 
-from .security import SecurityStore
+from .datetime_utils import parse_database_datetime
 from .formatting import format_dose_value
+from .security import SecurityStore
 
 
 _SILENCE_DECISIONS = {'SUPPRESSED', 'RETRIGGER_LOCKED', 'COALESCED_DUPLICATE'}
@@ -17,21 +18,8 @@ _BACKOFF_SECONDS = (5, 15, 30, 60)
 _MAX_SOURCE_CLOCK_SKEW_SECONDS = max(1, int(os.getenv("RADMON_MAX_SOURCE_CLOCK_SKEW_SECONDS", "300")))
 _LOG = logging.getLogger(__name__)
 
-def _parse_dtom(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        try:
-            return datetime.fromisoformat(text.replace(" ", "T"))
-        except ValueError:
-            try:
-                return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                return None
-    return None
+# Retain the historical private import for integrations and older tests.
+_parse_dtom = parse_database_datetime
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -1031,7 +1019,7 @@ class LanAggregator:
                 item = dict(row)
                 item['_remote_serid'] = remote_serid
                 item['serid'] = central_serid
-                measured_at = _parse_dtom(item.get('dtom')) or item.get('dtom')
+                measured_at = parse_database_datetime(item.get('dtom')) or item.get('dtom')
                 if isinstance(measured_at, datetime):
                     item['dtom'] = measured_at
                     item['_policy_measured_at'] = measured_at - clock_offset
@@ -1145,7 +1133,7 @@ class LanAggregator:
                             # To get truly latest, fetch with large limit and take max.
                             # For fallback we need the absolute latest, so fetch again
                             # with no checkpoint if needed.
-                            candidate = max(rows, key=lambda r: _parse_dtom(r.get("dtom")) or datetime.min)
+                            candidate = max(rows, key=lambda r: parse_database_datetime(r.get("dtom")) or datetime.min)
                             latest_row = candidate
                         else:
                             # Try without checkpoint to get earliest -> not ideal, but try.
@@ -1156,7 +1144,7 @@ class LanAggregator:
                         continue
                 if latest_row is None:
                     continue
-                dtom = _parse_dtom(latest_row.get("dtom")) or latest_row.get("dtom")
+                dtom = parse_database_datetime(latest_row.get("dtom")) or latest_row.get("dtom")
                 if dtom is None or latest_row.get("doserate") is None:
                     continue
                 item = dict(dev)
@@ -1173,7 +1161,7 @@ class LanAggregator:
                     item["lastmea"] = dtom
                 if item.get("lastmeasec") is None:
                     item["lastmeasec"] = 2
-                measured_at = _parse_dtom(item.get("dtom"))
+                measured_at = parse_database_datetime(item.get("dtom"))
                 if isinstance(measured_at, datetime):
                     item["_policy_measured_at"] = measured_at - clock_offset
                     item["_source_clock_offset_seconds"] = clock_offset.total_seconds()
@@ -1211,7 +1199,7 @@ class LanAggregator:
             central_rows = [dict(row, serid=central_serid) for row in remote_rows]
             result.inserted_measurements = int(self.central.import_measurements(source.source_id, central_rows))
             last_time_raw = remote_rows[-1].get('dtom')
-            last_time = _parse_dtom(last_time_raw) or last_time_raw
+            last_time = parse_database_datetime(last_time_raw) or last_time_raw
             if not isinstance(last_time, datetime):
                 raise ValueError('remote measurement time tidak valid')
             self.checkpoints.save(source.source_id, remote_serid, last_time)

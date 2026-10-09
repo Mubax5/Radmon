@@ -74,6 +74,17 @@ export type ArchiveExportJob = {
   error: string | null;
 };
 
+export type Suppression = {
+  suppression_id: string;
+  serid: number;
+  expires_at: string;
+  pic: string;
+  reason: string;
+  ended_at?: string | null;
+  ended_reason?: string | null;
+  source_silence_state?: string;
+};
+
 const inFlightReads = new Map<string, Promise<unknown>>();
 
 async function performApi<T>(path: string, init?: RequestInit): Promise<T> {

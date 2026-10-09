@@ -164,7 +164,7 @@ def test_user_audit_and_responses_never_include_credentials(tmp_path):
 
 def test_user_management_ui_uses_native_dialog_forms_and_controls():
     source = ("web/src/pages/UsersPage.tsx")
-    actions = ("web/src/Actions.tsx")
+    actions = ("web/src/components/UserActions.tsx")
     from pathlib import Path
 
     users = Path(source).read_text(encoding="utf-8")

@@ -70,8 +70,8 @@ export function StationDetailPage() {
         <Input label="Nama" value={name} onChange={(event) => setName(event.target.value)} disabled={saving} />
         <Input label="Lokasi" value={location} onChange={(event) => setLocation(event.target.value)} disabled={saving} />
         <Input label="Deskripsi perangkat" value={description} onChange={(event) => setDescription(event.target.value)} disabled={saving} />
-        <Input label="Threshold peringatan" type="number" value={warnlevel} onChange={(event) => setWarnlevel(event.target.value)} disabled={saving} />
-        <Input label="Threshold alarm" type="number" value={alarmlevel} onChange={(event) => setAlarmlevel(event.target.value)} disabled={saving} />
+        <Input label="Ambang peringatan" type="number" value={warnlevel} onChange={(event) => setWarnlevel(event.target.value)} disabled={saving} />
+        <Input label="Ambang alarm" type="number" value={alarmlevel} onChange={(event) => setAlarmlevel(event.target.value)} disabled={saving} />
         <Input label="Batas idle (menit)" type="number" min="1" value={maxidlemin} onChange={(event) => setMaxidlemin(event.target.value)} disabled={saving} />
         <Input label="PIN" type="password" value={pin} onChange={(event) => setPin(event.target.value)} disabled={saving} />
         <div className="form-actions"><Button type="submit" variant="primary" disabled={saving || !pin || !name || !location}>Simpan perubahan</Button><Button type="button" variant="secondary" disabled={saving || !pin} onClick={() => void deleteStation()}>Hapus stasiun pusat</Button></div>

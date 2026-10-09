@@ -2,6 +2,23 @@
 
 RadMon adalah platform monitoring radiasi untuk central PC **`192.168.1.2`**. Production Windows dipasang melalui **`RadMon-Setup.exe`** dan dijalankan 24/7 oleh Scheduled Task `RadMon Server` menggunakan **`app\RadMon.exe --server`**. Operator tidak perlu login Windows atau membiarkan desktop PySide terbuka agar collector/API/web tetap hidup.
 
+> **Status dokumen:** perilaku source pada baseline `403efbce` (8 Oktober 2026)
+> telah diaudit di workspace. Ini bukan bukti bahwa baseline tersebut sudah
+> dipasang, dikonfigurasi, atau di-commission pada production.
+
+## Documentation map
+
+- [Architecture](docs/ARCHITECTURE.md) — component, data ownership, dan boundary.
+- [Installation](docs/INSTALLATION.md) — instalasi Windows dan commissioning.
+- [User manual](docs/USER-MANUAL.md) — workflow operator Bahasa Indonesia.
+- [Administrator guide](docs/ADMIN-GUIDE-ID.md) — user, station, Grafana,
+  archive, dan backup.
+- [API reference](docs/API-REFERENCE.md) — endpoint dan auth contract.
+- [Updater guide](docs/UPDATER-ID.md) — checksum, readiness, dan rollback.
+- [Troubleshooting](docs/TROUBLESHOOTING-ID.md) — diagnosis operator.
+- [Security review](docs/SECURITY-REVIEW-ID.md) — evidence dan residual risk.
+- [Offline manual](docs/manual/user-manual.html) dan [installation manual](docs/manual/installation.html) — file yang ikut installer.
+
 ## Surface production
 
 Dari perangkat yang tersambung ke jaringan BRIN dan mempunyai route ke server:
@@ -20,8 +37,9 @@ Remote anonymous tidak didukung. Grafana direct/anonymous, bila diperlukan
 untuk compatibility, hanya boleh berada di loopback server. **Viewer tetap
 wajib login RadMon**. Role aplikasi:
 
-- **Viewer** — Overview, Stations, History, Archives/Reports read-only.
-- **Operator** — Viewer + Alarm, Response/Silence, dan timed Suppression.
+- **Viewer** — Overview, Stations, History, Archives read-only.
+- **Operator** — Viewer + Reports, Alarm, Response/Silence, timed Suppression,
+  dan station editing dengan PIN.
 - **Administrator** — Operator + user/station/system administration dan akses editor Grafana.
 
 Frontend `/app` dibuild dari React + TypeScript + **Cloudflare Kumo UI** + Phosphor Icons. Node.js hanya dipakai saat build; production menyajikan static assets dari FastAPI sehingga tidak ada Node server 24/7.
@@ -112,7 +130,7 @@ Khusus central PC, `recent` adalah **rolling sample table tiga jam** dengan fiel
 
 `recent_last` adalah cache terpisah yang menyimpan paling banyak 30 pembacaan asli terbaru per detector untuk tampilan offline. Cache ini bukan source of truth, tidak memperpanjang window `recent`, dan tidak mengubah atau menghapus `measurement`.
 
-`vrecent` adalah view monitoring yang menggabungkan rolling `recent` dengan metadata `device` dan current runtime status. Grafana realtime, sparkline, trend dose tiga jam, dan current status membaca `vrecent` sehingga hot path tidak menyisir tabel `measurement` lima tahun. Panel event **Alarm Terbaru · 24 Jam** tetap membaca `alarm` karena event log itu mempunyai window yang berbeda dari rolling dose series.
+`vrecent` adalah view monitoring yang menggabungkan rolling `recent` dengan metadata `device` dan current runtime status. Panel current/latest dan status Grafana membaca `vrecent`; sparkline Page 1 dan trend Page 2 membaca sampel bertimestamp dari `recent` yang sudah dibatasi rolling window. Dengan demikian hot path tidak menyisir tabel `measurement` lima tahun. Tabel offline `recent_last` dipakai untuk menampilkan pembacaan asli beserta timestamp dan umur. Bila rolling sample kosong, view dapat memakai last-known sample asli dari `measurement`; status tetap `OFFLINE`. Panel event **Alarm Terbaru · 24 Jam** tetap membaca `alarm` karena event log itu mempunyai window yang berbeda dari rolling dose series.
 
 Saat upgrade dari schema lama, RadMon hanya merekonstruksi `recent`/`vrecent` central dari tiga jam terakhir `measurement`. Database source detector mempertahankan schema legacy miliknya dan **tidak dimigrasikan atau diubah oleh RadMon central**.
 
@@ -171,17 +189,23 @@ SET i_op = ?, pic = ?, note = ?, i_flag = 1
 WHERE serid = ? AND dtoa = ? AND i_flag = 0
 ```
 
-Kolom `ack` dipertahankan. Backend mengunci identitas `(serid, dtoa)`, compare-and-set `i_flag=0`, commit, lalu membaca kembali row yang sama dari source. Hasil `ALREADY_HANDLED` berarti row exact sudah `i_flag=1`; hasil source timeout, row mismatch, commit, atau read-back yang gagal tetap error aktif dan tidak menjadi sukses lokal. Jika source sedang gagal, silence/response diretry dengan backoff `5s, 15s, 30s, 60s` dan maksimum 25 pending row per live cycle. SQL/read-back membuktikan state database, bukan penerimaan bunyi buzzer fisik; bunyi hardware tetap memerlukan commissioning operator di detector.
+Kolom `ack` dipertahankan. Backend mengunci identitas `(serid, dtoa)`, compare-and-set `i_flag=0`, commit, lalu membaca kembali row yang sama dari source. Hasil `ALREADY_HANDLED` berarti row exact sudah `i_flag=1`; hasil source timeout, row mismatch, commit, atau read-back yang gagal tetap error aktif dan tidak menjadi sukses lokal. Source silence yang dipicu suppression diretry oleh live worker dengan backoff `5s, 15s, 30s, 60s` dan maksimum 25 pending row per cycle. Operator response biasa tidak diulang secara buta setelah hasil tidak pasti; tunggu observasi source/reconciliation sebelum tindakan berikutnya. SQL/read-back membuktikan state database, bukan penerimaan bunyi buzzer fisik; bunyi hardware tetap memerlukan commissioning operator di detector.
 
 ## Reports dan quarterly archive
 
 Workflow report tetap **Preview -> Print / Export PDF / Export CSV**. Quarter lama dapat dipindah ke archive **terverifikasi** melalui lifecycle `PENDING_DRAIN -> EXPORTING -> VERIFYING -> SEALED -> PURGING -> COMPLETE`. Sebelum **purge** central, backlog source sampai cutoff harus selesai dan bundle archive harus terverifikasi; source production tidak pernah dipurge oleh archive service.
 
+Rentang report maksimal **24 jam** (tepat 24 jam diperbolehkan). PDF penuh
+memuat seluruh measurement pada rentang sampai batas **50.000 row** dan alarm
+sampai batas **10.000 row**; job gagal jika data penuh tidak dapat dibaca.
+Preview maksimal **250 row** dan wajib diperlakukan sebagai partial. Timestamp
+report adalah WIB dan nilai dose rate ditampilkan dengan dua desimal.
+
 Bundle archive mencakup `manifest.json` dan `monthly-recap.csv`. Checkpoint/drain tetap diikat ke `source_id + SERID production`. Retensi minimum default **5 tahun** dan report archive dapat dibaca **tanpa restore** SQL.
 
 ## Grafana Monitoring TV
 
-Generator factory tetap menyediakan dashboard `Realtime -> Trends -> Operations`, refresh **2 detik**, dan **Playlist** interval **10 detik** untuk first seed/reset terkontrol. Continuous dose/time-series monitoring membaca rolling `vrecent` tiga jam; historical `measurement` tetap dikhususkan untuk History/Reports/Archive. Sesudah resource ada di Grafana, saved dashboard/playlist tidak ditimpa oleh startup RadMon.
+Generator factory tetap menyediakan dashboard `Realtime -> Trends -> Operations`, refresh **5 detik**, dan **Playlist** interval **30 detik** untuk first seed/reset terkontrol. Sparkline Realtime memakai window dashboard 30 menit; Trends memakai **Last 1 hour**, keduanya dari bounded `recent`. Current/status panels memakai `vrecent`, tabel offline memakai `recent_last`, dan historical `measurement` tetap dikhususkan untuk History/Reports/Archive. Sesudah resource ada di Grafana, saved dashboard/playlist tidak ditimpa oleh startup RadMon.
 
 ## WhatsApp alarm
 

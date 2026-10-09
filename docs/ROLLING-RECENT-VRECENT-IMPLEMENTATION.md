@@ -1,10 +1,18 @@
 # Rolling Recent/VRecent Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Historical implementation record.** This plan was written before the
+> rolling read model landed. The checklist is retained for traceability and is
+> not a current operator runbook or request to spawn agents.
+
+The implementation is present in the audited source baseline through
+`radmon/recent_read_model.py`, `central_service.py`, Grafana payload code, and
+the rolling/offline regression tests. The workspace documentation head is
+`403efbce` (8 October 2026); code/CI evidence still does not prove production
+deployment or commissioning.
 
 **Goal:** Replace central `recent`/`vrecent` with a safe three-hour rolling monitoring read model so Grafana and live overview never scan five-year `measurement` history while authoritative historical data remains unchanged.
 
-**Architecture:** Add a focused `RollingRecentManager` that owns only central `recent`/`vrecent` migration, reconciliation, cleanup, and view creation. Historical writes continue to `measurement` first; rolling writes mirror the same real samples into `recent`. Current-state consumers explicitly select the newest rolling row per SERID, while Grafana time-series reads directly from bounded `vrecent`.
+**Planned architecture:** Add a focused `RollingRecentManager` that owns only central `recent`/`vrecent` migration, reconciliation, cleanup, and view creation. Historical writes continue to `measurement` first; rolling writes mirror the same real samples into `recent`. Current-state consumers explicitly select the newest rolling row per SERID. In the landed implementation, Grafana time-series targets read bounded `recent` directly, while current/status targets read `vrecent` and the offline table reads `recent_last`.
 
 **Tech Stack:** Python 3.12, MariaDB, FastAPI, Grafana SQL payload generation, pytest, React/Vite CI, Windows PyInstaller/Inno Setup packaging.
 
@@ -339,7 +347,9 @@ Expected: archive export/verify/purge semantics remain green; only post-purge mo
 
 - [ ] **Step 1: Update README database section**
 
-Replace “`recent` is one-row snapshot” with rolling three-hour semantics, state that Grafana dose/time-series reads only `vrecent`, and state that source DB schemas are never migrated.
+Replace “`recent` is one-row snapshot” with rolling three-hour semantics, state
+that Grafana dose/time-series reads only the bounded rolling model (`recent` in
+the landed targets), and state that source DB schemas are never migrated.
 
 - [ ] **Step 2: Run full Linux CI-equivalent suite**
 

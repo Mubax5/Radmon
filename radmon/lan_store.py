@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
 import logging
 import time
 from typing import Any, Callable, Iterable
 
+from .datetime_utils import parse_database_datetime
 from .lan import MariaCentralStore, _shared_serids
 from .recent_read_model import (
     ROLLING_MIRROR_LOCK,
@@ -77,26 +77,12 @@ ON DUPLICATE KEY UPDATE
             ),
         )
 
-    @staticmethod
-    def _parse_dtom(value: Any) -> datetime | None:
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str):
-            text = value.strip()
-            if not text:
-                return None
-            try:
-                return datetime.fromisoformat(text.replace(" ", "T"))
-            except ValueError:
-                try:
-                    return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    return None
-        return None
+    # Compatibility alias for callers that reached the former class helper.
+    _parse_dtom = staticmethod(parse_database_datetime)
 
     @staticmethod
     def _rolling_row(row: dict[str, Any]) -> dict[str, Any] | None:
-        measured_at = BatchedMariaCentralStore._parse_dtom(row.get("dtom"))
+        measured_at = parse_database_datetime(row.get("dtom"))
         rate = row.get("doserate")
         if measured_at is None or rate is None:
             return None

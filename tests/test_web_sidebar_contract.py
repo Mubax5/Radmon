@@ -92,25 +92,25 @@ def test_api_errors_surface_backend_detail_for_401_403_409():
     alarms = read("pages/AlarmsPage.tsx")
     assert "<ErrorCard message={error} />" in alarms
     assert "<ErrorCard message={`Data alarm mungkin usang: ${error}`} />" in alarms
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx")
     assert "error instanceof Error ? error.message" in actions
 
 
 def test_alarm_response_posts_pin_to_real_event_endpoint():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx")
     response = read("activeAlarms.ts")
     assert "/api/v1/control/alarm-events/${encodeURIComponent(event.event_id)}/response" in response
     assert "alarmResponseRequest(selected" in actions
     assert '"pin, action, pic, reason"' in actions or "{ pin, action, pic, reason }" in actions
     # Tombol kirim terkunci sampai event + PIC + alasan + PIN terisi.
-    assert "!selectedEventId || !pic || !reason || !pin" in actions
+    assert "!selectedEvent || !pic || !reason || !pin" in actions
 
 
 def test_suppression_cancel_is_real_api_call_with_pin_and_reason():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx")
     assert "/api/v1/control/suppressions/${encodeURIComponent(item.suppression_id)}/cancel" in actions
     assert "{ pin: cancelPin, reason: cancelReason }" in actions
     # Bukan dummy: state dibersihkan, list dimuat ulang, sukses dilaporkan.
     assert 'setCancelOpen("")' in actions
     assert "onChanged()" in actions
-    assert "Suppression stasiun" in actions and "diakhiri" in actions
+    assert "Peredaman stasiun" in actions and "diakhiri" in actions

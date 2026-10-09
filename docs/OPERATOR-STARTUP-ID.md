@@ -1,62 +1,76 @@
 # Panduan operator: menjalankan dan memulihkan RadMon
 
-## Sekali klik
+## Tujuan
 
-Gunakan shortcut **RadMon** di Desktop atau Start Menu. Shortcut menjalankan
-`RadMon.exe --start` dari instalasi, biasanya:
+Gunakan panduan ini untuk membuka RadMon atau memulihkan komponen yang belum
+sehat tanpa membuat instance server kedua, menghapus data, atau mengubah
+database.
 
-`%LOCALAPPDATA%\RadMon\app\RadMon.exe`
+## Jalur normal
 
-Launcher memeriksa koneksi MariaDB (port konfigurasi, bawaan 3306), API RadMon
-(health endpoint di `127.0.0.1:8090`), dan Grafana (`/api/health`, biasanya port
-3300 atau 3000). Komponen yang sudah sehat dipakai kembali. Jika API belum aktif,
-launcher menjalankan Scheduled Task **RadMon Server**; jika task tidak ada atau
-tidak dapat dipakai, launcher memulai proses `RadMon.exe --server` yang dikelola.
-Server mengelola bootstrap Grafana. Launcher menunggu terbatas lalu menampilkan
-status tiap komponen beserta kegagalan yang terdeteksi.
+1. Gunakan shortcut **RadMon** di Desktop atau Start Menu.
+2. Launcher menjalankan `RadMon.exe --start`, memeriksa MariaDB, API RadMon,
+   dan Grafana, lalu memakai komponen yang sudah sehat.
+3. Gunakan shortcut **RadMon Monitoring** untuk membuka landing Grafana setelah
+   recovery check yang sama.
 
-Untuk monitoring, gunakan shortcut **RadMon Monitoring**. Shortcut itu juga
-melakukan pemeriksaan/pemulihan sebelum membuka halaman monitoring.
+Launcher memeriksa MariaDB pada host/port konfigurasi (bawaan `3306`), health
+API di `127.0.0.1:8090`, dan Grafana `/api/health` pada port configured (bawaan
+`3300`). MariaDB hanya diperiksa; launcher tidak memasang, mereset, atau
+merestart MariaDB.
 
-## Arti hasil status
+## Arti hasil
 
-- **sudah berjalan**: health check berhasil; tidak ada proses tambahan dibuat.
-- **dimulai / siap**: komponen berhasil aktif setelah pemulihan.
-- **tidak tersedia / timeout / gagal memulai**: launcher menyebut komponen dan
-  detail yang perlu diperiksa. Kegagalan satu komponen tidak menghentikan
-  komponen lain yang masih bisa digunakan.
-- MariaDB hanya diperiksa, tidak dipasang ulang atau dimulai ulang oleh launcher.
-  Jika tidak tersedia, pastikan layanan MariaDB yang sudah digunakan instalasi
-  berjalan dan menerima koneksi pada host/port konfigurasi.
+| Status | Arti dan tindakan |
+| --- | --- |
+| **sudah berjalan** | Health check berhasil; tidak ada proses tambahan. Buka halaman yang diminta. |
+| **dimulai / siap** | Komponen berhasil dipulihkan dan siap dipakai; login lalu verifikasi source health. |
+| **tidak tersedia / timeout / gagal memulai** | Komponen dan detail masalah disebutkan. Jangan menganggap komponen lain ikut gagal; lanjutkan diagnosis komponen tersebut. |
+
+Jika semua komponen yang diperlukan sehat, **hasil yang diharapkan** adalah
+Control Plane terbuka tanpa proses server kedua. Jika API belum aktif, launcher
+lebih dahulu mencoba Scheduled Task **RadMon Server**, kemudian fallback proses
+yang dikelola bila task tidak tersedia.
 
 ## Pemulihan manual
 
-1. Jalankan shortcut **RadMon** sekali lagi setelah membaca status; start aman
-   diulang dan tidak membuka server kedua jika API sudah sehat.
-2. Untuk menjalankan task layanan secara manual, buka PowerShell sebagai
-   administrator dan jalankan:
+1. Baca status launcher. Jalankan shortcut **RadMon** satu kali lagi hanya
+   setelah status menunjukkan komponen yang perlu dipulihkan.
+2. Administrator dapat memulai task secara manual dari PowerShell elevated:
 
    ```powershell
    Start-ScheduledTask -TaskName "RadMon Server"
    ```
 
-   Bila task belum terdaftar, gunakan launcher EXE:
+   Jika task belum terdaftar, gunakan launcher yang dipaketkan:
 
    ```powershell
    & "$env:LOCALAPPDATA\RadMon\app\RadMon.exe" --start
    ```
 
-3. Periksa `http://127.0.0.1:8090/health` untuk API. Log aplikasi berada di
-   `%LOCALAPPDATA%\RadMon\runtime\logs`; log Grafana dikelola di folder runtime
-   Grafana.
-4. Jika MariaDB tidak sehat, eskalasikan ke administrator layanan/database
-   untuk memeriksa layanan dan koneksi. Setelah pulih, jalankan shortcut RadMon
-   lagi.
+3. Baca health API:
 
-Jangan menghapus folder `config`, `runtime`, `archives`, database, atau data
-Grafana untuk pemulihan. Jangan menghentikan/mengakhiri proses secara paksa;
-launcher menggunakan health check dan reuse untuk menghindari duplikasi.
+   ```powershell
+   Invoke-RestMethod http://127.0.0.1:8090/health
+   Invoke-RestMethod http://127.0.0.1:3300/api/health
+   ```
 
-Untuk diagnosis port, datasource Grafana, query kosong, sumber LAN, checksum
+4. Periksa log di `%LOCALAPPDATA%\RadMon\runtime\logs`, termasuk log Grafana
+   bila digunakan.
+5. Jika MariaDB atau source LAN tidak sehat, eskalasikan kepada administrator
+   layanan/database/jaringan. Setelah perbaikan, ulangi shortcut RadMon satu
+   kali dan verifikasi hasilnya.
+
+## Larangan pemulihan
+
+Jangan:
+
+- menjalankan beberapa `--server` atau shortcut berulang tanpa membaca status;
+- membunuh semua proses Python atau menghapus `runtime`;
+- menghapus `config`, security DB, checkpoint, `archives`, `reports`,
+  `grafana.db`, atau history;
+- membuka port `3300`, `3306`, atau `47652` ke LAN sebagai jalan pintas.
+
+Untuk datasource error, query kosong, data offline, source LAN, checksum
 update, dan log yang aman dibagikan, lanjutkan ke
-[Panduan troubleshooting operator](TROUBLESHOOTING-ID.md).
+[Troubleshooting operator](TROUBLESHOOTING-ID.md).

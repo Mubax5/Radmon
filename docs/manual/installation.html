@@ -3,18 +3,80 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RadMon - Installation</title>
+  <meta name="description" content="Panduan instalasi dan commissioning RadMon Windows">
+  <title>RadMon — Panduan instalasi</title>
   <link rel="stylesheet" href="manual.css">
 </head>
 <body>
-  <main>
-    <h1>RadMon Installation Guide</h1>
-    <p>Production Windows dipasang melalui <strong>RadMon-Setup.exe</strong>. Installer menempatkan <strong>app\RadMon.exe</strong>, membuat <code>config\.env</code> bila belum ada, mendaftarkan Scheduled Task <strong>RadMon Server</strong>, dan membuka hanya gateway TCP 8090 untuk client jaringan. Grafana 3300 tetap loopback-only.</p>
+  <header class="site-header">
+    <p class="eyebrow">RadMon · Manual production</p>
+    <h1>Panduan instalasi</h1>
+    <p class="lede">Instalasi Windows, konfigurasi awal, network boundary, upgrade, dan commissioning. Credential pada contoh selalu placeholder.</p>
+    <nav aria-label="Navigasi manual">
+      <a href="user-manual.html">Pengguna</a>
+      <a href="installation.html" aria-current="page">Instalasi</a>
+    </nav>
+  </header>
 
-    <h2>Layout persistent</h2>
-    <pre>RadMon\
+  <main>
+    <section class="note">
+      <h2>Sebelum mulai</h2>
+      <ul>
+        <li>Gunakan akun Windows Administrator.</li>
+        <li>Siapkan account MariaDB least-privilege untuk central dan source LAN.</li>
+        <li>Siapkan Grafana native, reverse proxy HTTPS, trusted proxy network, allowed origin, firewall, dan ACL NTFS.</li>
+        <li>Siapkan backup yang sudah diuji restore sebelum upgrade atau migrasi.</li>
+      </ul>
+    </section>
+
+    <section id="initial-install">
+      <h2>Instalasi awal</h2>
+      <ol>
+        <li>Jalankan <strong>RadMon-Setup.exe</strong> sebagai Administrator.</li>
+        <li>Installer memasang application tree, membuat <code>config\.env</code> bila belum ada, mendaftarkan task <strong>RadMon Server</strong>, dan mendaftarkan <strong>RadMon Updater</strong>.</li>
+        <li>Edit <code>config\.env</code> dengan nilai lokal yang disetujui. Contoh berikut tidak berisi credential nyata:</li>
+      </ol>
+      <pre>RADMON_CENTRAL_HOST=192.168.1.2
+RADMON_DB_HOST=localhost
+RADMON_DB_NAME=ipradmon
+RADMON_DB_USER=&lt;CENTRAL_DB_USER&gt;
+RADMON_DB_PASSWORD=&lt;CENTRAL_DB_PASSWORD&gt;
+
+RADMON_LAN_ENABLED=1
+RADMON_LAN_SOURCES=gd50@192.168.1.50;gd52@192.168.1.52;gd38@192.168.1.38
+RADMON_LAN_DB_PORT=3306
+RADMON_LAN_DB_USER=&lt;SOURCE_DB_USER&gt;
+RADMON_LAN_DB_PASSWORD=&lt;SOURCE_DB_PASSWORD&gt;
+RADMON_LAN_DB_NAME=ipradmon
+
+RADMON_BOOTSTRAP_ADMIN_USER=&lt;ADMIN_USERNAME&gt;
+RADMON_BOOTSTRAP_ADMIN_PASSWORD=&lt;BOOTSTRAP_PASSWORD&gt;
+RADMON_BOOTSTRAP_ADMIN_PIN=&lt;BOOTSTRAP_PIN&gt;
+
+RADMON_GRAFANA_PORT=3300
+RADMON_GRAFANA_USER=admin
+RADMON_GRAFANA_PASSWORD=GENERATE_ON_FIRST_START
+RADMON_GRAFANA_DOCKER_FALLBACK=0
+
+RADMON_WEB_COOKIE_SECURE=1
+RADMON_TRUSTED_PROXY_NETS=&lt;TRUSTED_PROXY_CIDR&gt;
+RADMON_WEB_ALLOWED_ORIGINS=https://monitoring.example</pre>
+      <ol start="4">
+        <li>Jika Grafana tidak ditemukan otomatis, isi <code>RADMON_GRAFANA_BIN</code> dengan path lokal ke <code>grafana-server.exe</code>.</li>
+        <li>Pastikan reverse proxy HTTPS meneruskan origin dan forwarded protocol yang benar.</li>
+        <li>Restart task <strong>RadMon Server</strong> atau reboot Windows.</li>
+        <li>Login sebagai bootstrap Administrator, lalu hapus credential bootstrap dari <code>.env</code> setelah user terbentuk.</li>
+      </ol>
+      <p class="success"><strong>Hasil yang diharapkan:</strong> task berjalan sebagai SYSTEM saat boot, API tersedia melalui gateway 8090, Grafana tetap loopback pada 3300, dan client remote dapat login melalui HTTPS setelah routing/ACL diizinkan.</p>
+      <p class="warning"><strong>Pengecualian:</strong> <code>admin/admin</code>, password kosong, dan secret lemah ditolak. Konflik 3300 harus diperbaiki; RadMon tidak berpindah diam-diam ke 3301/3302.</p>
+    </section>
+
+    <section id="layout">
+      <h2>Layout persistent</h2>
+      <pre>RadMon\
   app\
     RadMon.exe
+    RadMon Admin.exe
     web\
     docs\manual\
     grafana\
@@ -23,44 +85,56 @@
     .env
   runtime\
   archives\
-  reports\</pre>
+  reports\
+  updater\</pre>
+      <p><code>config\.env</code>, <code>runtime</code>, <code>archives</code>, dan <code>reports</code> dipertahankan saat upgrade. Manual HTML berada di <code>app\docs\manual\</code>; file Markdown source tidak seluruhnya ikut installer.</p>
+    </section>
 
-    <h2>First installation pada central PC 192.168.1.2</h2>
-    <ol>
-      <li>Jalankan <code>RadMon-Setup.exe</code> sebagai Administrator.</li>
-      <li>Edit <code>config\.env</code> dan isi central/source database credential.</li>
-      <li>Untuk security DB baru, isi <code>RADMON_BOOTSTRAP_ADMIN_USER</code>, password, dan PIN satu kali.</li>
-       <li>Pastikan Grafana native tersedia di port 3300; isi <code>RADMON_GRAFANA_BIN</code> bila lokasinya non-standar. Gunakan secret Grafana unik, bukan <code>admin/admin</code>.</li>
-      <li>Restart Scheduled Task <code>RadMon Server</code> atau reboot setelah konfigurasi lengkap.</li>
-    </ol>
+    <section id="boundary">
+      <h2>URL dan network boundary</h2>
+      <pre>https://monitoring.example/    Grafana monitoring, session RadMon wajib
+https://monitoring.example/app Control Plane, session RadMon wajib
+http://127.0.0.1:3300         Grafana admin/editor lokal</pre>
+      <p>Firewall host membuka TCP <code>8090</code> untuk routed clients sesuai boundary BRIN-NET. Port <code>3300</code>, <code>3306</code>, dan <code>47652</code> bukan port client web. Jangan membuka database atau Grafana direct ke LAN sebagai jalan pintas.</p>
+    </section>
 
-    <h2>URL</h2>
-     <pre>https://monitoring.example/    Grafana monitoring kiosk, wajib login RadMon
- https://monitoring.example/app RadMon Control Plane, wajib login
- http://localhost:3300          Grafana admin/editor hanya pada PC server</pre>
+    <section id="lifecycle">
+      <h2>Headless 24/7</h2>
+      <p>Scheduled Task menjalankan:</p>
+      <pre>app\RadMon.exe --server</pre>
+      <p>Task memakai startup Windows sebagai SYSTEM, tersedia saat sistem kembali online, mengabaikan instance ganda, dan melakukan restart bounded sesuai konfigurasi. Shortcut <strong>RadMon</strong> memakai <code>--start</code> untuk recovery aman; shortcut <strong>RadMon Monitoring</strong> membuka landing monitoring.</p>
+    </section>
 
-     <p>Client BRIN-NET memakai reverse proxy HTTPS menuju gateway 8090. Grafana monitoring diproxy oleh RadMon sehingga browser remote tidak perlu dan tidak diberi akses inbound langsung ke 3300. Viewer, Operator, dan Administrator semuanya wajib login RadMon; remote anonymous tidak didukung.</p>
+    <section id="upgrade">
+      <h2>Upgrade</h2>
+      <ol>
+        <li>Pastikan backup terbaru dan restore drill owner masih valid.</li>
+        <li>Pastikan tidak ada credential production yang belum dicatat dalam change record.</li>
+        <li>Biarkan updater terverifikasi atau jalankan installer release yang telah disetujui sebagai Administrator.</li>
+        <li>Updater memeriksa ancestry release, checksum SHA-256, marker, dan readiness health stabil. Application tree lama dipulihkan jika validasi gagal.</li>
+        <li>Sesudah berhasil, verifikasi health, login/RBAC, source health, Grafana persistence, alarm, report, dan akses satu client BRIN-NET.</li>
+      </ol>
+      <p>Jangan menghapus backup atau staging diagnostik sebelum validasi selesai.</p>
+    </section>
 
-    <h2>Grafana persistent</h2>
-    <p>Production normal memakai Grafana native, bukan Docker Desktop. Factory dashboard hanya di-seed jika resource belum ada. Dashboard yang sudah tersimpan tidak di-overwrite pada startup. Administrator dapat Edit dan Save dari <code>localhost:3300</code>; hasil Save langsung dipakai monitoring dan tetap ada setelah restart atau upgrade.</p>
-
-    <h2>BRIN-NET</h2>
-    <p>Windows Firewall membuka TCP 8090 untuk routed clients agar VLAN/subnet BRIN-NET tidak dibatasi ke LocalSubnet. Routing/ACL Wi-Fi BRIN tetap harus mengizinkan client menuju <code>192.168.1.2:8090</code>; client isolation atau ACL jaringan yang menolak route harus dibuka oleh pengelola jaringan BRIN.</p>
-
-    <h2>24/7 Windows lifecycle</h2>
-    <p>Scheduled Task menjalankan <code>app\RadMon.exe --server</code> sebagai SYSTEM saat startup Windows dan mencoba restart otomatis bila proses berhenti. Menutup browser tidak mematikan server.</p>
-
-    <h2>Upgrade</h2>
-     <p>Jalankan updater/installer baru sebagai Administrator. Updater men-stage release lama, memeriksa marker dan readiness, lalu memulihkan release lama bila gagal. <code>config\.env</code>, <code>runtime\</code>, <code>archives\</code>, dan <code>reports\</code> tetap dipertahankan.</p>
-
-    <h2>Source production</h2>
-    <pre>gd50 -&gt; 192.168.1.50:3306 / ipradmon
-gd52 -&gt; 192.168.1.52:3306 / ipradmon
-gd38 -&gt; 192.168.1.38:3306 / ipradmon</pre>
-    <p>RadMon tidak melakukan DDL pada database source production.</p>
-
-    <h2>Commissioning</h2>
-    <p>Verifikasi source health, login/RBAC, monitoring Grafana, persistence setelah restart, alarm Response/Silence, report/archive, serta akses dari minimal satu client BRIN-NET selain PC server. CI dan smoke test installer tidak menggantikan commissioning hardware/jaringan nyata.</p>
+    <section id="commissioning">
+      <h2>Commissioning wajib</h2>
+      <p>CI dan smoke test hanya memverifikasi artifact serta kontrak source. Simpan evidence untuk:</p>
+      <ul>
+        <li>koneksi dan authentication central MariaDB serta source `.50`, `.52`, `.38`;</li>
+        <li>HTTPS, trusted proxy, allowed origin, firewall 8090, dan akses client BRIN-NET;</li>
+        <li>ACL NTFS pada `.env`, runtime, archive, report, dan security DB;</li>
+        <li>login role, Grafana datasource least privilege, transport/certificate, dan persistence;</li>
+        <li>rolling three-hour view, offline last-reading dengan timestamp asli, serta pembedaan datasource error dan query kosong;</li>
+        <li>source response `i_flag=0` menjadi `i_flag=1` dengan `ack` tidak berubah, retry/error handling, suppression, buzzer acceptance;</li>
+        <li>report 24 jam, full rows versus partial preview 250 baris, archive export, dan restore nyata.</li>
+      </ul>
+      <p class="warning">Source code dan CI tidak merupakan sertifikasi keamanan, tidak membuktikan production deployment, dan tidak membuktikan buzzer fisik.</p>
+    </section>
   </main>
+
+  <footer>
+    <p>Setelah instalasi, buka <a href="user-manual.html">Manual pengguna</a> untuk workflow operator.</p>
+  </footer>
 </body>
 </html>

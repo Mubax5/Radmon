@@ -23,12 +23,12 @@ class AlarmPolicyService:
         raise ValueError("waktu pengukuran tidak valid")
 
     @staticmethod
-    def _float(row: dict[str, Any], key: str, default: float = 0.0) -> float:
+    def _numeric_value(row: dict[str, Any], key: str, default: float = 0.0) -> float:
         value = row.get(key)
         return default if value is None else float(value)
 
     @staticmethod
-    def _naive(value: datetime) -> datetime:
+    def _without_timezone(value: datetime) -> datetime:
         return value.replace(tzinfo=None) if value.tzinfo is not None else value
 
     def _is_fresh_live_row(self, row: dict[str, Any], measured_at: datetime) -> bool:
@@ -36,7 +36,7 @@ class AlarmPolicyService:
         if not isinstance(observed_at, datetime):
             return True
         try:
-            age = self._naive(observed_at) - self._naive(measured_at)
+            age = self._without_timezone(observed_at) - self._without_timezone(measured_at)
             return timedelta(seconds=-5) <= age <= timedelta(minutes=max(1, int(row.get("maxidlemin") or 1)))
         except (TypeError, ValueError, OverflowError):
             return False
@@ -71,9 +71,9 @@ class AlarmPolicyService:
     def evaluate_live(self, row: dict[str, Any], *, source_id: str | None = None) -> dict[str, Any]:
         serid = int(row["serid"])
         measured_at = self._measurement_time(row)
-        dose_rate = self._float(row, "doserate")
-        warnlevel = self._float(row, "warnlevel")
-        alarmlevel = self._float(row, "alarmlevel")
+        dose_rate = self._numeric_value(row, "doserate")
+        warnlevel = self._numeric_value(row, "warnlevel")
+        alarmlevel = self._numeric_value(row, "alarmlevel")
         underlying = "NORMAL" if dose_rate < warnlevel else "ALERT" if dose_rate < alarmlevel else "ALARM"
         threshold = warnlevel if underlying == "ALERT" else alarmlevel
 
@@ -393,7 +393,7 @@ class AlarmPolicyService:
         if event is not None:
             # Compare normalized event occurrence times, while requiring source
             # and remote detector identity before coalescing the mirrored row.
-            same_source_sample = event.source_id == source_id and abs((self._naive(event.surfaced_at) - self._naive(event_time)).total_seconds()) <= 5
+            same_source_sample = event.source_id == source_id and abs((self._without_timezone(event.surfaced_at) - self._without_timezone(event_time)).total_seconds()) <= 5
             if event.remote_serid is not None:
                 same_source_sample = same_source_sample and event.remote_serid == remote_serid
             if not same_source_sample:
@@ -403,7 +403,7 @@ class AlarmPolicyService:
             # original active event as the durable correlation for late rows.
             candidate = self.store.active_suppression_event(serid, suppression.suppression_id, source_id)
             if candidate is not None:
-                time_matches = abs((self._naive(candidate.surfaced_at) - self._naive(event_time)).total_seconds()) <= 5
+                time_matches = abs((self._without_timezone(candidate.surfaced_at) - self._without_timezone(event_time)).total_seconds()) <= 5
                 if time_matches and candidate.remote_serid in (None, remote_serid):
                     event = candidate
         if historical:

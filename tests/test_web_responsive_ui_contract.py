@@ -80,9 +80,9 @@ def test_primary_page_copy_defaults_to_indonesian():
         "pages/StationsPage.tsx": ("Stasiun", "Cari", "Detail stasiun"),
         "pages/HistoryPage.tsx": ("Riwayat", "pengukuran", "Pengukuran terbaru"),
         "pages/ArchivesPage.tsx": ("Arsip", "Daftar arsip"),
-        "pages/AlarmsPage.tsx": ("Tindakan operator", "Respons alarm", "Riwayat alarm"),
+            "pages/AlarmsPage.tsx": ("Tindakan operator", "Alarm aktif", "Riwayat alarm"),
         "pages/UsersPage.tsx": ("Pengguna", "Buat pengguna"),
-        "pages/SystemPage.tsx": ("Sistem", "Kesehatan source", "Administrasi Grafana"),
+            "pages/SystemPage.tsx": ("Sistem", "Kesehatan sumber LAN", "Administrasi"),
     }
     for path, phrases in expectations.items():
         source = read(path)
@@ -183,7 +183,7 @@ def test_dialogs_and_mobile_navigation_reserve_viewport_space():
 
 
 def test_mutating_forms_have_pending_guards():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx") + read("components/UserActions.tsx")
     assert "pending" in actions
     assert "disabled={" in actions
 

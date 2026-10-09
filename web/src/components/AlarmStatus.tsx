@@ -32,8 +32,8 @@ export function AlarmStatus({ station, onAction }: { station: Station; onAction?
   const label = presentation === "alarm"
     ? "ALARM aktif — perlu tindakan"
     : presentation === "warning"
-      ? hasActiveThresholdEvent(station) ? "LOW threshold aktif — perlu tindakan" : station.status === "alarm" ? `Threshold alarm — policy ${station.policy_state === "SUPPRESSED" ? "tersupresi" : "terkunci"}` : "Peringatan threshold"
-      : "Event alarm terakhir — data offline, tidak sedang berbunyi";
+      ? hasActiveThresholdEvent(station) ? "Ambang rendah aktif — perlu tindakan" : station.status === "alarm" ? `Ambang alarm — aturan ${station.policy_state === "SUPPRESSED" ? "diredam" : "terkunci"}` : "Peringatan ambang"
+      : "Alarm terakhir — data offline, tidak sedang berbunyi";
   const isActive = hasActiveThresholdEvent(station);
   return (
     <span className={`alarm-status alarm-status-${presentation}`}>
@@ -65,7 +65,7 @@ function DeduplicatedAlarmNotification({ station, onAction }: { station: Station
   return (
     <div className={`alarm-notification ${station.status === "warning" ? "is-warning" : "is-alarm"}`} role="alert" aria-live="assertive" aria-atomic="true">
       <span className="alarm-status-dot is-blinking" aria-hidden="true" />
-      <span><strong>{station.status === "alarm" ? "HIGH threshold aktif:" : "LOW threshold aktif:"}</strong> {station.name} ({formatDoseValue(station.doserate)} {station.unit})</span>
+      <span><strong>{station.status === "alarm" ? "Ambang tinggi aktif:" : "Ambang rendah aktif:"}</strong> {station.name} ({formatDoseValue(station.doserate)} {station.unit})</span>
       {onAction ? <button type="button" className="alarm-action-link" onClick={() => onAction(station)}>Buka tindakan alarm</button> : null}
       <button type="button" className="alarm-notification-dismiss" onClick={() => setVisible(false)} aria-label="Tutup notifikasi alarm">Tutup</button>
     </div>

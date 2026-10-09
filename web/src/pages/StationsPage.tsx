@@ -71,7 +71,7 @@ export function StationsPage() {
     const warnlevel = Number(newWarnlevel);
     const alarmlevel = Number(newAlarmlevel);
     const maxidlemin = Number(newMaxidlemin);
-    if (![warnlevel, alarmlevel, maxidlemin].every(Number.isFinite) || warnlevel < 0 || alarmlevel < warnlevel || maxidlemin < 1 || !Number.isInteger(maxidlemin)) { setError("Threshold dan batas idle tidak valid"); return; }
+    if (![warnlevel, alarmlevel, maxidlemin].every(Number.isFinite) || warnlevel < 0 || alarmlevel < warnlevel || maxidlemin < 1 || !Number.isInteger(maxidlemin)) { setError("Ambang dan batas idle tidak valid"); return; }
     setCreating(true);
     try {
       await api("/api/v1/control/stations", { method: "POST", body: JSON.stringify({ pin: newPin, serid, values: { name: newName, location: newLocation, description: newDescription, warnlevel, alarmlevel, maxidlemin } }) });
@@ -165,8 +165,8 @@ export function StationsPage() {
                   <Input label="Nama" value={newName} onChange={(event) => setNewName(event.target.value)} disabled={creating} />
                   <Input label="Lokasi" value={newLocation} onChange={(event) => setNewLocation(event.target.value)} disabled={creating} />
                   <Input label="Deskripsi perangkat" value={newDescription} onChange={(event) => setNewDescription(event.target.value)} disabled={creating} />
-                  <Input label="Threshold peringatan" type="number" min="0" value={newWarnlevel} onChange={(event) => setNewWarnlevel(event.target.value)} disabled={creating} />
-                  <Input label="Threshold alarm" type="number" min="0" value={newAlarmlevel} onChange={(event) => setNewAlarmlevel(event.target.value)} disabled={creating} />
+                  <Input label="Ambang peringatan" type="number" min="0" value={newWarnlevel} onChange={(event) => setNewWarnlevel(event.target.value)} disabled={creating} />
+                  <Input label="Ambang alarm" type="number" min="0" value={newAlarmlevel} onChange={(event) => setNewAlarmlevel(event.target.value)} disabled={creating} />
                   <Input label="Batas idle (menit)" type="number" min="1" value={newMaxidlemin} onChange={(event) => setNewMaxidlemin(event.target.value)} disabled={creating} />
                   <Input label="PIN" type="password" value={newPin} onChange={(event) => setNewPin(event.target.value)} disabled={creating} />
                   {error ? <div className="form-error" role="alert">{error}</div> : null}

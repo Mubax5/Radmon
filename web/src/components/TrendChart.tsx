@@ -102,7 +102,7 @@ export function TrendChart({ points, unit }: { points: TrendPoint[]; unit: strin
   }, [finite]);
 
   if (finite.length === 0) {
-    return <div className="trend-chart-empty">Belum ada measurement untuk rentang ini.</div>;
+    return <div className="trend-chart-empty">Belum ada pengukuran untuk rentang ini.</div>;
   }
 
   const plotPoints = layout.plotPoints;
@@ -167,7 +167,7 @@ export function TrendChart({ points, unit }: { points: TrendPoint[]; unit: strin
           onPointerCancel={() => setActiveIndex(null)}
         >
           <title id="dose-trend-title">Tren dose rate</title>
-          <desc id="dose-trend-desc">Measurement dose rate terbaru dalam {unit}. Arahkan pointer atau gunakan tombol panah untuk memeriksa titik.</desc>
+          <desc id="dose-trend-desc">Laju dosis terbaru dalam {unit}. Arahkan pointer atau gunakan tombol panah untuk memeriksa titik.</desc>
 
           {layout.yTicks.map((tick, index) => (
             <g key={`y-${index}`}>
@@ -255,7 +255,7 @@ export function TrendChart({ points, unit }: { points: TrendPoint[]; unit: strin
           </div>
         ) : null}
       </div>
-      <div className="trend-chart-hint">Sentuh/geser grafik atau gunakan tombol panah untuk melihat nilai.</div>
+      <div className="trend-chart-hint">Sentuh atau geser grafik, atau gunakan tombol panah untuk melihat nilai.</div>
     </div>
   );
 }

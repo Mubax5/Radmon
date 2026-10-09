@@ -4,29 +4,16 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from .central_api import CentralMariaDBRepository
+from .datetime_utils import parse_database_datetime
 from .lan import LIVE_KEYS, RemoteMariaDBSource
 
 
-def _parse_dtom(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        text = value.strip()
-        if not text:
-            return None
-        try:
-            # MariaDB DATETIME string like "2026-09-28 14:03:00" or ISO.
-            return datetime.fromisoformat(text.replace(" ", "T"))
-        except ValueError:
-            try:
-                return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                return None
-    return None
+# Retain the historical private import for downstream source adapters.
+_parse_dtom = parse_database_datetime
 
 
 def _snapshot_needs_measurement_fallback(row: dict[str, Any]) -> bool:
-    measured_at = _parse_dtom(row.get("dtom"))
+    measured_at = parse_database_datetime(row.get("dtom"))
     if measured_at is None:
         return True
 
@@ -98,7 +85,7 @@ ORDER BY dtom DESC LIMIT 1""",
                             if isinstance(latest_raw, dict)
                             else dict(zip(("serid", "dtom", "doserate", "dose"), latest_raw))
                         )
-                        latest_at = _parse_dtom(latest.get("dtom"))
+                        latest_at = parse_database_datetime(latest.get("dtom"))
                         if latest_at is None:
                             continue
                         rows.append({**dev, "dtom": latest_at, "doserate": latest.get("doserate"), "dose": latest.get("dose"), "lastrate": latest.get("doserate"), "minrate": None, "maxrate": None, "avgrate": None, "lastdose": None, "mindose": None, "maxdose": None, "avgdose": None, "firstmea": None, "lastmea": latest_at, "lastmeasec": 2, "meacount": 1})
@@ -125,8 +112,8 @@ ORDER BY dtom DESC LIMIT 1""",
                         if isinstance(latest_raw, dict)
                         else dict(zip(("serid", "dtom", "doserate", "dose"), latest_raw))
                     )
-                    latest_at = _parse_dtom(latest.get("dtom"))
-                    current_at = _parse_dtom(row.get("dtom"))
+                    latest_at = parse_database_datetime(latest.get("dtom"))
+                    current_at = parse_database_datetime(row.get("dtom"))
                     if latest_at is None:
                         continue
                     if isinstance(current_at, datetime) and latest_at <= current_at:

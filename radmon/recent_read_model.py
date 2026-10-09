@@ -5,7 +5,8 @@ import threading
 import time
 from typing import Any, Callable, Iterable
 
-from .db import connect_mariadb
+from .datetime_utils import parse_database_datetime
+from .db import connect_mariadb, database_row_value
 
 
 LOG = logging.getLogger(__name__)
@@ -65,13 +66,8 @@ class RollingRecentManager:
             f"INTERVAL {self.retention_hours} HOUR)"
         )
 
-    @staticmethod
-    def _row_value(row: Any, key: str, index: int) -> Any:
-        if row is None:
-            return None
-        if isinstance(row, dict):
-            return row.get(key)
-        return row[index]
+    # Compatibility alias for callers that reached the former private helper.
+    _parse_dtom = staticmethod(parse_database_datetime)
 
     def _table_columns(self, cursor: Any, table: str) -> set[str]:
         cursor.execute(
@@ -80,7 +76,7 @@ class RollingRecentManager:
             (self.settings.db_name, table),
         )
         return {
-            str(self._row_value(row, "COLUMN_NAME", 0)).lower()
+            str(database_row_value(row, "COLUMN_NAME", 0)).lower()
             for row in cursor.fetchall()
         }
 
@@ -91,7 +87,7 @@ class RollingRecentManager:
             (self.settings.db_name, table),
         )
         return {
-            str(self._row_value(row, "INDEX_NAME", 0)).lower()
+            str(database_row_value(row, "INDEX_NAME", 0)).lower()
             for row in cursor.fetchall()
         }
 
@@ -145,32 +141,15 @@ WHERE ? >= ?
                 hot_params + (dtom, hot_cutoff),
             )
 
-    @staticmethod
-    def _parse_dtom(value: Any):
-        from datetime import datetime
-
-        if isinstance(value, datetime):
-            return value
-        if isinstance(value, str):
-            text = value.strip()
-            if not text:
-                return None
-            try:
-                return datetime.fromisoformat(text.replace(" ", "T"))
-            except ValueError:
-                try:
-                    return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    return None
-        return None
-
     def mirror_samples(self, cursor: Any, rows: Iterable[dict[str, Any]]) -> int:
         hot_cutoff = self._database_cutoff(cursor)
         mirrored = 0
         for row in rows:
             raw_dtom = row.get("dtom")
             # Accept both datetime and MariaDB string representation.
-            dtom = self._parse_dtom(raw_dtom) if not hasattr(raw_dtom, "year") else raw_dtom
+            dtom = parse_database_datetime(raw_dtom)
+            if dtom is None and hasattr(raw_dtom, "year"):
+                dtom = raw_dtom
             # Fallback: if parse failed but raw was string, keep raw for DB driver
             # to attempt conversion; only skip if truly None.
             if raw_dtom is None or row.get("doserate") is None:
@@ -217,7 +196,7 @@ WHERE ? >= ?
         """Read one WIB cutoff from MariaDB for a coherent reconcile pass."""
         cursor.execute(f"SELECT {self._cutoff_sql} AS cutoff")
         row = cursor.fetchone()
-        value = self._row_value(row, "cutoff", 0)
+        value = database_row_value(row, "cutoff", 0)
         return value if getattr(value, "year", None) is not None else None
 
     def _cutoff_clause(self, cutoff: Any | None) -> tuple[str, tuple[Any, ...]]:
@@ -247,7 +226,7 @@ WHERE ? >= ?
             cursor.execute(f"SELECT DISTINCT serid FROM {OFFLINE_LAST_TABLE}")
             cache_serids = cursor.fetchall()
             for raw_serid in cache_serids:
-                serid = self._row_value(raw_serid, "serid", 0)
+                serid = database_row_value(raw_serid, "serid", 0)
                 cursor.execute(
                     f"""
 SELECT dtom FROM {OFFLINE_LAST_TABLE}
@@ -263,7 +242,7 @@ LIMIT {OFFLINE_LAST_READING_LIMIT + 1}
                     # older than the boundary is collision-safe and removes a
                     # backlog in one indexed range delete rather than one row
                     # per cleanup tick.
-                    boundary = self._row_value(
+                    boundary = database_row_value(
                         cached_rows[OFFLINE_LAST_READING_LIMIT], "dtom", 0
                     )
                     cursor.execute(
@@ -415,7 +394,7 @@ WHERE dtom >= {cutoff_sql}
             # readings; this does not scan the full historical table.
             cursor.execute("SELECT DISTINCT serid FROM device ORDER BY serid")
             for raw_serid in cursor.fetchall():
-                serid = self._row_value(raw_serid, "serid", 0)
+                serid = database_row_value(raw_serid, "serid", 0)
                 cursor.execute(
                     f"""
 INSERT IGNORE INTO {table}
@@ -444,7 +423,7 @@ WHERE r.dtom < {cutoff_sql}""",
             cutoff_params,
         )
         row = cursor.fetchone()
-        expired = int(self._row_value(row, "COUNT(*)", 0) or 0)
+        expired = int(database_row_value(row, "COUNT(*)", 0) or 0)
         if expired:
             raise RuntimeError(f"recent masih memiliki {expired} row di luar retention")
 

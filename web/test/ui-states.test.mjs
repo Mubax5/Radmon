@@ -20,7 +20,7 @@ test("initial request errors do not leave pages presenting a loading state", asy
 test("error and feedback surfaces are announced and unavailable alarm history is not shown as zero", async () => {
   const [ui, actions, alarms, reports, history, css] = await Promise.all([
     read("../src/ui.tsx"),
-    read("../src/Actions.tsx"),
+    read("../src/components/ActionFeedback.tsx"),
     read("../src/pages/AlarmsPage.tsx"),
     read("../src/pages/ReportsPage.tsx"),
     read("../src/pages/HistoryPage.tsx"),

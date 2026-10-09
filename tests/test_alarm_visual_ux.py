@@ -21,7 +21,7 @@ def test_current_alarm_requires_fresh_alarm_and_active_policy_event():
     assert 'station.status === "offline" && (station.active_event_id || station.last_event_id)' in component
     assert "tidak sedang berbunyi" in component
     assert 'station.status === "warning" || station.status === "alarm"' in component
-    assert '"LOW threshold aktif — perlu tindakan"' in component
+    assert '"Ambang rendah aktif — perlu tindakan"' in component
     assert "{isActive && onAction ? (" in component
 
 
@@ -32,7 +32,7 @@ def test_alarm_notification_is_accessible_and_deduplicated_by_event_id():
     assert "notifiedAlarmEvents.has(eventId)" in component
     assert "notifiedAlarmEvents.add(eventId)" in component
     assert "if (!hasActiveThresholdEvent(station)) return null" in component
-    assert 'station.status === "alarm" ? "HIGH threshold aktif:" : "LOW threshold aktif:"' in component
+    assert 'station.status === "alarm" ? "Ambang tinggi aktif:" : "Ambang rendah aktif:"' in component
     overview = source("web/src/pages/OverviewPage.tsx")
     assert "data.stations.filter(hasActiveThresholdEvent)" in overview
 
@@ -51,8 +51,8 @@ def test_action_navigation_is_operator_gated_and_deep_links_to_response_modal():
     history = source("web/src/pages/HistoryPage.tsx")
     assert "history-selected-meta" not in history
     assert 'navigate("alarms"' not in history
-    assert "initialEventId={requestedEventId}" in source("web/src/pages/AlarmsPage.tsx")
-    assert "setRespondOpen(true)" in source("web/src/Actions.tsx")
+    assert "initialEventId={actionEventId}" in source("web/src/pages/AlarmsPage.tsx")
+    assert "setDialogOpen(true)" in source("web/src/components/AlarmActions.tsx")
 
 
 def test_alarm_motion_has_a_reduced_motion_fallback():

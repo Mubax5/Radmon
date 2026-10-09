@@ -7,7 +7,8 @@ from datetime import datetime
 from typing import Any, Callable
 
 from .config import Settings
-from .db import connect_mariadb
+from .db import connect_mariadb, database_row_value
+from .formatting import normalize_dose_unit
 from .models import LatestReading, Measurement, StationConfig
 from .recent_read_model import (
     OFFLINE_LAST_READING_LIMIT,
@@ -48,21 +49,6 @@ def make_sample_key(measurement: Measurement) -> str:
         f"{measurement.dose_rate:.12g}|{measurement.previnterval}|{measurement.stat}"
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _row_get(row: Any, key: str, index: int) -> Any:
-    if row is None:
-        return None
-    if isinstance(row, dict):
-        return row.get(key)
-    return row[index]
-
-
-def _display_unit(value: Any) -> str:
-    text = str(value or "µSv/h").strip().replace("μ", "µ")
-    if text.lower() == "usv/h":
-        return "µSv/h"
-    return text
 
 
 def _building_from_location(location: str, fallback: str) -> str:
@@ -146,8 +132,8 @@ class MariaDBRepository:
             connection.close()
         actual: dict[str, set[str]] = {}
         for row in rows:
-            table = str(_row_get(row, "TABLE_NAME", 0)).lower()
-            column = str(_row_get(row, "COLUMN_NAME", 1)).lower()
+            table = str(database_row_value(row, "TABLE_NAME", 0)).lower()
+            column = str(database_row_value(row, "COLUMN_NAME", 1)).lower()
             actual.setdefault(table, set()).add(column)
         missing: list[str] = []
         for table, expected in required.items():
@@ -169,16 +155,16 @@ class MariaDBRepository:
             raise RuntimeError("Schema ipradmon tidak sesuai. Missing: " + ", ".join(missing))
 
     def _station_from_row(self, row: Any) -> StationConfig:
-        location = str(_row_get(row, "location", 2) or self.settings.location)
+        location = str(database_row_value(row, "location", 2) or self.settings.location)
         return StationConfig(
-            serid=int(_row_get(row, "serid", 0)),
+            serid=int(database_row_value(row, "serid", 0)),
             building=_building_from_location(location, self.settings.building),
-            room=str(_row_get(row, "name", 1) or self.settings.room),
+            room=str(database_row_value(row, "name", 1) or self.settings.room),
             location=location,
-            warnlevel=float(_row_get(row, "warnlevel", 3) if _row_get(row, "warnlevel", 3) is not None else self.settings.warnlevel),
-            alarmlevel=float(_row_get(row, "alarmlevel", 4) if _row_get(row, "alarmlevel", 4) is not None else self.settings.alarmlevel),
-            maxidlemin=int(_row_get(row, "maxidlemin", 5) if _row_get(row, "maxidlemin", 5) is not None else self.settings.maxidlemin),
-            unit=_display_unit(_row_get(row, "unit", 6) or self.settings.unit),
+            warnlevel=float(database_row_value(row, "warnlevel", 3) if database_row_value(row, "warnlevel", 3) is not None else self.settings.warnlevel),
+            alarmlevel=float(database_row_value(row, "alarmlevel", 4) if database_row_value(row, "alarmlevel", 4) is not None else self.settings.alarmlevel),
+            maxidlemin=int(database_row_value(row, "maxidlemin", 5) if database_row_value(row, "maxidlemin", 5) is not None else self.settings.maxidlemin),
+            unit=normalize_dose_unit(database_row_value(row, "unit", 6) or self.settings.unit),
         )
 
     def station_config(self, serid: int | None = None) -> StationConfig:
@@ -210,7 +196,7 @@ WHERE serid = ?
             warnlevel=self.settings.warnlevel,
             alarmlevel=self.settings.alarmlevel,
             maxidlemin=self.settings.maxidlemin,
-            unit=_display_unit(self.settings.unit),
+            unit=normalize_dose_unit(self.settings.unit),
         )
 
     def has_station(self, serid: int) -> bool:
@@ -296,8 +282,8 @@ LIMIT 1
         try:
             with connection.cursor() as cursor:
                 previous = self._previous_measurement(cursor, measurement.serid, measurement.measured_at)
-                previous_time = _row_get(previous, "dtom", 0)
-                previous_rate = _row_get(previous, "doserate", 1)
+                previous_time = database_row_value(previous, "dtom", 0)
+                previous_rate = database_row_value(previous, "doserate", 1)
                 if isinstance(previous_time, datetime):
                     measured = int(round((measurement.measured_at - previous_time).total_seconds()))
                     if measured > 0:
@@ -375,11 +361,11 @@ LIMIT 1
                 return LatestReading(station=station, measured_at=None, dose_rate=None)
             current = rows[0]
             previous = rows[1] if len(rows) > 1 else None
-            current_rate = _row_get(current, "doserate", 1)
-            previous_rate = _row_get(previous, "doserate", 1) if previous is not None else None
+            current_rate = database_row_value(current, "doserate", 1)
+            previous_rate = database_row_value(previous, "doserate", 1) if previous is not None else None
             return LatestReading(
                 station=station,
-                measured_at=_row_get(current, "dtom", 0),
+                measured_at=database_row_value(current, "dtom", 0),
                 dose_rate=float(current_rate) if current_rate is not None else None,
                 previous_dose_rate=float(previous_rate) if previous_rate is not None else None,
             )
@@ -590,7 +576,7 @@ LIMIT {bounded}
                     station_rows = cursor.fetchall()
                     rows = []
                     for station_row in station_rows:
-                        station_id = _row_get(station_row, "serid", 0)
+                        station_id = database_row_value(station_row, "serid", 0)
                         cursor.execute(
                             f"""
 SELECT serid, dtom, doserate, dose, previnterval, stat

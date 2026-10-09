@@ -7,6 +7,10 @@
 produksi. Dokumen ini adalah catatan engineering dan readiness, bukan sertifikasi
 keamanan atau jaminan tidak ada kerentanan yang belum diketahui.
 
+**Head dokumentasi:** `403efbce` pada tanggal yang sama. Commit ini hanya
+menyegarkan evidence; jangan membacanya sebagai SHA production yang sedang
+berjalan atau sebagai pengganti commissioning.
+
 ## Ruang lingkup
 
 Review mencakup backend FastAPI/API dan auth/session, gateway Grafana dan proxy
@@ -96,8 +100,11 @@ Validasi yang tersedia pada workspace:
   advisory yang diketahui**. Scan read-only terhadap `.venv` menemukan **4
   advisory pada 2 package**: advisory MariaDB di atas dan tiga advisory pada
   `urllib3 2.7.0` (`CVE-2026-97687`, `CVE-2026-97688`, `CVE-2026-97689`),
-  semuanya memiliki fix `urllib3>=2.8.0`. Resolver requirements bersih memilih
-  `urllib3 2.8.0` melalui Selenium; `.venv` lokal yang stale tidak dipakai
+  semuanya memiliki fix `urllib3>=2.8.0`. Pada record resolver bersih sebelum
+  review, dependency graph memilih **`urllib3==2.8.0` melalui Selenium**.
+  `requirements.txt` tidak mem-pin urllib3 secara langsung; karena itu versi
+  resolved harus dicatat dan diverifikasi menjadi `2.8.0` (atau versi fixed yang
+  disetujui) sebelum membuat artifact. `.venv` lokal yang stale tidak dipakai
   sebagai bukti artifact production dan tidak dimutasi dalam review ini.
 - Edge sistem `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`
   dan Playwright Python yang sudah tersedia dipakai pada server static lokal
@@ -172,7 +179,8 @@ Validasi yang tersedia pada workspace:
 - Advisory dependency Python MariaDB belum mempunyai fix connector yang dapat
   dibuktikan dari scan; vendor/operator harus menentukan connector/server patch
   yang kompatibel. `.venv` audit juga memuat `urllib3 2.7.0` stale yang harus
-  dibangun ulang dengan `>=2.8.0` sebelum dipakai sebagai runtime.
+  dibangun ulang dan diverifikasi pada record resolved dependency `2.8.0` atau
+  fixed version yang disetujui sebelum dipakai sebagai runtime.
 - Render browser yang dilakukan adalah sampel static+mock dengan Edge lokal;
   browser, API, source LAN, dan runtime production belum seluruhnya dijalankan
   dalam audit ini.

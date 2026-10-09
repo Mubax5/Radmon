@@ -243,7 +243,14 @@ def test_web_uses_kumo_as_primary_component_system_without_browser_secret_storag
 
 
 def test_sensitive_alarm_actions_use_kumo_dialogs_and_reliable_native_selects() -> None:
-    actions = (ROOT / "web/src/Actions.tsx").read_text(encoding="utf-8")
+    actions = "\n".join(
+        (ROOT / path).read_text(encoding="utf-8")
+        for path in (
+            "web/src/components/AlarmActions.tsx",
+            "web/src/components/UserActions.tsx",
+            "web/src/components/NativeSelect.tsx",
+        )
+    )
     combined = _frontend_sources()
     assert "Dialog.Root" in actions
     assert "Dialog.Trigger" in actions

@@ -18,6 +18,7 @@ from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .config import Settings
+from .formatting import normalize_dose_unit
 
 
 class ReportRepository(Protocol):
@@ -105,11 +106,6 @@ def _summary_from_mapping(row: dict[str, Any]) -> ReportSummary:
         sample_count=int(row.get("sample_count") or 0),
         approximate_dose=float(row.get("approximate_dose") or 0.0),
     )
-
-
-def _micro_unit(unit: str | None) -> str:
-    text = str(unit or "µSv/h").strip().replace("μ", "µ")
-    return "µSv/h" if text.lower() == "usv/h" else text
 
 
 class ReportService:
@@ -372,7 +368,7 @@ class ReportService:
                 "<tr><td colspan='7'>No measurement data in selected range</td></tr>"
             )
 
-        unit = _micro_unit(getattr(station, "unit", None))
+        unit = normalize_dose_unit(getattr(station, "unit", None))
         description = (
             f"Alert {station.warnlevel:g} {unit}, Alarm {station.alarmlevel:g} {unit}"
         )
@@ -518,7 +514,7 @@ th {{ background: #efefef; font-weight: bold; }}
             canvas.drawCentredString(A4[0] / 2, 5 * mm, f"Page {canvas.getPageNumber()}")
             canvas.restoreState()
 
-        unit = _micro_unit(getattr(station, "unit", None))
+        unit = normalize_dose_unit(getattr(station, "unit", None))
         description = f"Alert {station.warnlevel:g} {unit}, Alarm {station.alarmlevel:g} {unit}"
         story: list[Any] = [
             Paragraph("Instalasi Pengelolaan Limbah Radioaktif", styles["Title"]),

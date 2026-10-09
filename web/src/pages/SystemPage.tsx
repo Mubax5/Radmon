@@ -50,7 +50,7 @@ function sourceStateLabel(state: string): string {
 }
 
 function SourceCards({ sources }: { sources: SourceHealth[] }) {
-  if (!sources.length) return <LayerCard className="empty-card">Belum ada rekaman kesehatan source LAN.</LayerCard>;
+  if (!sources.length) return <LayerCard className="empty-card">Belum ada rekaman kesehatan sumber LAN.</LayerCard>;
   return (
     <div className="mobile-card-list source-health-list">
       {sources.map((source) => (
@@ -64,9 +64,9 @@ function SourceCards({ sources }: { sources: SourceHealth[] }) {
           </div>
           <div className="card-meta">
             <span>Terakhir berhasil: {formatTimestamp(source.last_success)} · {freshnessLabel(source.last_success)}</span>
-            <span>Live poll terakhir: {formatTimestamp(source.last_live_poll)}</span>
+             <span>Pemeriksaan live terakhir: {formatTimestamp(source.last_live_poll)}</span>
             {source.last_failure ? <span>Kegagalan terakhir: {formatTimestamp(source.last_failure)}</span> : null}
-            {source.last_history_import ? <span>Impor riwayat: {formatTimestamp(source.last_history_import)}</span> : null}
+             {source.last_history_import ? <span>Pembaruan riwayat: {formatTimestamp(source.last_history_import)}</span> : null}
             {source.consecutive_failures ? <span>Kegagalan beruntun: {source.consecutive_failures}</span> : null}
             {source.last_error ? <span>Kesalahan terakhir: {source.last_error}</span> : null}
           </div>
@@ -77,18 +77,18 @@ function SourceCards({ sources }: { sources: SourceHealth[] }) {
 }
 
 function SourceTable({ sources }: { sources: SourceHealth[] }) {
-  if (!sources.length) return <LayerCard className="empty-card">Belum ada rekaman kesehatan source LAN.</LayerCard>;
+  if (!sources.length) return <LayerCard className="empty-card">Belum ada rekaman kesehatan sumber LAN.</LayerCard>;
   return (
     <LayerCard className="table-card source-health-table">
       <Table>
         <Table.Header>
           <Table.Row>
-            <Table.Head>Source</Table.Head>
+             <Table.Head>Sumber</Table.Head>
             <Table.Head>Status</Table.Head>
             <Table.Head>Terakhir berhasil</Table.Head>
-            <Table.Head>Live poll</Table.Head>
+             <Table.Head>Pemeriksaan live</Table.Head>
             <Table.Head>Kegagalan</Table.Head>
-            <Table.Head>Error terakhir</Table.Head>
+             <Table.Head>Kesalahan terakhir</Table.Head>
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -149,14 +149,14 @@ export function SystemPage() {
       {!data && !error ? <LoadingCard /> : data ? (
         <>
           <div className="metric-grid system-metrics source-health-summary">
-            <MetricCard label="Service central" value={data.service} badge={<Badge variant="success">Berjalan</Badge>} className="system-value-card" />
-            <MetricCard label="Source sehat" value={summary.healthy} badge={<Badge variant="success">Terhubung</Badge>} />
+            <MetricCard label="Layanan pusat" value={data.service} badge={<Badge variant="success">Berjalan</Badge>} className="system-value-card" />
+            <MetricCard label="Sumber sehat" value={summary.healthy} badge={<Badge variant="success">Terhubung</Badge>} />
             <MetricCard label="Menurun" value={summary.degraded} badge={<Badge variant={summary.degraded ? "warning" : "secondary"}>Sumber</Badge>} />
-            <MetricCard label="Offline" value={summary.offline} badge={<Badge variant={summary.offline ? "error" : "secondary"}>Source</Badge>} />
+            <MetricCard label="Offline" value={summary.offline} badge={<Badge variant={summary.offline ? "error" : "secondary"}>Sumber</Badge>} />
           </div>
 
           <PageSection
-            title="Kesehatan source LAN"
+            title="Kesehatan sumber LAN"
             description="Status koneksi dan pembaruan terakhir untuk setiap sumber data LAN."
             className="source-health-section"
           >

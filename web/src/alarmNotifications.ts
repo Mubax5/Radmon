@@ -16,10 +16,10 @@ export function isThresholdAlarm(event: PolicyAlarmEvent): boolean {
 }
 
 export function notificationStateLabel(event: PolicyAlarmEvent): string {
-  if (event.status === "AUTO_RESOLVED_NORMAL") return "Pulih otomatis · event telah selesai";
-  if (event.status === "RESPONDED" || event.status === "SOURCE_HANDLED") return "Ditangani · event telah selesai";
-  if (event.status !== "ACTIVE") return "Event telah selesai";
-  return "Event tercatat · lihat Alarm untuk status aktif terkini";
+  if (event.status === "AUTO_RESOLVED_NORMAL") return "Pulih otomatis · peristiwa telah selesai";
+  if (event.status === "RESPONDED" || event.status === "SOURCE_HANDLED") return "Ditangani · peristiwa telah selesai";
+  if (event.status !== "ACTIVE") return "Peristiwa telah selesai";
+  return "Peristiwa tercatat · lihat Alarm untuk status aktif terkini";
 }
 
 export function freshUndeliveredEvents(

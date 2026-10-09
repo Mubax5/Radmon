@@ -43,6 +43,7 @@ export function ReportsPage() {
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
   const [previewJobId, setPreviewJobId] = useState<string | null>(null);
+  const [previewRequest, setPreviewRequest] = useState(0);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
@@ -54,6 +55,9 @@ export function ReportsPage() {
   const selectedRangeError = reportRangeError(startAt, endAt);
   const selectedKey = selectedRange ? JSON.stringify({ serid, ...selectedRange }) : "";
   const currentDraftUrl = draftPreview?.key === selectedKey ? draftPreview.url : null;
+  // Only show a PDF whose key matches the current draft, or the explicitly
+  // selected completed job. Never keep the previous job visible while a new
+  // preview is loading; an old PDF must not look like the current selection.
   const displayedPreviewUrl = currentDraftUrl ?? (draftPaused ? previewUrl : null);
   const previewReady = Boolean(previewJobId && jobs?.some((job) => job.job_id === previewJobId && job.status === "completed"));
 
@@ -118,7 +122,7 @@ export function ReportsPage() {
       controller.abort();
       if (objectUrl && !committed) URL.revokeObjectURL(objectUrl);
     };
-  }, [previewJobId, previewReady]);
+  }, [previewJobId, previewReady, previewRequest]);
 
   useEffect(() => {
     if (draftPaused) {
@@ -168,7 +172,14 @@ export function ReportsPage() {
       controller.abort();
       if (objectUrl && !committed) URL.revokeObjectURL(objectUrl);
     };
-   }, [serid, startAt, endAt, draftPaused]);
+    }, [serid, startAt, endAt, draftPaused]);
+
+  function clearStoredPreview() {
+    setPreviewUrl((previous) => {
+      if (previous) URL.revokeObjectURL(previous);
+      return null;
+    });
+  }
 
   async function create(event: React.FormEvent) {
     event.preventDefault();
@@ -192,13 +203,13 @@ export function ReportsPage() {
     {selectedRangeError ? <p className="report-range-error" role="alert">{selectedRangeError}</p> : null}
     {!jobs && !error ? <LoadingCard /> : jobs ? <>
        <div className="report-workspace">
-       <section className="report-preview-pane" aria-label="Pratinjau PDF laporan">
-          <div className="report-preview-heading"><h2>Pratinjau PDF</h2>{draftError && currentDraftUrl ? <span>PDF sebelumnya — pratinjau terbaru gagal</span> : draftPaused && previewUrl ? <span>PDF sebelumnya — bukan pilihan saat ini</span> : null}</div>
+        <section className="report-preview-pane" aria-label="Pratinjau PDF laporan">
+           <div className="report-preview-heading"><h2>Pratinjau PDF</h2>{draftError && currentDraftUrl ? <span>Pratinjau sebelumnya — pilihan terbaru gagal</span> : null}</div>
             <p role={draftError ? "alert" : undefined}>{draftError ? `Pratinjau pilihan gagal: ${draftError}` : draftLoading ? "Memperbarui pratinjau untuk stasiun dan rentang terpilih…" : "Pratinjau mengikuti stasiun dan rentang yang dipilih."}</p>
             <p className="report-preview-limit">Pratinjau: maksimal 250 baris. PDF penuh yang dibuat dan diunduh memuat seluruh data dalam rentang terpilih.</p>
          {previewLoading && !displayedPreviewUrl ? <p role="status">Memuat PDF laporan…</p> : null}
          {previewError && !displayedPreviewUrl ? <p role="alert">Pratinjau PDF gagal dimuat: {previewError}</p> : null}
-          {displayedPreviewUrl ? <iframe title="Pratinjau PDF laporan" src={displayedPreviewUrl} /> : !previewLoading && !draftLoading ? <div className="report-preview-empty">{draftPaused && previewUrl ? "PDF sebelumnya — bukan pilihan saat ini." : "Pilih rentang untuk membuat pratinjau, atau buat laporan untuk melihat PDF di sini."}</div> : null}
+           {displayedPreviewUrl ? <iframe title="Pratinjau PDF laporan" src={displayedPreviewUrl} /> : !previewLoading && !draftLoading ? <div className="report-preview-empty">Pilih rentang untuk membuat pratinjau, atau buat laporan untuk melihat PDF di sini.</div> : null}
        </section>
        <LayerCard className="action-card report-form-card"><form className="action-form" onSubmit={create}>
          <label className="native-select-field" htmlFor="report-station"><span>Stasiun</span><select id="report-station" className="native-select" value={serid} onChange={(event) => { setDraftPaused(false); setSerid(event.target.value); }} required>{stations.map((station) => <option key={station.serid} value={station.serid}>{station.name} (SERID {station.serid})</option>)}</select></label>
@@ -213,7 +224,7 @@ export function ReportsPage() {
              <strong>SERID {job.serid} · {reportStatusLabel(job.status)}</strong>
             <div className="card-meta"><span>{formatTimestamp(job.start_at)} sampai {formatTimestamp(job.end_at)}</span><span>Diminta {formatTimestamp(job.created_at)}</span>{job.error ? <span role="alert">{job.error}</span> : null}</div>
             {job.status === "completed" ? <div className="report-actions">
-                <Button type="button" variant="secondary" onClick={() => { setPreviewJobId(job.job_id); setDraftPaused(true); setDraftPreview(null); }}>{previewJobId === job.job_id ? "Ditampilkan" : "Tampilkan PDF"}</Button>
+                <Button type="button" variant="secondary" onClick={() => { clearStoredPreview(); setPreviewError(""); setPreviewJobId(job.job_id); setPreviewRequest((current) => current + 1); setDraftPaused(true); setDraftPreview(null); }}>{previewJobId === job.job_id ? "Ditampilkan" : "Tampilkan PDF"}</Button>
               <a className="report-download-link" href={reportDownloadUrl(job.job_id)} download>Unduh PDF</a>
             </div> : null}
           </LayerCard>)}

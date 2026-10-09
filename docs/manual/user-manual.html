@@ -3,53 +3,120 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RadMon - User Manual</title>
+  <meta name="description" content="Manual pengguna dan operator RadMon">
+  <title>RadMon — Manual pengguna</title>
   <link rel="stylesheet" href="manual.css">
 </head>
 <body>
+  <header class="site-header">
+    <p class="eyebrow">RadMon · Manual production</p>
+    <h1>Manual pengguna</h1>
+    <p class="lede">Panduan ringkas untuk login, monitoring, alarm, laporan, dan pemulihan aman. Manual ini menjelaskan perilaku aplikasi; commissioning jaringan, database, dan detector tetap wajib.</p>
+    <nav aria-label="Navigasi manual">
+      <a href="user-manual.html" aria-current="page">Pengguna</a>
+      <a href="installation.html">Instalasi</a>
+    </nav>
+  </header>
+
   <main>
-    <h1>RadMon User Manual</h1>
-    <p>Production RadMon berjalan otomatis 24/7 melalui Scheduled Task Windows yang menjalankan <strong>app\RadMon.exe --server</strong>. Browser user bukan lifecycle owner server.</p>
+    <section class="note" aria-labelledby="roles-title">
+      <h2 id="roles-title">Role dan prasyarat</h2>
+      <p>Semua user RadMon wajib login. Remote anonymous tidak didukung. PIN sensitif terdiri dari 4–8 digit; password user terdiri dari 8–256 karakter.</p>
+      <table>
+        <caption>Hak akses Control Plane</caption>
+        <thead><tr><th>Role</th><th>Akses</th></tr></thead>
+        <tbody>
+          <tr><td>Viewer</td><td>Ringkasan, Stasiun, Riwayat, Arsip, baca-saja.</td></tr>
+          <tr><td>Operator</td><td>Viewer + Laporan, Alarm, response/silence, suppression, dan edit stasiun dengan PIN.</td></tr>
+          <tr><td>Administrator</td><td>Operator + Pengguna, Sistem, retry archive, dan editor Grafana lokal.</td></tr>
+        </tbody>
+      </table>
+    </section>
 
-    <h2>Monitoring remote dengan session RadMon</h2>
-    <p>Buka <code>https://monitoring.example/</code> untuk Grafana monitoring fullscreen/kiosk setelah login session RadMon. Remote anonymous tidak didukung; Grafana direct/anonymous hanya boleh berada pada loopback server.</p>
+    <section id="access">
+      <h2>Akses RadMon</h2>
+      <p>Dari client BRIN-NET yang mempunyai route ke server, buka URL HTTPS yang diberikan owner:</p>
+      <pre>https://monitoring.example/app   Control Plane
+https://monitoring.example/      Monitoring Grafana</pre>
+      <p>Di PC server, Administrator dapat membuka Grafana native melalui <code>http://127.0.0.1:3300</code>. Port 3300 adalah loopback-only dan bukan alamat client remote.</p>
+      <p class="success"><strong>Hasil yang diharapkan:</strong> setelah login, sidebar menampilkan menu sesuai role. Menutup browser tidak menghentikan server.</p>
+    </section>
 
-    <h2>Control Plane dan role</h2>
-    <p>Buka <code>https://monitoring.example/app</code>. Semua role wajib login, termasuk Viewer.</p>
-    <ul>
-      <li><strong>Viewer</strong>: Overview, Stations, History, Archives/Reports read-only.</li>
-      <li><strong>Operator</strong>: Viewer + Alarm, Response/Silence, suppression.</li>
-      <li><strong>Administrator</strong>: Operator + Users, station/system administration, Grafana admin.</li>
-    </ul>
-    <p>Control Plane menggunakan Cloudflare Kumo UI. Backend tetap memeriksa session, role, dan PIN untuk aksi sensitif.</p>
+    <section id="monitoring">
+      <h2>Monitoring, stasiun, dan riwayat</h2>
+      <ol>
+        <li>Buka <strong>Ringkasan</strong> untuk status <code>NORMAL</code>, <code>ALERT</code>, <code>ALARM</code>, dan <code>OFFLINE</code>.</li>
+        <li>Buka <strong>Stasiun</strong> untuk mencari nama, lokasi, atau SERID.</li>
+        <li>Pilih stasiun untuk melihat pembacaan terakhir, threshold, timestamp, dan umur data.</li>
+        <li>Buka <strong>Riwayat</strong> bila membutuhkan sampel historis, bukan hanya rolling monitoring window.</li>
+      </ol>
+      <p>Offline station dapat menampilkan <em>last reading</em> bila pembacaan asli tersedia. Timestamp dan umur harus tetap asli; RadMon tidak membuat nilai, timestamp, atau garis trend datar untuk menutupi kehilangan data.</p>
+    </section>
 
-    <h2>Grafana editable</h2>
-    <p>Administrator pada PC server membuka <code>http://localhost:3300</code>. Login Grafana harus memakai secret yang dikelola operator; <code>admin/admin</code>, kosong, atau secret lemah memblokir managed bootstrap. Edit dan Save disimpan sebagai state Grafana authoritative.</p>
-    <p>Restart RadMon, Grafana, Windows, atau installer upgrade tidak mengembalikan layout ke factory. Dashboard factory hanya di-seed bila UID belum ada.</p>
+    <section id="alarms">
+      <h2>Alarm source dan policy central</h2>
+      <p>Halaman Alarm menampilkan dua evidence: event policy central dan baris alarm source dari alat. <strong>Tombol response source hanya berlaku untuk baris source yang masih <code>i_flag=0</code>.</strong> Policy HIGH di central tidak dengan sendirinya menjadi target response source.</p>
+      <h3>Menangani alarm source</h3>
+      <ol>
+        <li>Periksa source, SERID, waktu event, nilai, threshold, dan source health.</li>
+        <li>Pastikan baris yang dipilih masih aktif dengan <code>i_flag=0</code>.</li>
+        <li>Pilih <strong>Response/Silence</strong>, isi Action, PIC, catatan/alasan, dan PIN.</li>
+        <li>Kirim satu kali dan tunggu read-back dari source.</li>
+      </ol>
+      <p class="success"><strong>Sukses:</strong> backend menulis <code>i_op</code>, <code>pic</code>, <code>note</code>, dan <code>i_flag=1</code> pada row <code>(serid, dtoa)</code> yang sama. Field legacy <code>ack</code> tidak diubah.</p>
+      <div class="warning">
+        <strong>Jika gagal:</strong> <code>ALREADY_HANDLED</code> berarti row sudah ditangani. Timeout, row berubah, commit gagal, atau read-back gagal tetap merupakan error aktif. SQL/read-back tidak membuktikan buzzer fisik sudah berhenti; acceptance detector dilakukan saat commissioning.
+      </div>
+      <p>Aktifkan suara alarm dari tombol halaman bila browser meminta izin. Suara browser atau notifikasi desktop bukan bukti penerimaan buzzer hardware.</p>
+    </section>
 
-    <h2>Source health</h2>
-    <pre>gd50 -&gt; 192.168.1.50
-gd52 -&gt; 192.168.1.52
-gd38 -&gt; 192.168.1.38</pre>
-    <p>Kegagalan satu source tidak menghentikan source lain. RadMon tidak melakukan DDL pada source production.</p>
+    <section id="suppression">
+      <h2>Timed suppression</h2>
+      <ol>
+        <li>Pilih stasiun pada tindakan operator.</li>
+        <li>Isi durasi 1 menit sampai 24 jam, PIC, reason, dan PIN.</li>
+        <li>Pilih auto-resume saat kondisi kembali <code>NORMAL</code> bila sesuai prosedur.</li>
+        <li>Pastikan status dan waktu kedaluwarsa tampil.</li>
+      </ol>
+      <p>Measurement dan dose tetap berjalan. Satu sesi menghasilkan paling banyak satu event <code>SUPPRESSED</code>. Untuk mengakhiri lebih awal, pilih <strong>Akhiri suppression</strong> dengan PIN dan alasan.</p>
+    </section>
 
-    <h2>Alarm Response / Silence</h2>
-    <p>Operator/Administrator menangani policy event melalui menu Alarms. Aksi Response/Silence dan suppression memerlukan role yang sesuai serta PIN. Source write-through mengisi <code>i_op</code>, <code>pic</code>, <code>note</code>, dan <code>i_flag=1</code>; <code>ack</code> tidak diubah.</p>
+    <section id="reports">
+      <h2>Laporan</h2>
+      <ol>
+        <li>Buka <strong>Laporan</strong> sebagai Operator atau Administrator.</li>
+        <li>Pilih stasiun, waktu mulai, dan waktu selesai dalam WIB.</li>
+        <li>Pastikan rentang lebih dari nol dan maksimal 24 jam; tepat 24 jam diperbolehkan.</li>
+        <li>Periksa pratinjau, lalu buat dan unduh PDF penuh.</li>
+      </ol>
+      <p class="note"><strong>Batas penting:</strong> preview maksimal 250 baris dan merupakan <strong>partial preview</strong>. PDF penuh memuat seluruh measurement sampai batas 50.000 measurement dan alarm sampai batas 10.000 alarm; job gagal bila data penuh tidak dapat dibaca, bukan diam-diam terpotong.</p>
+      <p>Timestamp PDF ditulis sebagai WIB dan nilai dose rate menggunakan dua desimal. Pada desktop, workflow tetap <strong>Preview → Print / Export PDF / Export CSV</strong>.</p>
+    </section>
 
-    <h2>Timed suppression</h2>
-    <p>Suppression berlangsung 1 menit sampai 24 jam dengan PIN, PIC, dan reason. Measurement tetap berjalan dan dose aktual tetap terlihat. Satu sesi maksimal menghasilkan satu event SUPPRESSED.</p>
+    <section id="nodata">
+      <h2>Jika Grafana menampilkan <code>No data</code></h2>
+      <p>Jangan langsung restart RadMon. Bedakan:</p>
+      <ol>
+        <li><strong>Datasource error:</strong> Grafana hidup tetapi koneksi datasource MariaDB gagal. Administrator memeriksa <strong>Connections → Data sources → ipradmon → Save &amp; test</strong>.</li>
+        <li><strong>Query berhasil tetapi hasil kosong:</strong> gunakan <strong>Inspect → Query/Response</strong>, lalu periksa SERID, UID datasource, query, dan current time window. Page Trends memakai <strong>Last 1 hour</strong>.</li>
+      </ol>
+      <p><code>recent</code> adalah rolling window tiga jam, <code>recent_last</code> menyimpan paling banyak 30 pembacaan asli per detector untuk tampilan offline, dan <code>measurement</code> adalah history authoritative. Last reading ditampilkan hanya bila data asli tersedia, dengan timestamp dan umur asli.</p>
+    </section>
 
-    <h2>Reports dan archive</h2>
-    <p>Workflow report: <strong>Preview -&gt; Print / Export PDF / Export CSV</strong>. Reports dapat membaca data aktif dan quarterly archive yang sudah terverifikasi tanpa restore SQL.</p>
-
-    <h2>Operasi 24/7</h2>
-    <p>Scheduled Task <code>RadMon Server</code> start saat Windows boot sebagai SYSTEM dan restart otomatis bila proses berhenti. Menutup browser tidak menghentikan collector/API.</p>
-
-    <h2>Upgrade</h2>
-    <p>Jalankan installer baru sebagai Administrator. Pertahankan <code>config\.env</code>, <code>runtime\</code>, <code>archives\</code>, dan <code>reports\</code>. Setelah upgrade verifikasi monitoring, login/RBAC, Grafana Save persistence, source health, alarm, dan report.</p>
-
-    <h2>Jika ada masalah</h2>
-    <p>Periksa Scheduled Task RadMon Server, <code>runtime\logs</code>, port 8090/3300, Grafana native, serta central/source MariaDB. Jangan menghapus security DB/checkpoint/archive/report sebagai langkah troubleshooting.</p>
+    <section id="recovery">
+      <h2>Layanan 24/7 dan pemulihan</h2>
+      <p>Scheduled Task <strong>RadMon Server</strong> menjalankan <code>app\RadMon.exe --server</code> sebagai <code>SYSTEM</code> saat Windows boot.</p>
+      <ol>
+        <li>Gunakan shortcut <strong>RadMon</strong> satu kali.</li>
+        <li>Periksa <code>/health</code>, task, port, log, Grafana, dan source health.</li>
+        <li>Jika MariaDB, routing, TLS, atau hardware gagal, eskalasikan kepada pemiliknya.</li>
+      </ol>
+      <p class="warning">Jangan membunuh semua proses Python, menghapus <code>runtime</code>, database, archive, atau report sebagai langkah pemulihan.</p>
+    </section>
   </main>
+
+  <footer>
+    <p>Untuk instalasi dan commissioning, buka <a href="installation.html">Panduan instalasi</a>.</p>
+  </footer>
 </body>
 </html>

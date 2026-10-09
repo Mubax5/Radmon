@@ -17,14 +17,13 @@ test("station create is permission gated in a dialog and sample values never sub
 });
 
 test("user create, edit, and destructive delete confirmation use separate dialogs with native role selects", async () => {
-  const [page, actions] = await Promise.all([read("../src/pages/UsersPage.tsx"), read("../src/Actions.tsx")]);
+  const [page, actions] = await Promise.all([read("../src/pages/UsersPage.tsx"), read("../src/components/UserActions.tsx")]);
   assert.match(page, /data-testid="user-create-dialog"/);
   assert.match(page, /data-testid="user-edit-dialog"/);
   assert.match(page, /data-testid="user-delete-dialog"/);
-  assert.match(page, /className="native-select" value=\{role\}/);
+  assert.match(actions, /testId="user-role-select"/);
   assert.match(page, /PIN Administrator saat ini/);
   assert.match(page, /onClick=\{\(\) => deleteDialog\.current\?\.showModal\(\)\}/);
-  assert.match(actions, /testId="user-role-select"/);
   assert.match(actions, /role,\s*password,/);
   assert.match(page, /display_name: displayName, role \}\)/);
   assert.match(page, /method: "PATCH"/);
@@ -48,13 +47,13 @@ test("stations header owns the create dialog and history uses one fixed searchab
 
 test("operator PIC is display-name based and read-only while Administrator can edit", async () => {
   const [actions, alarms, api] = await Promise.all([
-    read("../src/Actions.tsx"),
-    read("../src/pages/AlarmsPage.tsx"),
+    read("../src/components/AlarmActions.tsx"),
+    read("../src/components/AlarmActions.tsx"),
     read("../../radmon/secure_api.py"),
   ]);
   assert.match(actions, /useSession\(\)/);
   assert.match(actions, /readOnly=\{!canEditPic\}/);
-  assert.match(alarms, /readOnly=\{user\.role !== "Administrator"\}/);
+  assert.match(alarms, /readOnly=\{!canEditPic\}/);
   assert.match(api, /payload\.pic or ""\)\.strip\(\) or identity\.display_name/);
 });
 

@@ -42,8 +42,8 @@ export function PolicyAlarmNotifications({ enabled }: { enabled: boolean }) {
             setEvents((current) => [...fresh, ...current].slice(0, 20));
             fresh.forEach((event) => {
               if ("Notification" in window && Notification.permission === "granted") {
-                const notification = new Notification(`${event.reason === "LOW_THRESHOLD" ? "LOW" : "HIGH"} threshold · SERID ${event.serid}`, {
-                  body: `Measurement ${event.measured_value ?? "—"} · ${formatTimestamp(event.surfaced_at)} · ${notificationStateLabel(event)}.`,
+                const notification = new Notification(`${event.reason === "LOW_THRESHOLD" ? "Ambang rendah" : "Ambang tinggi"} · SERID ${event.serid}`, {
+                  body: `Pengukuran ${event.measured_value ?? "—"} · ${formatTimestamp(event.surfaced_at)} · ${notificationStateLabel(event)}.`,
                   tag: event.event_id,
                 });
                 notification.onclick = () => { window.focus(); navigate("alarms", { event: event.event_id }); notification.close(); };
@@ -72,11 +72,11 @@ export function PolicyAlarmNotifications({ enabled }: { enabled: boolean }) {
   if (!enabled) return null;
   if (!events.length) return null;
   return (
-    <aside className="policy-alarm-center" aria-live="assertive" aria-label="Notifikasi alarm policy">
+    <aside className="policy-alarm-center" aria-live="assertive" aria-label="Notifikasi alarm aturan">
       {events.map((event) => (
         <div className="policy-alarm-toast" key={event.event_id} role="alert">
-          <strong>{event.reason === "LOW_THRESHOLD" ? "LOW threshold" : "HIGH threshold"} · SERID {event.serid}</strong>
-          <span>Measurement {event.measured_value ?? "—"}</span>
+          <strong>{event.reason === "LOW_THRESHOLD" ? "Ambang rendah" : "Ambang tinggi"} · SERID {event.serid}</strong>
+          <span>Pengukuran {event.measured_value ?? "—"}</span>
           <span>{formatTimestamp(event.surfaced_at)} · {notificationStateLabel(event)}</span>
           <button type="button" onClick={() => navigate("alarms", { event: event.event_id })}>Buka Alarm</button>
           <button type="button" aria-label="Tutup notifikasi" onClick={() => setEvents((current) => current.filter((item) => item.event_id !== event.event_id))}>Tutup</button>

@@ -6,6 +6,15 @@ from typing import Any, Callable
 from .config import Settings
 
 
+def database_row_value(row: Any, column: str, index: int) -> Any:
+    """Read a column from either a mapping or a positional DB result row."""
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        return row.get(column)
+    return row[index]
+
+
 def connect_mariadb(settings: Settings) -> Any:
     mariadb = importlib.import_module("mariadb")
     return mariadb.connect(

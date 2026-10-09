@@ -60,14 +60,14 @@ def test_trend_chart_has_pointer_tooltip_crosshair_and_readable_axes():
 
 
 def test_mobile_dialogs_are_marked_for_sheet_treatment():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx") + read("components/UserActions.tsx")
     users = read("pages/UsersPage.tsx")
     assert actions.count('className="radmon-dialog mobile-sheet-dialog"') >= 2
     assert '<dialog ref={dialog} className="native-user-dialog"' in users
 
 
 def test_response_and_role_controls_are_native_and_browser_selectable():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx") + read("components/UserActions.tsx")
     users = read("pages/UsersPage.tsx")
     css = read("ui-polish.css")
     assert 'testId="alarm-event-select"' in actions
@@ -93,7 +93,7 @@ def test_select_portals_have_a_layer_contract_above_dialog_and_navigation():
         assert "<Select" in read(path)
     history = read("pages/HistoryPage.tsx")
     assert 'role="combobox"' in history and 'role="listbox"' in history
-    assert 'testId="suppression-duration-select"' in read("Actions.tsx")
+    assert 'testId="suppression-duration-select"' in read("components/AlarmActions.tsx")
 
 
 def test_sidebar_icons_have_fixed_geometry_and_consistent_mobile_breakpoint():
@@ -109,12 +109,12 @@ def test_sidebar_icons_have_fixed_geometry_and_consistent_mobile_breakpoint():
 
 
 def test_alarm_operations_offer_preset_duration_and_active_cancellation_ui():
-    actions = read("Actions.tsx")
-    assert 'label="Durasi suppression"' in actions
+    actions = read("components/AlarmActions.tsx")
+    assert 'label="Durasi peredaman"' in actions
     assert "15 menit" in actions and "1 jam" in actions
     assert "/api/v1/control/suppressions/" in actions
     assert "/cancel" in actions
-    assert "Suppression aktif" in actions
+    assert "Peredaman aktif" in actions
     assert "/api/v1/control/suppressions?active_only=true" in read("pages/AlarmsPage.tsx")
     assert "source_silence_state" in actions
 
@@ -123,7 +123,7 @@ def test_alarm_events_remain_available_when_suppression_fetch_fails():
     alarms = read("pages/AlarmsPage.tsx")
     assert "Promise.allSettled" in alarms
     assert "suppressionError" in alarms
-    assert "Muat ulang suppression" in alarms
+    assert "Muat ulang peredaman" in alarms
 
 
 def test_alarms_page_renders_full_content_on_suppression_partial_success():
@@ -147,7 +147,7 @@ def test_alarms_page_renders_full_content_on_suppression_partial_success():
 def test_alarms_overlay_keeps_background_mounted_and_stacked():
     css = read("radmon.css") + "\n" + read("radmon-overlays.css")
     alarms = read("pages/AlarmsPage.tsx")
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx") + read("components/UserActions.tsx")
     # Kontrak lapisan: backdrop 80 < dialog 90 < select portal 100 < toast 110.
     assert "--radmon-layer-backdrop" in css
     assert "--radmon-layer-dialog: 90" in css
@@ -167,17 +167,17 @@ def test_alarms_overlay_keeps_background_mounted_and_stacked():
 
 
 def test_alarms_dropdown_filled_from_active_with_empty_state():
-    actions = read("Actions.tsx")
+    actions = read("components/AlarmActions.tsx")
     # Dropdown consumes the same canonical active dataset as page count/list.
-    assert "const active = events" in actions
+    assert "const sourceAlarmEvents" in actions
     assert "eventItems" in actions
-    assert "Pilih event" in actions
+    assert "Pilih alarm sumber" in actions
     # Empty-state jelas saat tidak ada alarm aktif, plus hitungan saat ada.
-    assert "Tidak ada alarm aktif" in actions
+    assert "Tidak ada alarm yang berbunyi" in actions
     assert "alarm-empty-hint" in actions
     assert 'role="status"' in actions
     # Pilihan basi dibersihkan saat live refresh menyelesaikan event terpilih.
-    assert "active.some" in actions
+    assert "sourceAlarmEvents.some" in actions
     assert 'setEventId("")' in actions
 
 

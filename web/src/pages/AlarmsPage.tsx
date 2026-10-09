@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Button, Input, LayerCard, Table } from "@cloudflare/kumo";
+import { Badge, Button, LayerCard, Table } from "@cloudflare/kumo";
 import { api } from "../api";
 import { AlarmOperations, type Suppression } from "../Actions";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
 import { formatDoseValue, formatPolicyMeasurement } from "../format";
 import { describeLifecycle, kindLabel, statusLabel } from "./alarmLifecycle";
 import { useWebRefresh } from "../live";
-import { useSession } from "../auth";
 import { isSourceAlarmActionable, type ActiveAlarm } from "../activeAlarms";
 import {
   ErrorCard,
@@ -82,58 +81,6 @@ function EventOrigin({ event }: { event: PolicyEvent }) {
   return <Badge variant={sourceOwned ? "secondary" : "success"}>{sourceOwned ? (event.source_id || "Sumber") : "Pusat"}</Badge>;
 }
 
-function SourceAlarmResponse({ event, onChanged }: { event: PolicyEvent; onChanged: () => void }) {
-  const { user } = useSession();
-  const dialog = useRef<HTMLDialogElement>(null);
-  const [action, setAction] = useState("Konfirmasi");
-  const [pic, setPic] = useState(user?.display_name ?? "");
-  const [note, setNote] = useState("");
-  const [pin, setPin] = useState("");
-  const [pending, setPending] = useState(false);
-  const [feedback, setFeedback] = useState("");
-  useEffect(() => { setPic(user?.display_name ?? ""); }, [user?.display_name]);
-  if (!user || user.role === "Viewer" || !isSourceAlarmActionable(event as ActiveAlarm)) return null;
-  async function submit(formEvent: React.FormEvent) {
-    formEvent.preventDefault();
-    if (pending || !event.source_id || !event.event_time) return;
-    setPending(true);
-    setFeedback("");
-    try {
-      const result = await api<{ status?: string; is_active?: boolean; source_i_flag?: number; acknowledged_at?: string }>(`/api/v1/control/alarms/${encodeURIComponent(event.source_id)}/${event.serid}/ack`, {
-        method: "POST",
-        body: JSON.stringify({ event_time: event.event_time, action, pic, note, pin }),
-      });
-      if (result.is_active !== false || result.source_i_flag !== 1 || (!result.acknowledged_at && result.status !== "ALREADY_HANDLED")) throw new Error("Sumber belum mengonfirmasi perubahan i_flag; alarm tetap aktif.");
-      setFeedback(result.status === "ALREADY_HANDLED"
-        ? "Alarm sumber sudah ditangani sebelumnya; i_flag=1 terkonfirmasi."
-        : "Sumber mengonfirmasi alarm ditangani (i_flag diperbarui ke 1).");
-      dialog.current?.close();
-      onChanged();
-    } catch (error) {
-      setFeedback(error instanceof Error ? error.message : "Respons sumber gagal");
-    } finally {
-      setPin("");
-      setPending(false);
-    }
-  }
-  return <>
-    <Button type="button" variant="secondary" onClick={() => dialog.current?.showModal()}>Tindak lanjuti sumber</Button>
-    {feedback ? <span role="status">{feedback}</span> : null}
-    <dialog ref={dialog} className="native-user-dialog" aria-label={`Respons alarm sumber SERID ${event.serid}`}>
-      <form className="native-user-dialog-content action-form" onSubmit={(e) => void submit(e)}>
-        <h2>Matikan alarm di sumber</h2>
-        <p>Operasi ini menulis i_op, PIC, catatan, dan i_flag=1 pada baris sumber yang dipilih. Kolom ack legacy tidak diubah; PIN operator diperlukan.</p>
-        <Input label="Action" value={action} onChange={(e) => setAction(e.target.value)} disabled={pending} required />
-        <Input label="PIC" value={pic} onChange={(e) => setPic(e.target.value)} readOnly={user.role !== "Administrator"} disabled={pending} required />
-        <Input label="Catatan" value={note} onChange={(e) => setNote(e.target.value)} disabled={pending} />
-        <Input label="PIN" type="password" value={pin} onChange={(e) => setPin(e.target.value)} disabled={pending} required />
-        {feedback ? <p role="alert">{feedback}</p> : null}
-        <div className="form-actions"><Button type="submit" variant="primary" disabled={pending || !pic || !pin}>{pending ? "Memperbarui sumber…" : "Matikan alarm sumber"}</Button><Button type="button" variant="secondary" disabled={pending} onClick={() => dialog.current?.close()}>Batal</Button></div>
-      </form>
-    </dialog>
-  </>;
-}
-
 function eventVariant(event: PolicyEvent): "success" | "warning" | "error" | "secondary" {
   if (["ALARM", "SOURCE_ALARM"].includes(event.kind) && event.status === "ACTIVE") return event.reason === "LOW_THRESHOLD" ? "warning" : "error";
   if (["RESPONDED", "AUTO_RESOLVED_NORMAL", "SOURCE_HANDLED", "RESOLVED", "NORMAL", "ENDED"].includes(event.status)) return "success";
@@ -149,8 +96,13 @@ function eventLabel(event: PolicyEvent): string {
   return kindLabel(event.kind);
 }
 
-function EventCards({ events, onChanged }: { events: PolicyEvent[]; onChanged: () => void }) {
-  if (!events.length) return <LayerCard className="empty-card">Tidak ada event alarm.</LayerCard>;
+function SourceActionButton({ event, onAction }: { event: PolicyEvent; onAction?: (eventId: string) => void }) {
+  if (!onAction || !event.event_id || !isSourceAlarmActionable(event as ActiveAlarm)) return null;
+  return <Button type="button" variant="secondary" onClick={() => onAction(event.event_id!)}>Tindak lanjuti sumber</Button>;
+}
+
+function EventCards({ events, onAction }: { events: PolicyEvent[]; onAction?: (eventId: string) => void }) {
+  if (!events.length) return <LayerCard className="empty-card">Tidak ada peristiwa alarm.</LayerCard>;
   return (
     <div className="mobile-card-list">
       {events.map((event) => (
@@ -167,7 +119,7 @@ function EventCards({ events, onChanged }: { events: PolicyEvent[]; onChanged: (
             <span>Ambang: {formatDoseValue(event.threshold)}</span>
             <span>Muncul: {formatTimestamp(event.surfaced_at)}</span>
             {describeLifecycle(event) ? <span>Aksi: <LifecycleDescription event={event} /></span> : null}
-            <SourceAlarmResponse event={event} onChanged={onChanged} />
+            <SourceActionButton event={event} onAction={onAction} />
           </div>
         </LayerCard>
       ))}
@@ -175,8 +127,8 @@ function EventCards({ events, onChanged }: { events: PolicyEvent[]; onChanged: (
   );
 }
 
-function EventTable({ events, onChanged }: { events: PolicyEvent[]; onChanged: () => void }) {
-  if (!events.length) return <LayerCard className="empty-card">Tidak ada event alarm.</LayerCard>;
+function EventTable({ events, onAction }: { events: PolicyEvent[]; onAction?: (eventId: string) => void }) {
+  if (!events.length) return <LayerCard className="empty-card">Tidak ada peristiwa alarm.</LayerCard>;
   return (
     <LayerCard className="table-card">
       <Table>
@@ -186,7 +138,7 @@ function EventTable({ events, onChanged }: { events: PolicyEvent[]; onChanged: (
             <Table.Head>Sumber / jenis</Table.Head>
             <Table.Head>Status</Table.Head>
             <Table.Head>Pengukuran</Table.Head>
-            <Table.Head>Ambang</Table.Head>
+              <Table.Head>Ambang</Table.Head>
               <Table.Head>Muncul</Table.Head>
               <Table.Head>Aksi</Table.Head>
           </Table.Row>
@@ -200,7 +152,7 @@ function EventTable({ events, onChanged }: { events: PolicyEvent[]; onChanged: (
               <Table.Cell>{formatPolicyMeasurement(event)}</Table.Cell>
               <Table.Cell>{formatDoseValue(event.threshold)}</Table.Cell>
               <Table.Cell>{formatTimestamp(event.surfaced_at)}</Table.Cell>
-              <Table.Cell><LifecycleDescription event={event} /> <SourceAlarmResponse event={event} onChanged={onChanged} /></Table.Cell>
+              <Table.Cell><LifecycleDescription event={event} /> <SourceActionButton event={event} onAction={onAction} /></Table.Cell>
             </Table.Row>
           ))}
         </Table.Body>
@@ -210,8 +162,8 @@ function EventTable({ events, onChanged }: { events: PolicyEvent[]; onChanged: (
 }
 
 export function AlarmsPage() {
-  useSession();
   const requestedEventId = new URLSearchParams(window.location.search).get("event");
+  const [actionEventId, setActionEventId] = useState<string | null>(requestedEventId);
   const [soundOn, setSoundOn] = useState(false);
   const [items, setItems] = useState<PolicyEvent[] | null>(null);
   const [activeItems, setActiveItems] = useState<ActiveAlarm[]>([]);
@@ -233,7 +185,7 @@ export function AlarmsPage() {
       setSuppressionError("");
       setSuppressionLoaded(true);
     })
-    .catch((e) => { setSuppressionError(e instanceof Error ? e.message : "Tidak dapat memuat suppression"); setSuppressionLoaded(true); });
+     .catch((e) => { setSuppressionError(e instanceof Error ? e.message : "Tidak dapat memuat peredaman"); setSuppressionLoaded(true); });
   };
   const load = (offset = historyOffset) => Promise.allSettled([
     api<AlarmHistoryResponse>(`/api/v1/web/alarm-history?limit=500&offset=${offset}`),
@@ -268,7 +220,7 @@ export function AlarmsPage() {
         setSuppressionError("");
         setSuppressionLoaded(true);
       } else {
-        setSuppressionError(activeSuppressions.reason instanceof Error ? activeSuppressions.reason.message : "Tidak dapat memuat suppression");
+         setSuppressionError(activeSuppressions.reason instanceof Error ? activeSuppressions.reason.message : "Tidak dapat memuat peredaman");
         setSuppressionLoaded(true);
       }
     });
@@ -336,20 +288,20 @@ export function AlarmsPage() {
       ) : null}
       {items || activeLoaded ? (
         <>
-           <PageSection
-             title="Alarm aktif"
-             description="Alarm sumber berbunyi berasal dari baris alat dengan i_flag=0. Event policy ditampilkan terpisah sebagai informasi dan tidak membuka respons sumber."
-             className="active-alarm-section"
-           >
-             <div className="active-alarm-list" aria-live="polite">
-               {!activeLoaded ? <LoadingCard label="Memuat status alarm sumber…" /> : activeError ? <><ErrorCard message={`Status alarm sumber tidak tersedia: ${activeError}. Status terakhir belum terverifikasi; alarm tidak dianggap sunyi.`} />{summary.sourceActive.length ? <><p className="cell-subtle">Snapshot alarm sumber terakhir (belum terverifikasi):</p><EventCards events={summary.sourceActive as PolicyEvent[]} onChanged={() => void load()} /></> : null}</> : <EventCards events={summary.sourceActive as PolicyEvent[]} onChanged={() => void load()} />}
-             </div>
-             {!activeError && summary.policyActive.length ? <div className="active-alarm-list" aria-label="Policy aktif informasional"><p className="cell-subtle">Policy aktif (informasi; tidak dapat membuka respons sumber):</p><EventCards events={summary.policyActive as PolicyEvent[]} onChanged={() => void load()} /></div> : null}
-           </PageSection>
+          <PageSection
+            title="Alarm aktif"
+            description="Alarm yang masih berbunyi pada alat sumber dipisahkan dari peristiwa aturan. Hanya alarm sumber yang dapat ditangani di panel tindakan."
+            className="active-alarm-section"
+          >
+            <div className="active-alarm-list" aria-live="polite">
+              {!activeLoaded ? <LoadingCard label="Memuat status alarm sumber…" /> : activeError ? <><ErrorCard message={`Status alarm sumber tidak tersedia: ${activeError}. Status terakhir belum terverifikasi; alarm tidak dianggap sunyi.`} />{summary.sourceActive.length ? <><p className="cell-subtle">Snapshot alarm sumber terakhir (belum terverifikasi):</p><EventCards events={summary.sourceActive as PolicyEvent[]} /></> : null}</> : <EventCards events={summary.sourceActive as PolicyEvent[]} />}
+            </div>
+            {!activeError && summary.policyActive.length ? <div className="active-alarm-list" aria-label="Aturan aktif informasional"><p className="cell-subtle">Aturan aktif (informasi; tidak membuka respons sumber):</p><EventCards events={summary.policyActive as PolicyEvent[]} /></div> : null}
+          </PageSection>
 
           <div className="metric-grid alarm-summary">
-             <MetricCard label="Aktif (sumber)" value={activeError || !activeLoaded ? "—" : summary.sourceActive.length} badge={<Badge variant={activeError || !activeLoaded ? "warning" : summary.sourceActive.length ? "error" : "success"}>{activeError || !activeLoaded ? "Status tidak tersedia" : summary.sourceActive.length ? "Perlu tindakan" : "Tidak ada alarm yang berbunyi"}</Badge>} />
-             {summary.policyActive.length ? <MetricCard label="Policy aktif (informasi)" value={summary.policyActive.length} badge={<span className="cell-subtle">Tidak membuka respons sumber</span>} /> : null}
+            <MetricCard label="Aktif (sumber)" value={activeError || !activeLoaded ? "—" : summary.sourceActive.length} badge={<Badge variant={activeError || !activeLoaded ? "warning" : summary.sourceActive.length ? "error" : "success"}>{activeError || !activeLoaded ? "Status tidak tersedia" : summary.sourceActive.length ? "Perlu tindakan" : "Tidak ada alarm yang berbunyi"}</Badge>} />
+            {summary.policyActive.length ? <MetricCard label="Aturan aktif (informasi)" value={summary.policyActive.length} badge={<span className="cell-subtle">Tidak membuka respons sumber</span>} /> : null}
             <MetricCard label="Alarm ditahan sementara" value={items === null ? "—" : summary.retriggerLocked} badge={<span className="cell-subtle">{items === null ? "Riwayat tidak tersedia" : "Menunggu pemicu baru"}</span>} />
             <MetricCard label="Alarm diredam" value={items === null ? "—" : summary.suppressed} badge={<span className="cell-subtle">{items === null ? "Riwayat tidak tersedia" : "Sesuai pengaturan"}</span>} />
             <MetricCard label="Catatan terbaru" value={items === null ? "—" : summary.total} badge={<span className="cell-subtle">{items === null ? "Riwayat tidak tersedia" : "Riwayat alarm"}</span>} />
@@ -358,26 +310,26 @@ export function AlarmsPage() {
           <PageSection title="Tindakan operator" description="Catat respons dan penanggung jawab alarm, atau redam alarm stasiun untuk waktu tertentu. Perubahan memerlukan PIN operator.">
             {suppressionError ? (
               <div className="alarm-suppression-error">
-                <ErrorCard message={`Daftar suppression tidak tersedia: ${suppressionError}`} />
-                <Button variant="secondary" onClick={() => void loadSuppressions()}>Muat ulang suppression</Button>
+                <ErrorCard message={`Daftar peredaman tidak tersedia: ${suppressionError}`} />
+                <Button variant="secondary" onClick={() => void loadSuppressions()}>Muat ulang peredaman</Button>
               </div>
             ) : null}
-            <AlarmOperations events={activeItems} sourceEvents={sourceItems} sourceStatus={!activeLoaded ? "loading" : activeError ? "error" : "ready"} activeError={activeError} suppressions={suppressions} suppressionsStatus={!suppressionLoaded ? "loading" : suppressionError ? "error" : "ready"} onChanged={() => void load()} initialEventId={requestedEventId} />
+            <AlarmOperations events={activeItems} sourceEvents={sourceItems} sourceStatus={!activeLoaded ? "loading" : activeError ? "error" : "ready"} activeError={activeError} suppressions={suppressions} suppressionsStatus={!suppressionLoaded ? "loading" : suppressionError ? "error" : "ready"} onChanged={() => void load()} initialEventId={actionEventId} />
           </PageSection>
 
-           <PageSection title="Riwayat alarm" description="Lihat alarm alat dan perubahan pengaturan alarm berdasarkan waktu.">
-             {items === null ? historyLoaded ? <p className="cell-subtle" role="status">Riwayat alarm belum tersedia.</p> : <LoadingCard label="Memuat riwayat alarm…" /> : <>
-               <ResponsiveDataView
-                 desktop={<EventTable events={items} onChanged={() => void load()} />}
-                 mobile={<EventCards events={items} onChanged={() => void load()} />}
-               />
-               <div className="form-actions" aria-label="Navigasi riwayat event">
-                 <span className="cell-subtle">{historyTotal === 0 ? "0 event" : `${historyOffset + 1}–${Math.min(historyOffset + items.length, historyTotal)} dari ${historyTotal}`}</span>
-                 <Button variant="secondary" disabled={historyOffset === 0} onClick={() => void load(Math.max(0, historyOffset - 500))}>Sebelumnya</Button>
-                 <Button variant="secondary" disabled={historyOffset + items.length >= historyTotal} onClick={() => void load(historyOffset + 500)}>Berikutnya</Button>
-               </div>
-             </>}
-           </PageSection>
+          <PageSection title="Riwayat alarm" description="Lihat alarm alat dan perubahan pengaturan alarm berdasarkan waktu.">
+            {items === null ? historyLoaded ? <p className="cell-subtle" role="status">Riwayat alarm belum tersedia.</p> : <LoadingCard label="Memuat riwayat alarm…" /> : <>
+              <ResponsiveDataView
+                desktop={<EventTable events={items} onAction={setActionEventId} />}
+                mobile={<EventCards events={items} onAction={setActionEventId} />}
+              />
+              <div className="form-actions" aria-label="Navigasi riwayat peristiwa">
+                <span className="cell-subtle">{historyTotal === 0 ? "0 peristiwa" : `${historyOffset + 1}–${Math.min(historyOffset + items.length, historyTotal)} dari ${historyTotal}`}</span>
+                <Button variant="secondary" disabled={historyOffset === 0} onClick={() => void load(Math.max(0, historyOffset - 500))}>Sebelumnya</Button>
+                <Button variant="secondary" disabled={historyOffset + items.length >= historyTotal} onClick={() => void load(historyOffset + 500)}>Berikutnya</Button>
+              </div>
+            </>}
+          </PageSection>
         </>
       ) : null}
     </div>

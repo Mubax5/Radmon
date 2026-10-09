@@ -4,6 +4,14 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
 
 
+def normalize_dose_unit(value: Any) -> str:
+    """Return a display-stable dose-rate unit while preserving custom units."""
+    text = str(value or "µSv/h").strip().replace("μ", "µ")
+    if text.lower() == "usv/h":
+        return "µSv/h"
+    return text
+
+
 def format_dose_value(value: Any) -> str:
     """Render a dose value rounded to exactly two fractional digits."""
     if value is None or value == "":
