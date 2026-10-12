@@ -155,7 +155,7 @@ def test_alarm_history_merges_source_and_policy_rows_with_pagination_without_mut
         def list_alarms(self, *, limit):
             self.calls += 1
             return [{"source_id": source_id, "serid": 5702, "remote_serid": 5702,
-                      "event_time": at, "level": "ALARM", "is_active": True,
+                      "event_time": at, "level": "ALARM", "is_active": False,
                       "acknowledged_at": None, "pic": "SECRET PIC", "note": "SECRET NOTE",
                       "action": "SECRET ACTION", "operator": "SECRET OP", "user_id": 91,
                       "i_flag": 1} for source_id in ("gd50", "gd52", "gd38")]
@@ -201,7 +201,7 @@ def test_alarm_history_merges_source_and_policy_rows_with_pagination_without_mut
     assert {item["source_id"] for item in source_rows} == {"gd50", "gd52", "gd38"}
     merged_source = next((item for item in source_rows if item.get("policy_event", {}).get("event_id") == "p1"), None)
     assert merged_source is not None, body["items"]
-    assert merged_source["acknowledged"] is False
+    assert merged_source["acknowledged"] is True
     assert not {"pic", "note", "action", "operator", "user_id", "i_flag"} & merged_source.keys()
     assert merged_source["source_i_flag"] == 1
     assert not {"action", "resolution_reason", "operator_id", "secret"} & merged_source["policy_event"].keys()

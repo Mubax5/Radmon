@@ -342,7 +342,19 @@ def attach_web_api_routes(
                 item = project(raw_item, source_fields)
                 if "source_i_flag" not in item and "i_flag" in raw_item:
                     item["source_i_flag"] = raw_item["i_flag"]
-                item.update({"event_type": "source_alarm", "status": "ACTIVE" if item.get("is_active") else "ACKNOWLEDGED", "acknowledged": bool(raw_item.get("acknowledged_at")) or not bool(item.get("is_active")), "suppressed": False})
+                # The source latch is the physical alarm truth.  A policy event
+                # may be auto-resolved after a normal reading, but it cannot
+                # rewrite an i_flag=0 source alarm or make i_flag=1 look active.
+                source_i_flag = item.get("source_i_flag")
+                try:
+                    source_i_flag = int(source_i_flag) if source_i_flag is not None else None
+                except (TypeError, ValueError):
+                    source_i_flag = None
+                if source_i_flag in (0, 1):
+                    item["source_i_flag"] = source_i_flag
+                    item["is_active"] = source_i_flag == 0
+                source_active = bool(item.get("is_active"))
+                item.update({"event_type": "source_alarm", "status": "ACTIVE" if source_active else "ACKNOWLEDGED", "surfaced_at": item.get("event_time"), "acknowledged": bool(raw_item.get("acknowledged_at")) or not source_active, "suppressed": False})
                 sources.append(item)
         policies = []
         if alarm_policy is not None:

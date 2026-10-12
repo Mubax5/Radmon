@@ -5,6 +5,7 @@ import { AlarmOperations, type Suppression } from "../Actions";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
 import { formatDoseValue, formatPolicyMeasurement } from "../format";
 import { describeLifecycle, kindLabel, statusLabel } from "./alarmLifecycle";
+import { normalizeHistory, type PolicyEvent } from "./alarmHistory";
 import { useWebRefresh } from "../live";
 import { isSourceAlarmActionable, type ActiveAlarm } from "../activeAlarms";
 import {
@@ -16,46 +17,11 @@ import {
   formatTimestamp,
 } from "../ui";
 
-export type PolicyEvent = Record<string, unknown> & {
-  event_id?: string;
-  serid: number;
-  status: string;
-  kind: string;
-  measured_value?: number | null;
-  threshold?: number | null;
-  surfaced_at?: string;
-  action?: string | null;
-  reason?: string | null;
-  resolution_code?: string | null;
-  resolution_reason?: string | null;
-  source_reconciliation?: { status?: string; reason?: string } | null;
-  event_type?: "source_alarm" | "policy_lifecycle";
-  event_time?: string;
-  level?: string;
-  source_id?: string;
-  policy_event?: PolicyEvent;
-  is_active?: boolean;
-  source_i_flag?: number;
-  source_actionable?: boolean;
-};
-
 type AlarmHistoryResponse = { items: PolicyEvent[]; total: number; limit: number; offset: number; has_more: boolean };
 
-function normalizeHistory(items: PolicyEvent[]): PolicyEvent[] {
-  return items.map((item) => {
-    if (item.event_type === "policy_lifecycle") return item;
-    if (item.policy_event && (!item.is_active || item.policy_event.status === "ACTIVE")) return { ...item.policy_event, source_alarm: item, event_type: "policy_lifecycle" };
-    return {
-      ...item,
-      event_id: `source:${item.source_id}:${item.serid}:${item.event_time}`,
-      kind: "SOURCE_ALARM",
-      reason: item.level === "ALARM" ? "HIGH_THRESHOLD" : "LOW_THRESHOLD",
-      surfaced_at: item.event_time,
-      measured_value: item.measured_value,
-      threshold: item.threshold,
-      event_type: "source_alarm",
-    };
-  });
+function PolicyOutcome({ event }: { event: PolicyEvent }) {
+  if (event.event_type !== "source_alarm" || !event.policy_event) return null;
+  return <span className="cell-subtle">Aturan pusat: {statusLabel(event.policy_event.status, event.policy_event.kind)}</span>;
 }
 
 function LifecycleDescription({ event }: { event: PolicyEvent }) {
@@ -118,6 +84,7 @@ function EventCards({ events, onAction }: { events: PolicyEvent[]; onAction?: (e
             <span>Pengukuran: {formatPolicyMeasurement(event)}</span>
             <span>Ambang: {formatDoseValue(event.threshold)}</span>
             <span>Muncul: {formatTimestamp(event.surfaced_at)}</span>
+            <PolicyOutcome event={event} />
             {describeLifecycle(event) ? <span>Aksi: <LifecycleDescription event={event} /></span> : null}
             <SourceActionButton event={event} onAction={onAction} />
           </div>
@@ -148,7 +115,7 @@ function EventTable({ events, onAction }: { events: PolicyEvent[]; onAction?: (e
             <Table.Row key={event.event_id ?? `${event.source_id}:${event.serid}:${event.event_time}`}>
               <Table.Cell><strong>SERID {event.serid}</strong></Table.Cell>
               <Table.Cell><div className="alarm-event-origin"><EventOrigin event={event} />{eventLabel(event)}</div></Table.Cell>
-              <Table.Cell><Badge variant={eventVariant(event)}>{statusLabel(event.status, event.kind)}</Badge></Table.Cell>
+              <Table.Cell><Badge variant={eventVariant(event)}>{statusLabel(event.status, event.kind)}</Badge><PolicyOutcome event={event} /></Table.Cell>
               <Table.Cell>{formatPolicyMeasurement(event)}</Table.Cell>
               <Table.Cell>{formatDoseValue(event.threshold)}</Table.Cell>
               <Table.Cell>{formatTimestamp(event.surfaced_at)}</Table.Cell>

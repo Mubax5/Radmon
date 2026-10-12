@@ -184,3 +184,41 @@ def test_unlinked_policy_source_correlation_normalizes_source_clock_format(tmp_p
     # The source route remains authoritative without a persisted dispatch link;
     # the policy must still not be duplicated as a second active row.
     assert rows[0]['event_type'] == 'source_alarm'
+
+
+def test_alarm_history_keeps_handled_source_row_when_policy_auto_resolves(tmp_path):
+    client, mirror, policy, _ = setup(tmp_path)
+    at = datetime(2026, 10, 7, 11, 27, 10)
+    policy.evaluate_live({
+        'serid': 5702, '_remote_serid': 52, 'dtom': at,
+        '_policy_measured_at': at - timedelta(seconds=48),
+        'doserate': 76.82, 'warnlevel': 23, 'alarmlevel': 25,
+    }, source_id='gd52')
+    policy.evaluate_live({
+        'serid': 5702, 'dtom': at + timedelta(seconds=10),
+        '_policy_measured_at': at - timedelta(seconds=38),
+        'doserate': 0.2, 'warnlevel': 23, 'alarmlevel': 25,
+    })
+    source(mirror, 'gd52', at=at, flag=1)
+
+    rows = client.get('/api/v1/web/alarm-history?limit=25').json()['items']
+    source_row = next(row for row in rows if row.get('event_type') == 'source_alarm')
+
+    assert source_row['status'] == 'ACKNOWLEDGED'
+    assert source_row['source_i_flag'] == 1
+    assert source_row['is_active'] is False
+    assert source_row['event_time'] == '2026-10-07T11:27:10'
+    assert source_row['surfaced_at'] == '2026-10-07T11:27:10'
+    assert source_row['measured_value'] == 76.82
+    assert source_row['policy_event']['status'] == 'AUTO_RESOLVED_NORMAL'
+    assert source_row['policy_event']['surfaced_at'] != source_row['surfaced_at']
+
+    # A normal policy reading does not silence the physical source latch.
+    source(mirror, 'gd52', at=at, flag=0)
+    active_source_row = next(
+        row for row in client.get('/api/v1/web/alarm-history?limit=25').json()['items']
+        if row.get('event_type') == 'source_alarm'
+    )
+    assert active_source_row['status'] == 'ACTIVE'
+    assert active_source_row['source_i_flag'] == 0
+    assert active_source_row['is_active'] is True

@@ -55,7 +55,7 @@ All routes below require the web session.
 | `GET /api/v1/web/stations/{serid}` | Viewer | One station detail. |
 | `GET /api/v1/web/stations/{serid}/history?limit=240` | Viewer | Historical samples, bounded to 1–2,000 rows. |
 | `GET /api/v1/web/active-alarms` | Viewer | Current source alarm snapshot. |
-| `GET /api/v1/web/alarm-history?limit=100&offset=0` | Viewer | Paginated, sanitized source/policy lifecycle view. |
+| `GET /api/v1/web/alarm-history?limit=100&offset=0` | Viewer | Paginated, sanitized source/policy lifecycle view. Source rows keep raw `event_time`, measurement, and physical `i_flag` status; any correlated policy outcome is separate. |
 | `GET /api/v1/control/alarms` | Viewer | Sanitized source alarm compatibility view. |
 | `GET /api/v1/control/sources/health` | Viewer | Per-source health state and timestamps. |
 | `GET /api/v1/control/archives` | Viewer | Verified archive inventory. |
