@@ -225,12 +225,22 @@ def attach_web_routes(
     """Attach BRIN monitoring gateway and authenticated app static shell."""
     dist = Path(web_dist) if web_dist is not None else bundled_web_dist()
 
+    # The secure API installs the shared security/header middleware before
+    # this function in production.  Keep the legacy navigation redirect as a
+    # separate middleware so it is not skipped merely because that shared
+    # boundary already exists.
+    if not getattr(app.state, "radmon_legacy_navigation_redirect_installed", False):
+        @app.middleware("http")
+        async def legacy_navigation_redirect(request: Request, call_next):
+            redirect = _legacy_navigation_redirect(request, settings)
+            if redirect is not None:
+                return redirect
+            return await call_next(request)
+        app.state.radmon_legacy_navigation_redirect_installed = True
+
     if not getattr(app.state, "radmon_security_boundary_installed", False):
         @app.middleware("http")
         async def web_security_headers(request: Request, call_next):
-            legacy_redirect = _legacy_navigation_redirect(request, settings)
-            if legacy_redirect is not None:
-                return legacy_redirect
             response = await call_next(request)
             response.headers.setdefault("X-Content-Type-Options", "nosniff")
             response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")

@@ -88,6 +88,25 @@ def test_untrusted_forwarded_https_cannot_bypass_legacy_redirect(tmp_path: Path)
     assert response.headers["location"] == "https://10.10.140.101/app/login"
 
 
+def test_legacy_redirect_is_installed_when_secure_api_boundary_already_exists(tmp_path: Path) -> None:
+    dist = tmp_path / "web"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>RadMon</html>", encoding="utf-8")
+    settings = Settings(web_allowed_origins=("https://10.10.140.101",))
+    app = FastAPI()
+    # Production attaches secure_api routes before web_host routes; that
+    # shared boundary must not suppress the navigation-only middleware.
+    app.state.radmon_security_boundary_installed = True
+    attach_web_routes(app, settings=settings, web_dist=dist)
+
+    response = TestClient(app, client=("10.50.60.70", 50000)).get(
+        "/app/login", follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://10.10.140.101/app/login"
+
+
 def test_authenticated_remote_grafana_is_proxied_without_client_credentials(tmp_path: Path) -> None:
     seen: list[httpx.Request] = []
 
