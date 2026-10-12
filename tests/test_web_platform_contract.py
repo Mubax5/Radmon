@@ -35,6 +35,59 @@ def test_monitoring_landing_stays_on_radmon_gateway(tmp_path: Path) -> None:
     assert "kiosk" in response.headers["location"].lower()
 
 
+def test_remote_legacy_http_app_navigation_redirects_to_exact_https_origin(tmp_path: Path) -> None:
+    dist = tmp_path / "web"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>RadMon</html>", encoding="utf-8")
+    settings = Settings(web_allowed_origins=("https://10.10.140.101",))
+    app = FastAPI()
+    attach_web_routes(app, settings=settings, web_dist=dist)
+
+    response = TestClient(app, client=("10.50.60.70", 50000)).get(
+        "/app/login?next=%2F", headers={"Host": "attacker.example"}, follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://10.10.140.101/app/login?next=%2F"
+
+
+def test_local_http_and_trusted_https_proxy_do_not_redirect_app_navigation(tmp_path: Path) -> None:
+    dist = tmp_path / "web"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>RadMon</html>", encoding="utf-8")
+    settings = Settings(
+        web_allowed_origins=("https://10.10.140.101",),
+        trusted_proxy_nets=("127.0.0.1/32",),
+    )
+    app = FastAPI()
+    attach_web_routes(app, settings=settings, web_dist=dist)
+
+    local = TestClient(app, client=("127.0.0.1", 50000)).get("/app/login")
+    proxied = TestClient(app, client=("127.0.0.1", 50001)).get(
+        "/app/login",
+        headers={"X-Forwarded-For": "10.50.60.70", "X-Forwarded-Proto": "https"},
+    )
+
+    assert local.status_code == 200
+    assert proxied.status_code == 200
+
+
+def test_untrusted_forwarded_https_cannot_bypass_legacy_redirect(tmp_path: Path) -> None:
+    dist = tmp_path / "web"
+    dist.mkdir()
+    (dist / "index.html").write_text("<html>RadMon</html>", encoding="utf-8")
+    settings = Settings(web_allowed_origins=("https://10.10.140.101",))
+    app = FastAPI()
+    attach_web_routes(app, settings=settings, web_dist=dist)
+
+    response = TestClient(app, client=("10.50.60.70", 50000)).get(
+        "/app/login", headers={"X-Forwarded-Proto": "https"}, follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert response.headers["location"] == "https://10.10.140.101/app/login"
+
+
 def test_authenticated_remote_grafana_is_proxied_without_client_credentials(tmp_path: Path) -> None:
     seen: list[httpx.Request] = []
 

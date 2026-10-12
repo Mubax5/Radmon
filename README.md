@@ -33,7 +33,8 @@ http://localhost:3300          -> Grafana admin/editor hanya di PC server
 
 HTTPS RadMon yang telah dipasang adalah `https://10.10.140.101/` dan
 `https://10.10.140.101/app`. Port **8090** tetap gateway backend dan guard
-remote login HTTP tetap aktif; client jaringan menggunakan TCP `443` melalui
+remote login HTTP tetap aktif; navigasi halaman lama `/` dan `/app*` diarahkan
+ke HTTPS, sedangkan credential POST tetap ditolak. Client jaringan menggunakan TCP `443` melalui
 reverse proxy khusus RadMon. Grafana native tetap bind ke loopback
 `127.0.0.1:3300`; user BRIN-NET tidak mendapat koneksi langsung ke port 3300.
 Trust CA client dijelaskan di [HTTPS deployment](docs/HTTPS-DEPLOYMENT-ID.md).

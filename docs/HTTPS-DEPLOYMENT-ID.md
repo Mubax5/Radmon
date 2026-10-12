@@ -8,7 +8,7 @@ authentication remote:
 ```text
 https://10.10.140.101/       Grafana monitoring, session RadMon wajib
 https://10.10.140.101/app    RadMon Control Plane, session RadMon wajib
-http://10.10.140.101:8090    Tetap HTTP; login remote ditolak oleh guard HTTPS
+http://10.10.140.101:8090    Navigasi `/` dan `/app*` redirect ke HTTPS; POST login tetap ditolak
 http://127.0.0.1:3300        Grafana native/editor lokal saja
 ```
 
@@ -26,7 +26,10 @@ RADMON_TRUSTED_PROXY_NETS=127.0.0.1/32
 RADMON_WEB_ALLOWED_ORIGINS=https://10.10.140.101
 ```
 
-Tidak ada wildcard proxy/origin. Caddy menimpa `X-Forwarded-Proto` menjadi
+Tidak ada wildcard proxy/origin. Navigasi GET/HEAD remote ke `/`, `/app`, dan
+`/app/*` pada URL lama `:8090` diarahkan ke origin HTTPS exact; API, health,
+Grafana, local loopback, dan plaintext POST login tidak di-redirect. Caddy
+menimpa `X-Forwarded-Proto` menjadi
 `https`, meneruskan WebSocket melalui `reverse_proxy`, membatasi request body
 menjadi 32 MiB, dan access log menghapus header `Cookie`, `Authorization`, dan
 `Proxy-Authorization`. HSTS belum dipasang sebelum trust client diselesaikan.

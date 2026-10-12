@@ -135,6 +135,61 @@ def _public_location(value: str) -> str:
     return value
 
 
+def _configured_https_origin(settings: Settings) -> str | None:
+    """Return the explicitly configured canonical HTTPS origin.
+
+    Redirects must never reflect Host or forwarded-host input.  A deployment
+    has to opt in with an exact HTTPS origin, which also keeps a generic/local
+    fixture from inventing a public hostname.
+    """
+    for value in getattr(settings, "web_allowed_origins", ()):
+        parsed = urlsplit(str(value).strip())
+        if (
+            parsed.scheme.lower() == "https"
+            and parsed.netloc
+            and not parsed.username
+            and not parsed.password
+            and parsed.path in {"", "/"}
+            and not parsed.query
+            and not parsed.fragment
+        ):
+            return f"https://{parsed.netloc.lower()}"
+    return None
+
+
+def _request_uses_https(request: Request, settings: Settings) -> bool:
+    if request.url.scheme.lower() == "https":
+        return True
+    if not _peer_is_trusted_proxy(request, settings):
+        return False
+    return request.headers.get("x-forwarded-proto", "").split(",", 1)[0].strip().lower() == "https"
+
+
+def _legacy_navigation_redirect(request: Request, settings: Settings) -> RedirectResponse | None:
+    """Redirect only remote page navigation from the legacy HTTP gateway.
+
+    API/health and all non-GET mutations retain their existing behavior.  In
+    particular, plaintext login POSTs must still reach the HTTPS guard rather
+    than being redirected after credentials have crossed the wire.
+    """
+    if request.method.upper() not in {"GET", "HEAD"} or _request_uses_https(request, settings):
+        return None
+    if _is_loopback(request, settings):
+        return None
+    path = request.url.path
+    if path != "/" and path != "/app" and not path.startswith("/app/"):
+        return None
+    origin = _configured_https_origin(settings)
+    if origin is None:
+        return None
+    # Starlette's query is already percent-encoded; use only the path/query,
+    # never the untrusted Host header, when constructing Location.
+    location = f"{origin}{path}"
+    if request.url.query:
+        location += f"?{request.url.query}"
+    return RedirectResponse(location, status_code=302)
+
+
 def _spa_shell(index: Path) -> FileResponse:
     return FileResponse(index, headers=_SPA_HEADERS)
 
@@ -173,6 +228,9 @@ def attach_web_routes(
     if not getattr(app.state, "radmon_security_boundary_installed", False):
         @app.middleware("http")
         async def web_security_headers(request: Request, call_next):
+            legacy_redirect = _legacy_navigation_redirect(request, settings)
+            if legacy_redirect is not None:
+                return legacy_redirect
             response = await call_next(request)
             response.headers.setdefault("X-Content-Type-Options", "nosniff")
             response.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
