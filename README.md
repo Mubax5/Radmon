@@ -16,6 +16,8 @@ RadMon adalah platform monitoring radiasi untuk central PC **`192.168.1.2`**. Pr
 - [API reference](docs/API-REFERENCE.md) — endpoint dan auth contract.
 - [Updater guide](docs/UPDATER-ID.md) — checksum, readiness, dan rollback.
 - [Troubleshooting](docs/TROUBLESHOOTING-ID.md) — diagnosis operator.
+- [HTTPS deployment](docs/HTTPS-DEPLOYMENT-ID.md) — status TLS nyata, trust CA,
+  renewal, dan bukti verifikasi.
 - [Security review](docs/SECURITY-REVIEW-ID.md) — evidence dan residual risk.
 - [Offline manual](docs/manual/user-manual.html) dan [installation manual](docs/manual/installation.html) — file yang ikut installer.
 
@@ -24,12 +26,17 @@ RadMon adalah platform monitoring radiasi untuk central PC **`192.168.1.2`**. Pr
 Dari perangkat yang tersambung ke jaringan BRIN dan mempunyai route ke server:
 
 ```text
-https://monitoring.example/    -> Grafana monitoring fullscreen/kiosk, wajib login RadMon
-https://monitoring.example/app -> RadMon Control Plane, wajib login
+https://10.10.140.101/        -> Grafana monitoring fullscreen/kiosk, wajib login RadMon
+https://10.10.140.101/app     -> RadMon Control Plane, wajib login
 http://localhost:3300          -> Grafana admin/editor hanya di PC server
 ```
 
-Port **8090** adalah satu-satunya gateway yang dibuka Windows Firewall untuk client jaringan. Grafana native tetap bind ke loopback `127.0.0.1:3300`; browser remote menerima Grafana melalui reverse proxy RadMon pada origin yang sama (`:8090`), sehingga user BRIN-NET tidak perlu koneksi langsung ke port 3300.
+HTTPS RadMon yang telah dipasang adalah `https://10.10.140.101/` dan
+`https://10.10.140.101/app`. Port **8090** tetap gateway backend dan guard
+remote login HTTP tetap aktif; client jaringan menggunakan TCP `443` melalui
+reverse proxy khusus RadMon. Grafana native tetap bind ke loopback
+`127.0.0.1:3300`; user BRIN-NET tidak mendapat koneksi langsung ke port 3300.
+Trust CA client dijelaskan di [HTTPS deployment](docs/HTTPS-DEPLOYMENT-ID.md).
 
 Panduan pemeriksaan gangguan operator dalam Bahasa Indonesia: [docs/TROUBLESHOOTING-ID.md](docs/TROUBLESHOOTING-ID.md). Untuk langkah start/pemulihan singkat, lihat [docs/OPERATOR-STARTUP-ID.md](docs/OPERATOR-STARTUP-ID.md).
 
@@ -79,7 +86,8 @@ RADMON_BOOTSTRAP_ADMIN_PIN=GANTI_PIN
 
 4. Pastikan Grafana native tersedia; bila lokasinya non-standar isi `RADMON_GRAFANA_BIN`.
 5. Isi `RADMON_GRAFANA_PASSWORD` dengan secret unik atau biarkan marker first-start menghasilkan secret baru; `admin/admin` tidak diterima.
-6. Pasang reverse proxy HTTPS dan isi trusted proxy/origin sebelum akses remote.
+6. HTTPS host production sudah disiapkan; pada setiap client, verifikasi dan
+   pasang CA publik RadMon secara manual sebelum membuka URL HTTPS.
 7. Restart task `RadMon Server` atau reboot Windows setelah konfigurasi lengkap.
 8. Login RadMon di `/app`; setelah Administrator berhasil terbentuk, bootstrap password/PIN dapat dihapus dari `.env`.
 

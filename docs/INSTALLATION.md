@@ -55,8 +55,10 @@ RADMON_WEB_ALLOWED_ORIGINS=https://monitoring.example
 
 4. Jika Grafana tidak ditemukan otomatis, isi `RADMON_GRAFANA_BIN` dengan path
    lokal ke `grafana-server.exe`.
-5. Pastikan reverse proxy HTTPS meneruskan origin dan forwarded protocol yang
-   benar sebelum mengizinkan login remote.
+5. Pada deployment central `10.10.140.101`, gunakan reverse proxy RadMon yang
+   sudah dipasang dan baca [HTTPS deployment](HTTPS-DEPLOYMENT-ID.md). Untuk
+   client lain, pasang CA publik secara manual setelah memverifikasi
+   fingerprint; jangan mematikan guard HTTPS atau memakai wildcard origin.
 6. Restart task **RadMon Server** atau reboot Windows.
 7. Login ke `/app` sebagai bootstrap Administrator. Setelah user terbentuk,
    hapus credential bootstrap dari `.env` dan simpan file dengan ACL NTFS
@@ -97,12 +99,14 @@ dipertahankan selama upgrade. Manual HTML yang ikut installer berada di
 ## URL dan network boundary
 
 ```text
-https://monitoring.example/    Grafana monitoring, session RadMon wajib
-https://monitoring.example/app Control Plane, session RadMon wajib
+https://10.10.140.101/        Grafana monitoring, session RadMon wajib
+https://10.10.140.101/app     Control Plane, session RadMon wajib
 http://127.0.0.1:3300         Grafana admin/editor lokal di PC server
 ```
 
-Firewall host membuka TCP `8090` untuk routed clients sesuai boundary jaringan.
+Firewall host membuka TCP `443` hanya untuk executable reverse proxy RadMon pada
+LAN yang disetujui; port backend `8090` tetap memiliki guard HTTP dan rule
+legacy.
 Port `3300`, `3306`, dan `47652` bukan port client web. Routing BRIN-NET,
 VLAN, client isolation, dan ACL tetap harus diuji oleh administrator jaringan.
 Jangan membuka database atau Grafana direct ke LAN untuk mengatasi kegagalan

@@ -3,9 +3,9 @@
 **Tanggal review:** 8 Oktober 2026<br>
 **Baseline:** `127c1907`<br>
 **Evidence code parent:** `1b2e2c32`<br>
-**Status:** implementasi sudah diverifikasi di workspace dan belum dideploy ke
-produksi. Dokumen ini adalah catatan engineering dan readiness, bukan sertifikasi
-keamanan atau jaminan tidak ada kerentanan yang belum diketahui.
+**Status:** implementasi source dan deployment HTTPS central diverifikasi pada
+host `10.10.140.101`. Dokumen ini adalah catatan engineering dan readiness,
+bukan sertifikasi keamanan atau jaminan tidak ada kerentanan yang belum diketahui.
 
 **Head dokumentasi:** `403efbce` pada tanggal yang sama. Commit ini hanya
 menyegarkan evidence; jangan membacanya sebagai SHA production yang sedang
@@ -32,7 +32,7 @@ yang sudah ada dipertahankan.
 | Unauthenticated Grafana fallback | Bootstrap lama dapat jatuh ke akses yang salah saat auth Grafana gagal | Fallback unauthenticated setelah auth failure dihapus; kegagalan Grafana tidak menurunkan auth Control Plane | Fixed; kompatibilitas TV anonim remote berubah menjadi session-required |
 | Updater merusak release aktif | Installer menghapus `app` lalu gagal sebelum marker/readiness; server tertinggal memakai tree rusak | Updater menghentikan proses terverifikasi, memindahkan tree lama ke `runtime/updates/<sha>/previous-app`, menjalankan installer, memeriksa marker dan health stabil, lalu memulihkan tree lama saat gagal. Failed tree dipindahkan, bukan dihapus massal. `[InstallDelete]` dihapus | Fixed secara kode; rollback smoke test Windows wajib sebelum persetujuan produksi |
 | Default Grafana `admin/admin` | Installer/config baru atau legacy memberi credential yang dapat ditebak | Template memakai `GENERATE_ON_FIRST_START`; first start membuat secret unik atomik dan membatasi mode file best-effort; `admin`, kosong, atau secret lemah memblokir bootstrap Grafana managed. Nilai legacy tidak dirotasi diam-diam | Fixed untuk instalasi baru; legacy harus dimitigasi operator |
-| Session cookie melalui HTTP remote | Cookie non-Secure dapat disadap pada LAN bila gateway HTTP digunakan | `RADMON_WEB_COOKIE_SECURE=1` sebagai default; remote production login tanpa HTTPS ditolak, termasuk konfigurasi secure flag yang salah; loopback HTTP tetap tersedia untuk recovery lokal | Fixed secara guard; TLS belum dipasang di server |
+| Session cookie melalui HTTP remote | Cookie non-Secure dapat disadap pada LAN bila gateway HTTP digunakan | `RADMON_WEB_COOKIE_SECURE=1` sebagai default; remote production login tanpa HTTPS ditolak, termasuk konfigurasi secure flag yang salah; loopback HTTP tetap tersedia untuk recovery lokal | Fixed secara guard; HTTPS aktif pada `10.10.140.101:443`, trust client masih manual |
 | Source tampak OFFLINE karena policy/cache error | Exception policy dari cycle live mengalir ke state connectivity | `remote_connected` dan `policy_state` dipisah. Source yang menjawab tetap `CONNECTED` dengan `policy_state=DEGRADED`; kegagalan konektivitas tetap menaikkan DEGRADED/OFFLINE | Fixed dan dites |
 | Worker menulis setelah shutdown | `ThreadPoolExecutor.shutdown(wait=False, cancel_futures=False)` meninggalkan queued/active job yang dapat menulis setelah lifecycle API selesai | Queue tetap durable untuk recovery, queued future dibatalkan, active work diberi cancellation checkpoint dan bounded wait, artifact hanya dipublish atomic rename, partial temp dihapus | Fixed secara kode; timeout jaringan dan restart Windows harus diuji |
 
@@ -122,20 +122,46 @@ Validasi yang tersedia pada workspace:
 - CSS report action/download dinaikkan ke target sentuh minimum 44px setelah
   ditemukan tombol 36px pada render; `npm.cmd run check` dan `npm.cmd run build`
   sesudah perbaikan berhasil.
-- Workflow publikasi otomatis `latest` berjalan sebagai bagian CI; tidak ada
-  klaim bahwa artifact sudah dipasang atau dijalankan di production.
-- Tidak ada deploy/restart production, perubahan credential production,
-  perubahan certificate, atau perubahan firewall yang dilakukan.
+- Workflow publikasi otomatis `latest` berjalan sebagai bagian CI; artifact
+  aplikasi tetap tidak diubah oleh commissioning HTTPS.
+- Tidak ada perubahan credential production, schema/data measurement, alarm,
+  atau Grafana state yang dilakukan. RadMon direstart sekali secara bounded
+  untuk memuat trusted proxy/origin; reverse proxy berjalan terpisah.
+
+### Deployment HTTPS central (12 Oktober 2026)
+
+- Caddy `v2.11.7` dari release resmi Caddy dipasang sebagai task `RadMon HTTPS`
+  `SYSTEM`; archive Windows amd64 diverifikasi terhadap SHA-256 resmi
+  `0a1edc0b799512051c57071ce0e798d3f2cf67dc98171366f1d2b326072e3b06`.
+- TCP `443` hanya meneruskan ke `127.0.0.1:8090`; TCP `80` tidak disentuh.
+  Firewall rule `RadMon HTTPS` dibatasi ke program Caddy, local IP central,
+  dan subnet `10.10.140.0/24`/`192.168.1.0/24` pada profile aktif.
+- `RADMON_TRUSTED_PROXY_NETS=127.0.0.1/32` dan
+  `RADMON_WEB_ALLOWED_ORIGINS=https://10.10.140.101` diterapkan atomik; tidak
+  ada trusted network LAN wildcard.
+- Leaf certificate tervalidasi memiliki SAN `IP Address:10.10.140.101`.
+  Public Caddy root certificate berada di
+  `%LOCALAPPDATA%\RadMon\https\public\RadMon-HTTPS-RootCA.cer` dengan
+  fingerprint SHA-256:
+  `2E:EE:9B:5F:48:B6:E9:26:A1:C3:9B:6E:8D:1D:98:74:79:D2:16:58:D8:46:3F:D5:37:BC:C0:C3:A8:BE:94:89`.
+  Private key tetap di data storage ber-ACL `SYSTEM`/`Administrators`.
+- Validasi TLS 1.2/1.3 menggunakan CA file berhasil; trust store client tidak
+  diubah secara remote. Client harus mengikuti [HTTPS deployment](HTTPS-DEPLOYMENT-ID.md)
+  dan melakukan trust CA dengan persetujuan Administrator.
+- Read-only live checks berhasil untuk HTTPS `/health`, `/app`, route CA publik,
+  HTTP LAN login guard `426`, serta Grafana `3300` dan `3000` health. Tidak ada
+  operator login, alarm mutation, acknowledgement, suppression, atau userdata
+  mutation dalam commissioning ini.
 
 ## Checklist sebelum deployment
 
-- [ ] Owner menyetujui remote Grafana session requirement dan menyediakan URL
-  reverse proxy HTTPS yang benar.
-- [ ] TLS termination, certificate renewal, HSTS policy, dan forwarded-proto
-  allowlist diuji; `RADMON_TRUSTED_PROXY_NETS` hanya berisi network proxy yang
-  benar-benar dimiliki.
-- [ ] `RADMON_WEB_ALLOWED_ORIGINS` diisi origin HTTPS resmi; jangan memakai
-  wildcard atau origin yang tidak dikuasai.
+- [x] Owner menyetujui remote Grafana session requirement dan URL HTTPS
+  `https://10.10.140.101/` serta `/app` dipasang.
+- [x] TLS termination, Caddy renewal state, dan forwarded-proto allowlist diuji;
+  `RADMON_TRUSTED_PROXY_NETS` hanya berisi `127.0.0.1/32`.
+- [x] `RADMON_WEB_ALLOWED_ORIGINS` berisi origin HTTPS resmi tanpa wildcard.
+- [ ] Setiap client operator memasang CA publik setelah memverifikasi
+  fingerprint; trust browser lintas-PC belum dapat dilakukan diam-diam.
 - [ ] Secret Grafana legacy (`admin` atau nilai lemah), DB, bootstrap admin,
   dan token central dirotasi melalui change yang disetujui. Jangan menaruh
   secret nyata di repository/log.
