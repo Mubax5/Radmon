@@ -165,8 +165,10 @@ def test_alarm_history_merges_source_and_policy_rows_with_pagination_without_mut
         class Store:
             def list_suppressions(self, *, limit):
                 return [
+                    # Keep this fixture active independently of the wall clock;
+                    # the endpoint's expiry projection is tested separately below.
                     {"suppression_id": "active-1", "serid": 5702, "started_at": "2026-10-08T10:00:00",
-                     "expires_at": "2026-10-09T13:00:00", "ended_at": None, "ended_reason": None,
+                     "expires_at": "2026-12-09T13:00:00", "ended_at": None, "ended_reason": None,
                      "reason": "Pemeliharaan detector"},
                     {"suppression_id": "ended-1", "serid": 5703, "started_at": "2026-10-01T08:00:00",
                      "expires_at": "2026-10-01T09:00:00", "ended_at": "2026-10-01T09:00:00",
