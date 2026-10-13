@@ -6,11 +6,12 @@ import { NativeSelect } from "./NativeSelect";
 
 type CreateUserFormProps = {
   onCreated: () => void;
+  onClose?: () => void;
   onDone?: () => void;
   administratorExists?: boolean;
 };
 
-export function CreateUserForm({ onCreated, onDone, administratorExists = false }: CreateUserFormProps) {
+export function CreateUserForm({ onCreated, onClose, onDone, administratorExists = false }: CreateUserFormProps) {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState<Role>("Viewer");
@@ -19,17 +20,6 @@ export function CreateUserForm({ onCreated, onDone, administratorExists = false 
   const [adminPin, setAdminPin] = useState("");
   const [pending, setPending] = useState(false);
   const [feedback, setFeedback] = useState<FeedbackState | null>(null);
-
-  function reset() {
-    if (pending) return;
-    setUsername("");
-    setDisplayName("");
-    setRole("Viewer");
-    setPassword("");
-    setUserPin("");
-    setAdminPin("");
-    setFeedback(null);
-  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -74,7 +64,7 @@ export function CreateUserForm({ onCreated, onDone, administratorExists = false 
         <Button type="submit" variant="primary" disabled={pending || !username || !displayName || !password || !userPin || !adminPin || (administratorExists && role === "Administrator")}>
           {pending ? "Membuat…" : "Buat pengguna"}
         </Button>
-        <Button type="button" variant="secondary" onClick={reset} disabled={pending}>Bersihkan</Button>
+        <Button type="button" variant="secondary" onClick={() => (onClose ?? onDone)?.()} disabled={pending}>Tutup</Button>
       </div>
       <ActionFeedback state={feedback} />
     </form>

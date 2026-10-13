@@ -38,7 +38,7 @@ test("page descriptions and headings use concise user-facing Indonesian", async 
   for (const copy of [
     "Pantau kondisi radiasi terkini", "Cari stasiun, tinjau status", "Lihat kondisi terkini",
     "Jelajahi tren dan rekaman pengukuran", "Temukan arsip pengukuran",
-    "Buat dan pratinjau laporan PDF", "Tinjau alarm aktif", "Kelola akun, peran",
+    "Laporan", "Alarm aktif", "Kelola akun, peran",
     "Periksa koneksi sumber data",
   ]) {
     assert.ok(source.includes(copy), `Copy ramah pengguna belum ditemukan: ${copy}`);

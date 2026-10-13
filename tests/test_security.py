@@ -37,6 +37,39 @@ def test_disabled_user_cannot_authenticate_or_verify_pin(tmp_path):
     assert store.verify_pin("op", "1357") is False
 
 
+def test_administrator_profile_and_status_are_immutable_but_credentials_rotate(tmp_path):
+    store = SecurityStore(tmp_path / "security.db")
+    store.create_user("admin", "Administrator", Role.ADMINISTRATOR, "SecretPass123!", "2468")
+
+    before = store.get_user("admin")
+    with pytest.raises(ValueError, match="administrator aktif tidak dapat diubah"):
+        store.update_user("admin", display_name="Changed")
+    with pytest.raises(ValueError, match="administrator aktif tidak dapat diubah"):
+        store.update_user("admin", role=Role.VIEWER)
+    with pytest.raises(ValueError, match="administrator aktif tidak dapat diubah"):
+        store.set_user_enabled("admin", False)
+    assert store.get_user("admin") == before
+
+    # Credential maintenance is a separate authorized operation and remains
+    # available for rotation; it is not a profile-update bypass.
+    store.reset_password("admin", "RotatedPass123!")
+    store.reset_pin("admin", "1357")
+    assert store.authenticate("admin", "RotatedPass123!") is not None
+    assert store.verify_pin("admin", "1357") is True
+
+
+def test_administrator_guard_uses_database_role_case_insensitively(tmp_path):
+    store = SecurityStore(tmp_path / "security.db")
+    store.create_user("admin", "Administrator", Role.ADMINISTRATOR, "SecretPass123!", "2468")
+    with store._connection() as connection:
+        connection.execute("UPDATE users SET role = 'administrator' WHERE username = 'admin'")
+
+    with pytest.raises(ValueError, match="administrator aktif tidak dapat diubah"):
+        store.update_user("admin", display_name="Changed")
+    with pytest.raises(ValueError, match="administrator aktif tidak dapat diubah"):
+        store.set_user_enabled("admin", False)
+
+
 def test_role_permission_matrix(tmp_path):
     store = SecurityStore(tmp_path / "security.db")
     assert store.role_allows(Role.ADMINISTRATOR, "manage_users")

@@ -258,6 +258,10 @@ CREATE TABLE IF NOT EXISTS archive_quarters (
         return name if cls._USERNAME.fullmatch(name) else None
 
     @staticmethod
+    def _is_administrator_role(value: object) -> bool:
+        return str(value or "").strip().casefold() == Role.ADMINISTRATOR.value.casefold()
+
+    @staticmethod
     def _client_key(value: object) -> str:
         try:
             text = str(value or "").strip().lower()
@@ -369,7 +373,7 @@ ON CONFLICT(throttle_key) DO UPDATE SET
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             if selected_role is Role.ADMINISTRATOR and int(connection.execute(
-                "SELECT COUNT(*) FROM users WHERE enabled = 1 AND role = ?",
+                "SELECT COUNT(*) FROM users WHERE enabled = 1 AND LOWER(TRIM(role)) = LOWER(TRIM(?))",
                 (Role.ADMINISTRATOR.value,),
             ).fetchone()[0]):
                 raise ValueError("administrator aktif sudah ada")
@@ -494,41 +498,64 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
         self.clear_sensitive_lease(name)
 
     def update_user(self, username: str, *, display_name: str | None = None, role: Role | str | None = None) -> dict[str, object]:
-        name = username.strip().lower()
-        if display_name is None and role is None:
-            raise ValueError("tidak ada perubahan pengguna")
-        assignments: list[str] = ["updated_at = ?"]
-        values: list[object] = [self._now().isoformat()]
-        if display_name is not None:
-            cleaned = display_name.strip()
-            if not cleaned or len(cleaned) > 128:
-                raise ValueError("nama tampilan tidak valid")
-            assignments.append("display_name = ?")
-            values.append(cleaned)
-        selected_role = None
-        if role is not None:
-            selected_role = role if isinstance(role, Role) else Role(role)
-            assignments.append("role = ?")
-            values.append(selected_role.value)
-        values.append(name)
+        name = self._username(username)
+        if name is None:
+            raise ValueError("user tidak ditemukan")
+        changed = False
         with self._connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                "SELECT role, enabled FROM users WHERE username = ?", (name,)
+                "SELECT display_name, role, enabled FROM users WHERE username = ?", (name,)
             ).fetchone()
             if row is None:
                 raise ValueError("user tidak ditemukan")
-            resulting_role = selected_role.value if selected_role is not None else str(row[0])
-            if bool(row[1]) and resulting_role == Role.ADMINISTRATOR.value and int(connection.execute(
-                "SELECT COUNT(*) FROM users WHERE enabled = 1 AND role = ? AND username != ?",
+
+            # Read the target role while holding the write transaction. The
+            # caller's claimed role is deliberately not used for this guard;
+            # otherwise a stale or forged role could make an administrator
+            # account look like an ordinary user.
+            if self._is_administrator_role(row[1]):
+                raise ValueError("administrator aktif tidak dapat diubah")
+            if display_name is None and role is None:
+                raise ValueError("tidak ada perubahan pengguna")
+
+            selected_role = None
+            if role is not None:
+                selected_role = role if isinstance(role, Role) else Role(role)
+            assignments: list[str] = []
+            values: list[object] = []
+            if display_name is not None:
+                cleaned = display_name.strip()
+                if not cleaned or len(cleaned) > 128:
+                    raise ValueError("nama tampilan tidak valid")
+                if cleaned != str(row[0]):
+                    assignments.append("display_name = ?")
+                    values.append(cleaned)
+                    changed = True
+            resulting_role = selected_role.value if selected_role is not None else str(row[1])
+            if selected_role is not None and selected_role.value != str(row[1]):
+                assignments.append("role = ?")
+                values.append(selected_role.value)
+                changed = True
+            if bool(row[2]) and self._is_administrator_role(resulting_role) and int(connection.execute(
+                "SELECT COUNT(*) FROM users WHERE enabled = 1 AND LOWER(TRIM(role)) = LOWER(TRIM(?)) AND username != ?",
                 (Role.ADMINISTRATOR.value, name),
             ).fetchone()[0]):
                 raise ValueError("administrator aktif sudah ada")
-            cursor = connection.execute(
-                f"UPDATE users SET {', '.join(assignments)} WHERE username = ?", tuple(values)
-            )
-            if cursor.rowcount != 1:
-                raise ValueError("user tidak ditemukan")
+            if changed:
+                assignments.insert(0, "updated_at = ?")
+                values.insert(0, self._now().isoformat())
+                values.append(name)
+                cursor = connection.execute(
+                    f"UPDATE users SET {', '.join(assignments)} WHERE username = ?", tuple(values)
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError("user tidak ditemukan")
+        if not changed:
+            # Repeating an update with current values is a safe no-op. It does
+            # not rotate sessions or alter updated_at, while an empty request
+            # above remains an explicit validation error.
+            return self.get_user(name)
         self.revoke_user_sessions(name)
         self.clear_sensitive_lease(name)
         return self.get_user(name)
@@ -562,9 +589,9 @@ VALUES (?, ?, ?, ?, ?, 1, ?, ?)
                 "created_at": str(row[4]),
                 "updated_at": str(row[5]),
             }
-            if bool(row[3]) and str(row[2]) == Role.ADMINISTRATOR.value:
+            if bool(row[3]) and self._is_administrator_role(row[2]):
                 enabled_admins = int(connection.execute(
-                    "SELECT COUNT(*) FROM users WHERE enabled = 1 AND role = ?",
+                    "SELECT COUNT(*) FROM users WHERE enabled = 1 AND LOWER(TRIM(role)) = LOWER(TRIM(?))",
                     (Role.ADMINISTRATOR.value,),
                 ).fetchone()[0])
                 if enabled_admins <= 1:
@@ -861,11 +888,8 @@ ON CONFLICT(quarter_id) DO UPDATE SET
             row = connection.execute("SELECT role FROM users WHERE username = ?", (name,)).fetchone()
             if row is None:
                 raise ValueError("user tidak ditemukan")
-            if enabled and row[0] == Role.ADMINISTRATOR.value and int(connection.execute(
-                "SELECT COUNT(*) FROM users WHERE enabled = 1 AND role = ? AND username != ?",
-                (Role.ADMINISTRATOR.value, name),
-            ).fetchone()[0]):
-                raise ValueError("administrator aktif sudah ada")
+            if self._is_administrator_role(row[0]):
+                raise ValueError("administrator aktif tidak dapat diubah")
             connection.execute('UPDATE users SET enabled = ?, updated_at = ? WHERE username = ?', (1 if enabled else 0, self._now().isoformat(), name))
 
     def _reset_pin_base(self, username: str, pin: str) -> None:
@@ -933,3 +957,18 @@ ON CONFLICT(quarter_id) DO UPDATE SET
         for source_id, central_serid in rows:
             candidates.setdefault(int(central_serid), set()).add(str(source_id))
         return {serid: tuple(sorted(source_ids)) for serid, source_ids in candidates.items()}
+
+    def station_binding(self, source_id: str, remote_serid: int) -> int | None:
+        """Read the canonical source/remote-to-central station binding.
+
+        Unlike :meth:`resolve_station`, this method is strictly read-only. It
+        is used by authenticated read models so a displayed station label can
+        never be inferred from a source name or from a colliding SERID.
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT central_serid FROM source_station_map "
+                "WHERE source_id = ? AND remote_serid = ?",
+                (str(source_id).strip(), int(remote_serid)),
+            ).fetchone()
+        return int(row[0]) if row is not None else None

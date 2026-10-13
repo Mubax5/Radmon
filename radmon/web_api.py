@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import json
 import queue
+import sqlite3
 from typing import Any, Callable
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -194,6 +195,106 @@ def _station_response(station: dict[str, Any], row: dict[str, Any] | None, sourc
     }
 
 
+_SOURCE_FIELDS = {
+    "source_id", "serid", "remote_serid", "event_time", "level",
+    "measured_value", "threshold", "hit_count", "is_active", "source_i_flag",
+    "source_observed_at", "source_observation_version",
+}
+_VIEWER_POLICY_FIELDS = {
+    "event_id", "source_id", "serid", "remote_serid", "remote_event_time",
+    "surfaced_at", "event_time", "kind", "status", "resolution_code",
+    "resolved_at", "measured_value", "threshold", "hit_count", "policy_decision",
+    "suppression_id",
+}
+_PRIVILEGED_POLICY_FIELDS = _VIEWER_POLICY_FIELDS | {
+    "resolution_reason",
+}
+
+
+def _project_alarm_response(raw: dict[str, Any], *, privileged: bool) -> dict[str, Any]:
+    """Expose persisted response fields only to operator/admin identities."""
+    if not privileged:
+        return {}
+    return {
+        "response_actor": raw.get("pic"),
+        "response_action": raw.get("action"),
+        "response_note": raw.get("note"),
+        "acknowledged_at": raw.get("acknowledged_at"),
+    }
+
+
+def _project_policy_response(raw: dict[str, Any], *, privileged: bool) -> dict[str, Any]:
+    if not privileged:
+        return {}
+    # ``reason`` is also used for the original central trigger reason. It is
+    # an operator note only after a persisted policy response was recorded.
+    responded = raw.get("responded_at") is not None or raw.get("status") == "RESPONDED"
+    return {
+        "response_actor": raw.get("pic"),
+        "response_action": raw.get("action"),
+        "response_note": raw.get("reason") if responded else None,
+        "acknowledged_at": raw.get("responded_at"),
+    }
+
+
+def _canonical_station_metadata(
+    repository: Any,
+    security: SecurityStore,
+    *,
+    serid: Any,
+    source_id: Any = None,
+    remote_serid: Any = None,
+) -> dict[str, Any]:
+    """Return station labels only after canonical source ownership checks."""
+    try:
+        central_serid = int(serid)
+    except (TypeError, ValueError):
+        return {}
+    stations_fn = getattr(repository, "stations", None)
+    if not callable(stations_fn):
+        return {}
+    try:
+        station = next(
+            (dict(item) for item in stations_fn() if int(item.get("serid")) == central_serid),
+            None,
+        )
+    except (TypeError, ValueError, KeyError):
+        return {}
+    if station is None:
+        return {}
+
+    if source_id is not None:
+        source_text = str(source_id)
+        if remote_serid is not None:
+            binding_fn = getattr(security, "station_binding", None)
+            if callable(binding_fn):
+                try:
+                    if binding_fn(source_text, int(remote_serid)) != central_serid:
+                        return {}
+                except (TypeError, ValueError, sqlite3.Error):
+                    return {}
+            else:
+                try:
+                    bound_sources = security.station_source_ids_map().get(central_serid, ())
+                except Exception:
+                    return {}
+                if source_text not in {str(value) for value in bound_sources}:
+                    return {}
+        else:
+            try:
+                bound_sources = security.station_source_ids_map().get(central_serid, ())
+            except Exception:
+                return {}
+            if source_text not in {str(value) for value in bound_sources}:
+                return {}
+
+    return {
+        "station_name": station.get("name"),
+        "location": station.get("location"),
+        "unit": station.get("unit"),
+    }
+
+
 def attach_web_api_routes(
     app: FastAPI,
     *,
@@ -317,6 +418,28 @@ def attach_web_api_routes(
             snapshot = active_alarm_snapshot(alarm_mirror, alarm_policy)
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
+        privileged = identity.role in {Role.OPERATOR, Role.ADMINISTRATOR}
+
+        def enrich_active(item: dict[str, Any]) -> dict[str, Any]:
+            result = dict(item)
+            result.update(_canonical_station_metadata(
+                repository,
+                security,
+                serid=result.get("serid"),
+                source_id=result.get("source_id"),
+                remote_serid=result.get("remote_serid"),
+            ))
+            # Active rows normally have no response yet, but preserve the
+            # explicit role boundary if an adapter supplies persisted fields.
+            response = _project_alarm_response(result, privileged=privileged)
+            for field in ("pic", "note", "action", "operator", "operator_id", "user_id"):
+                result.pop(field, None)
+            if privileged:
+                result.update(response)
+            return result
+
+        for key in ("items", "source_items"):
+            snapshot[key] = [enrich_active(dict(item)) for item in snapshot.get(key, [])]
         return {
             **snapshot,
             "total": len(snapshot["items"]),
@@ -326,42 +449,70 @@ def attach_web_api_routes(
     @app.get("/api/v1/web/alarm-history")
     def alarm_history(limit: int = Query(default=100, ge=1, le=500), offset: int = Query(default=0, ge=0, le=1000000), identity: UserIdentity = Depends(viewer)):
         """Paginated merged source alarm rows and central policy lifecycle."""
-        source_fields = {"source_id", "serid", "remote_serid", "event_time", "level", "measured_value", "threshold", "hit_count", "is_active", "source_i_flag", "source_observed_at", "source_observation_version"}
-        # Viewer history is an operational read model, not an operator journal.
-        # Keep opaque correlation IDs needed by the UI, but never expose PIC,
-        # free-form notes/reasons, response actions, or user identifiers.
-        policy_fields = {"event_id", "source_id", "serid", "remote_serid", "remote_event_time", "surfaced_at", "event_time", "kind", "status", "resolution_code", "measured_value", "threshold", "hit_count", "policy_decision", "suppression_id"}
+        privileged = identity.role in {Role.OPERATOR, Role.ADMINISTRATOR}
 
-        def project(raw: dict[str, Any], fields: set[str]) -> dict[str, Any]:
-            return {key: raw[key] for key in fields if key in raw}
+        # Viewer history is an operational read model, not an operator journal.
+        # Operator/admin detail gets only the explicitly renamed persisted
+        # response fields; raw PIC/note/action/user IDs never cross this route.
+        def project_source(raw: dict[str, Any]) -> dict[str, Any]:
+            item = {key: raw[key] for key in _SOURCE_FIELDS if key in raw}
+            if "source_i_flag" not in item and "i_flag" in raw:
+                item["source_i_flag"] = raw["i_flag"]
+            try:
+                source_i_flag = int(item.get("source_i_flag")) if item.get("source_i_flag") is not None else None
+            except (TypeError, ValueError):
+                source_i_flag = None
+            if source_i_flag in (0, 1):
+                item["source_i_flag"] = source_i_flag
+                item["is_active"] = source_i_flag == 0
+            if privileged:
+                item.update(_project_alarm_response(raw, privileged=True))
+            return item
+
+        def project_policy(raw: dict[str, Any]) -> dict[str, Any]:
+            fields = _PRIVILEGED_POLICY_FIELDS if privileged else _VIEWER_POLICY_FIELDS
+            item = {key: raw[key] for key in fields if key in raw}
+            if privileged:
+                item.update(_project_policy_response(raw, privileged=True))
+            return item
+
+        def station_fields(item: dict[str, Any]) -> dict[str, Any]:
+            return _canonical_station_metadata(
+                repository,
+                security,
+                serid=item.get("serid"),
+                source_id=item.get("source_id"),
+                remote_serid=item.get("remote_serid"),
+            )
+
+        def enrich(item: dict[str, Any]) -> dict[str, Any]:
+            result = dict(item)
+            result.update(station_fields(result))
+            nested = result.get("policy_event")
+            if isinstance(nested, dict):
+                nested_item = dict(nested)
+                nested_item.update(station_fields(nested_item))
+                result["policy_event"] = nested_item
+            return result
 
         sources = []
         if alarm_mirror is not None:
             for raw in alarm_mirror.list_alarms(limit=5000):
                 raw_item = dict(raw)
-                item = project(raw_item, source_fields)
-                if "source_i_flag" not in item and "i_flag" in raw_item:
-                    item["source_i_flag"] = raw_item["i_flag"]
+                item = project_source(raw_item)
                 # The source latch is the physical alarm truth.  A policy event
                 # may be auto-resolved after a normal reading, but it cannot
                 # rewrite an i_flag=0 source alarm or make i_flag=1 look active.
-                source_i_flag = item.get("source_i_flag")
-                try:
-                    source_i_flag = int(source_i_flag) if source_i_flag is not None else None
-                except (TypeError, ValueError):
-                    source_i_flag = None
-                if source_i_flag in (0, 1):
-                    item["source_i_flag"] = source_i_flag
-                    item["is_active"] = source_i_flag == 0
                 source_active = bool(item.get("is_active"))
                 item.update({"event_type": "source_alarm", "status": "ACTIVE" if source_active else "ACKNOWLEDGED", "surfaced_at": item.get("event_time"), "acknowledged": bool(raw_item.get("acknowledged_at")) or not source_active, "suppressed": False})
-                sources.append(item)
+                sources.append(enrich(item))
         policies = []
         if alarm_policy is not None:
             for raw in alarm_policy.list_events(limit=5000):
-                item = project(dict(raw), policy_fields)
+                raw_item = dict(raw)
+                item = project_policy(raw_item)
                 item.update({"event_type": "policy_lifecycle", "event_time": item.get("surfaced_at"), "acknowledged": item.get("status") == "RESPONDED", "suppressed": item.get("kind") == "SUPPRESSED"})
-                policies.append(item)
+                policies.append(enrich(item))
 
         policy_store = getattr(alarm_policy, "store", None) if alarm_policy is not None else None
         list_suppressions = getattr(policy_store, "list_suppressions", None)
@@ -372,44 +523,71 @@ def attach_web_api_routes(
                 for item in policies
                 if item.get("kind") == "SUPPRESSION_END" and item.get("suppression_id")
             }
-            now = datetime.now().astimezone()
+
+            def add_persisted_suppression_times(item: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+                """Copy only timestamps/duration that exist in storage.
+
+                In particular, an expired row without ``ended_at`` remains an
+                open historical record. The API must not turn the current
+                clock or ``expires_at`` into a fabricated resolution.
+                """
+                started_at = raw.get("started_at")
+                expires_at = raw.get("expires_at")
+                ended_at = raw.get("ended_at")
+                if started_at is not None:
+                    item.update({"started_at": started_at, "suppression_started_at": started_at})
+                if expires_at is not None:
+                    item.update({"expires_at": expires_at, "suppression_expires_at": expires_at})
+                if ended_at is not None:
+                    item.update({"ended_at": ended_at, "suppression_ended_at": ended_at})
+                if raw.get("duration_seconds") is not None:
+                    item["duration_seconds"] = raw["duration_seconds"]
+                return item
+
             for suppression in list_suppressions(limit=5000):
                 raw = dict(suppression) if isinstance(suppression, dict) else {
                     key: getattr(suppression, key)
-                    for key in ("suppression_id", "serid", "started_at", "expires_at", "ended_at", "ended_reason", "reason")
+                    for key in (
+                        "suppression_id", "serid", "started_at", "expires_at", "ended_at",
+                        "ended_reason", "reason", "pic", "started_by", "ended_by",
+                    )
                 }
                 suppression_id = str(raw.get("suppression_id") or "")
                 start_at = raw.get("started_at")
                 if start_at is not None:
-                    suppression_rows.append({
+                    start_item = {
                         "event_id": f"suppression-start:{suppression_id}", "suppression_id": suppression_id,
                         "serid": int(raw["serid"]), "event_type": "policy_lifecycle",
                         "event_time": start_at, "surfaced_at": start_at, "kind": "SUPPRESSION_START",
-                        "status": "SUPPRESSED", "reason": raw.get("reason"),
+                        "status": "SUPPRESSED",
                         "acknowledged": False, "suppressed": True,
-                    })
+                    }
+                    add_persisted_suppression_times(start_item, raw)
+                    if privileged:
+                        start_item.update({
+                            "response_actor": raw.get("pic"),
+                            "response_note": raw.get("reason"),
+                        })
+                    suppression_rows.append(enrich(start_item))
                 ended_at = raw.get("ended_at")
                 ended_reason = raw.get("ended_reason")
-                if ended_at is None and raw.get("expires_at") is not None:
-                    expiry = raw["expires_at"]
-                    if isinstance(expiry, str):
-                        try:
-                            expiry = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-                        except ValueError:
-                            expiry = None
-                    if expiry is not None:
-                        comparison_now = now if expiry.tzinfo else now.replace(tzinfo=None)
-                        if expiry <= comparison_now:
-                            ended_at, ended_reason = expiry, "EXPIRED"
                 if ended_at is not None and suppression_id not in known_ends:
                     end_reason = str(ended_reason or "EXPIRED")
-                    suppression_rows.append({
+                    end_item = {
                         "event_id": f"suppression-end:{suppression_id}", "suppression_id": suppression_id,
                         "serid": int(raw["serid"]), "event_type": "policy_lifecycle",
                         "event_time": ended_at, "surfaced_at": ended_at, "kind": "SUPPRESSION_END",
-                        "status": "ENDED", "action": end_reason.split(":", 1)[0],
+                        "status": "ENDED",
                         "acknowledged": False, "suppressed": False,
-                    })
+                    }
+                    add_persisted_suppression_times(end_item, raw)
+                    if privileged:
+                        end_item.update({
+                            "response_actor": raw.get("ended_by") or raw.get("pic"),
+                            "response_action": end_reason.split(":", 1)[0],
+                            "response_note": end_reason,
+                        })
+                    suppression_rows.append(enrich(end_item))
             policies.extend(suppression_rows)
 
         def time_key(item):

@@ -3,6 +3,8 @@ export type AlarmLifecycleEvent = {
   status?: string | null;
   action?: string | null;
   reason?: string | null;
+  response_action?: string | null;
+  response_note?: string | null;
   resolution_code?: string | null;
   resolution_reason?: string | null;
   source_reconciliation?: { status?: string | null; reason?: string | null } | null;
@@ -67,7 +69,7 @@ export function kindLabel(kind: string | null | undefined): string {
   return humanizeCode(kind);
 }
 
-function reasonLabel(reason: string | null | undefined): string | null {
+export function lifecycleReasonLabel(reason: string | null | undefined): string | null {
   if (!reason) return null;
   const code = reason.split(":", 1)[0];
   return REASON_LABELS[code] ?? humanizeCode(reason);
@@ -80,7 +82,7 @@ export function describeLifecycle(event: AlarmLifecycleEvent): { label: string; 
     const reason = reconciliation.reason;
     let label: string;
     if (state === "AMBIGUOUS") label = "Bukti alarm sumber belum cukup";
-    else if (state === "PENDING") label = reasonLabel(reason) ?? "Menunggu konfirmasi alarm dari alat";
+    else if (state === "PENDING") label = lifecycleReasonLabel(reason) ?? "Menunggu konfirmasi alarm dari alat";
     else if (state === "SOURCE_HANDLED" || state === "CONFIRMED") label = "Ditangani pada alat sumber";
     else label = statusLabel(state);
     return {
@@ -95,10 +97,10 @@ export function describeLifecycle(event: AlarmLifecycleEvent): { label: string; 
   }
 
   if (event.kind === "SUPPRESSION_END") {
-    const reason = event.reason ?? event.action;
+    const reason = event.response_note ?? event.reason ?? event.response_action ?? event.action;
     return {
-      label: reasonLabel(reason) ?? "Supresi berakhir",
-      raw: [`kind: ${event.kind ?? "(kosong)"}`, `status: ${event.status ?? "(kosong)"}`, `action: ${event.action ?? "(kosong)"}`, `reason: ${event.reason ?? "(kosong)"}`],
+      label: lifecycleReasonLabel(reason) ?? "Supresi berakhir",
+      raw: [`kind: ${event.kind ?? "(kosong)"}`, `status: ${event.status ?? "(kosong)"}`, `response_action: ${event.response_action ?? "(kosong)"}`, `response_note: ${event.response_note ?? "(kosong)"}`],
     };
   }
 

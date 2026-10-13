@@ -100,7 +100,7 @@ def test_modal_stacking_keeps_background_mounted_and_select_on_top():
     assert "overflow-y: auto" in css
     # Dialog memakai portal Kumo (center, Escape/backdrop menutup via
     # onOpenChange) dan Select tetap portal body agar tidak ke-clip.
-    assert "Dialog.Root open={dialogOpen} onOpenChange={changeDialogOpen}" in actions
+    assert 'Dialog.Root role="alertdialog" open={dialogOpen} onOpenChange={changeDialogOpen}' in actions
     assert 'className="radmon-dialog mobile-sheet-dialog"' in actions
     # Saat menyimpan, Escape/backdrop diblokir agar POST tidak ganda/batal diam-diam.
     assert "if (!open && pending) return;" in actions
@@ -135,8 +135,9 @@ def test_response_trigger_is_gated_by_the_source_projection_and_fails_closed():
 def test_history_source_action_reuses_canonical_response_panel():
     page = read("pages/AlarmsPage.tsx")
     actions = read("components/AlarmActions.tsx")
-    assert "function SourceActionButton" in page
-    assert "Tindak lanjuti sumber" in page
-    assert "onAction={setActionEventId}" in page
+    # History rows expose one friendly Rincian action; the shared operator
+    # panel is fed the authoritative active-source projection instead of
+    # duplicating a second response button in each row.
+    assert "sourceEvents={sourceItems}" in page
     assert "initialEventId={actionEventId}" in page
-    assert "setDialogOpen(true)" in actions
+    assert "Respons alarm sumber" in actions

@@ -57,6 +57,15 @@ test("operator PIC is display-name based and read-only while Administrator can e
   assert.match(api, /payload\.pic or ""\)\.strip\(\) or identity\.display_name/);
 });
 
+test("alarm response and suppression forms require explicit dismissal", async () => {
+  const actions = await read("../src/components/AlarmActions.tsx");
+  assert.equal((actions.match(/<Dialog\.Root role="alertdialog"/g) ?? []).length, 3);
+  assert.match(actions, /onKeyDownCapture=\{\(event\) => \{ if \(event\.key === "Escape"\)/);
+  assert.match(actions, /disabled=\{pending\}/);
+  assert.match(actions, /disabled=\{pending === "start"\}/);
+  assert.match(actions, /disabled=\{pending === "cancel"\}/);
+});
+
 test("page routes for alarms, stations, and users remain wired to their UI", async () => {
   const app = await read("../src/App.tsx");
   assert.match(app, /route === "stations" && <StationsPage \/>/);

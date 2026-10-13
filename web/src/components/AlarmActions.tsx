@@ -32,6 +32,18 @@ const RESPONSE_ACTION_ITEMS = {
   "Tindak Lanjut": "Tindak Lanjut",
 };
 
+function sourceSilenceLabel(value: unknown): string {
+  if (value == null || value === "") return "Belum tersedia";
+  const labels: Record<string, string> = {
+    ACTIVE: "Alarm berbunyi",
+    NORMAL: "Normal",
+    SILENCED: "Diredam",
+    PENDING: "Menunggu status alat",
+    UNKNOWN: "Belum tersedia",
+  };
+  return labels[String(value).toUpperCase()] ?? String(value);
+}
+
 type AlarmOperationsProps = {
   events: ActiveAlarm[];
   sourceEvents?: ActiveAlarm[];
@@ -166,13 +178,13 @@ function SourceResponsePanel({
   return (
     <LayerCard className="action-card">
       <h2>Respons alarm sumber</h2>
-      <p>Tangani alarm yang masih berbunyi pada alat sumber. PIC operator dan PIN diperlukan.</p>
-      <Dialog.Root open={dialogOpen} onOpenChange={changeDialogOpen}>
+      <p>PIC operator dan PIN diperlukan.</p>
+      <Dialog.Root role="alertdialog" open={dialogOpen} onOpenChange={changeDialogOpen}>
         <Dialog.Trigger render={(props) => <Button {...props} variant="primary" aria-describedby="alarm-response-help" disabled={responseDisabled}>Respons alarm</Button>} />
         <p id="alarm-response-help" className="cell-subtle alarm-empty-hint" role="status">{responseHelp}</p>
         {sourceStatus === "error" ? <Button type="button" variant="secondary" onClick={() => void onChanged()}>Coba lagi status sumber</Button> : null}
         <Dialog className="radmon-dialog mobile-sheet-dialog" data-testid="alarm-response-dialog">
-          <div className="mobile-sheet-content">
+          <div className="mobile-sheet-content" onKeyDownCapture={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); } }}>
             <div className="mobile-sheet-handle" aria-hidden />
             <Dialog.Title>Respons alarm sumber</Dialog.Title>
             <Dialog.Description>PIN operator diperlukan untuk mencatat tindakan pada alarm yang dipilih.</Dialog.Description>
@@ -228,6 +240,7 @@ function SourceResponsePanel({
 function SuppressionPanel({ suppressions, onChanged, suppressionsStatus = "ready" }: Pick<AlarmOperationsProps, "suppressions" | "onChanged" | "suppressionsStatus">) {
   const { user } = useSession();
   const canEditPic = user?.role === "Administrator";
+  const canViewPic = user?.role !== "Viewer";
   const [dialogOpen, setDialogOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState("");
   const [serid, setSerid] = useState("");
@@ -309,14 +322,14 @@ function SuppressionPanel({ suppressions, onChanged, suppressionsStatus = "ready
   return (
     <LayerCard className="action-card">
       <h2>Redam alarm sementara</h2>
-      <p>Sembunyikan alarm stasiun untuk sementara; pengukuran tetap berjalan dan alarm kembali dipantau saat kondisi normal.</p>
-      <Dialog.Root open={dialogOpen} onOpenChange={changeDialogOpen}>
+      <p>Pengukuran tetap berjalan; kembali dipantau saat normal.</p>
+      <Dialog.Root role="alertdialog" open={dialogOpen} onOpenChange={changeDialogOpen}>
         <Dialog.Trigger render={(props) => <Button {...props} variant="primary" disabled={pending !== null}>Mulai peredaman</Button>} />
         <Dialog className="radmon-dialog mobile-sheet-dialog">
-          <div className="mobile-sheet-content">
+          <div className="mobile-sheet-content" onKeyDownCapture={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); } }}>
             <div className="mobile-sheet-handle" aria-hidden />
             <Dialog.Title>Redam alarm sementara</Dialog.Title>
-            <Dialog.Description>Peredaman berlaku 1 menit sampai 24 jam dan berakhir otomatis saat detektor kembali normal.</Dialog.Description>
+            <Dialog.Description>Berlaku 1 menit sampai 24 jam; kembali dipantau saat detektor normal.</Dialog.Description>
             <form className="action-form dialog-form" onSubmit={start}>
               <Input label="SERID stasiun" inputMode="numeric" value={serid} onChange={(event) => setSerid(event.target.value)} disabled={pending === "start"} />
               <NativeSelect id="suppression-duration-select" testId="suppression-duration-select" label="Durasi peredaman" value={minutes} onChange={(event) => setMinutes(event.target.value)} disabled={pending === "start"} required>
@@ -340,17 +353,17 @@ function SuppressionPanel({ suppressions, onChanged, suppressionsStatus = "ready
             <div>
               <strong>SERID {item.serid}</strong>
               <span>Sampai {new Date(item.expires_at).toLocaleString("id-ID")}</span>
-              <span>{item.pic}: {item.reason}</span>
-              <span>Status sumber: {item.source_silence_state ?? "BELUM DIKETAHUI"}</span>
+              {canViewPic ? <span>{item.pic}: {item.reason}</span> : <span>{item.reason}</span>}
+              <span>Status sumber: {sourceSilenceLabel(item.source_silence_state)}</span>
             </div>
-            <Dialog.Root open={cancelOpen === item.suppression_id} onOpenChange={(open) => {
+            <Dialog.Root role="alertdialog" open={cancelOpen === item.suppression_id} onOpenChange={(open) => {
               if (pending === "cancel") return;
               setCancelOpen(open ? item.suppression_id : "");
               if (!open) { setCancelReason(""); setCancelPin(""); }
             }}>
               <Dialog.Trigger render={(props) => <Button {...props} variant="secondary" disabled={pending !== null}>Akhiri peredaman</Button>} />
               <Dialog className="radmon-dialog mobile-sheet-dialog">
-                <div className="mobile-sheet-content">
+                <div className="mobile-sheet-content" onKeyDownCapture={(event) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); } }}>
                   <div className="mobile-sheet-handle" aria-hidden />
                   <Dialog.Title>Akhiri peredaman SERID {item.serid}</Dialog.Title>
                   <Dialog.Description>Pengakhiran dicatat dan tidak menghapus pengukuran atau riwayat alarm.</Dialog.Description>

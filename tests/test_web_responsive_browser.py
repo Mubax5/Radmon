@@ -557,9 +557,9 @@ def test_mobile_alarm_and_user_dialogs_stay_inside_viewport(chrome_driver):
         assert respond.is_enabled()
         respond.click()
         _wait_for(chrome_driver, ".dialog-form")
-        dialog_rect = chrome_driver.execute_script("return document.querySelector('[role=dialog]').getBoundingClientRect().toJSON()")
+        dialog_rect = chrome_driver.execute_script("return document.querySelector('[role=alertdialog]').getBoundingClientRect().toJSON()")
         assert dialog_rect["left"] >= -1 and dialog_rect["right"] <= 391 and dialog_rect["height"] <= 844
-        assert chrome_driver.execute_script("return Number(getComputedStyle(document.querySelector('[role=dialog]')).zIndex)") >= 90
+        assert chrome_driver.execute_script("return Number(getComputedStyle(document.querySelector('[role=alertdialog]')).zIndex)") >= 90
         _assert_no_horizontal_overflow(chrome_driver)
         chrome_driver.find_element(By.TAG_NAME, "body").send_keys("\ue00c")
 
@@ -592,8 +592,8 @@ def test_native_dialog_selects_and_filter_portals_stay_above_navigation(chrome_d
             chrome_driver.get(f"{base}/app/alarms")
             _wait_for(chrome_driver, ".active-alarm-list")
             _button(chrome_driver, "Respons alarm").click()
-            _wait_for(chrome_driver, "[role=dialog]")
-            assert chrome_driver.find_elements(By.CSS_SELECTOR, "[role=dialog] select.native-select")
+            _wait_for(chrome_driver, "[role=alertdialog]")
+            assert chrome_driver.find_elements(By.CSS_SELECTOR, "[role=alertdialog] select.native-select")
             chrome_driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
 
             chrome_driver.get(f"{base}/app/users")

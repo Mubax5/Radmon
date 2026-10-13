@@ -594,21 +594,31 @@ th {{ background: #efefef; font-weight: bold; }}
             ))
         story.append(Spacer(1, 6 * mm))
 
-        alarm_data = [["Alarm ID", "Time", "Type", "Message"]]
+        # Keep source evidence and central policy disposition separate.  A
+        # policy decision is not a replacement for the raw alarm timestamp or
+        # the source i_flag that was observed at that time.
+        alarm_data = [[
+            "Alarm ID", "Source", "Raw timestamp", "i_flag", "Central policy", "Type", "Message",
+        ]]
         for row in alarms:
+            source_i_flag = row.get("i_flag") if "i_flag" in row else row.get("source_i_flag")
+            raw_timestamp = row.get("dtoa") or row.get("source_event_time") or row.get("dtom")
             alarm_data.append(
                 [
                     str(row.get("alarmid", "-")),
-                    self._dt(row.get("dtom") or row.get("dtoa")),
+                    str(row.get("source_id") or row.get("source") or "raw"),
+                    self._dt(raw_timestamp),
+                    "-" if source_i_flag is None else str(source_i_flag),
+                    str(row.get("policy_event_id") or row.get("central_policy") or "-"),
                     str(row.get("type", "-")),
                     str(row.get("msg") or "-"),
                 ]
             )
         if len(alarm_data) == 1:
-            alarm_data.append(["-", "-", "-", "No alarms"])
+            alarm_data.append(["-", "-", "-", "-", "-", "-", "No alarms"])
         alarm_table = Table(
             wrapped(alarm_data),
-            colWidths=column_widths((12, 20, 14, 54)),
+            colWidths=column_widths((8, 13, 18, 7, 16, 12, 26)),
             repeatRows=1,
             hAlign="CENTER",
         )

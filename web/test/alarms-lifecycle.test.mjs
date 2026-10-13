@@ -74,3 +74,13 @@ test("unknown codes use a human fallback and raw lifecycle values remain availab
   assert.doesNotMatch(page, /<details>/);
   assert.match(page, /lifecycle\.raw\.map/);
 });
+
+test("alarm history rows expose one friendly details action and no raw lifecycle dump", async () => {
+  const page = await readFile(new URL("../src/pages/AlarmsPage.tsx", import.meta.url), "utf8");
+  assert.match(page, /<Table.Head>Aksi<\/Table.Head>/);
+  assert.match(page, /<Table.Cell><DetailButton event=\{event\} onDetails=\{onDetails\} \/><\/Table.Cell>/);
+  assert.doesNotMatch(page, /LifecycleDescription|SourceActionButton|<code>/);
+  assert.match(page, /<DetailSection title="Alarm">/);
+  assert.match(page, /<DetailSection title="Waktu">/);
+  assert.match(page, /Nama stasiun|Lokasi|Status alarm sumber|Tindakan operator/);
+});

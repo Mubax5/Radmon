@@ -21,6 +21,10 @@ type UserRecord = {
   updated_at?: string;
 };
 
+function isAdministrator(user: UserRecord): boolean {
+  return String(user.role).trim().toLowerCase() === "administrator";
+}
+
 function NativeInput({ label, ...props }: React.InputHTMLAttributes<HTMLInputElement> & { label: string }) {
   return <label className="native-input-field"><span>{label}</span><input {...props} /></label>;
 }
@@ -41,7 +45,7 @@ function UserCards({ users, onChanged }: { users: UserRecord[]; onChanged: () =>
           <div className="card-meta">
             <span>Peran: {user.role}</span>
             <span>Diperbarui: {formatTimestamp(user.updated_at ?? user.created_at)}</span>
-            <UserManagementForm user={user} users={users} onChanged={onChanged} />
+            {isAdministrator(user) ? <span className="cell-subtle" aria-label="Tetap">Tidak dapat diubah</span> : <UserManagementForm user={user} users={users} onChanged={onChanged} />}
           </div>
         </LayerCard>
       ))}
@@ -74,7 +78,7 @@ function UserTable({ users, onChanged }: { users: UserRecord[]; onChanged: () =>
                   {user.enabled ? "Aktif" : "Nonaktif"}
                 </Badge>
               </Table.Cell>
-              <Table.Cell><UserManagementForm user={user} users={users} onChanged={onChanged} /></Table.Cell>
+              <Table.Cell>{isAdministrator(user) ? <span className="cell-subtle" aria-label="Tetap">Tidak dapat diubah</span> : <UserManagementForm user={user} users={users} onChanged={onChanged} />}</Table.Cell>
             </Table.Row>
           ))}
         </Table.Body>
@@ -143,7 +147,7 @@ function CreateUserDialog({ onCreated, administratorExists }: { onCreated: () =>
       <div className="native-user-dialog-content">
         <h2 id="user-create-title">Buat pengguna</h2>
         <p>Buat akun untuk mengakses RadMon. Peran Viewer hanya dapat melihat data, sedangkan Operator dan Administrator memiliki akses sesuai tugasnya.</p>
-         <CreateUserForm onCreated={onCreated} onDone={() => dialog.current?.close()} administratorExists={administratorExists} />
+        <CreateUserForm onCreated={onCreated} onClose={() => dialog.current?.close()} administratorExists={administratorExists} />
         <form method="dialog" className="form-actions dialog-close-row"><button type="submit" className="native-dialog-close">Tutup</button></form>
       </div>
     </dialog>

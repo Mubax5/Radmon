@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import time
 
@@ -47,6 +48,46 @@ def test_report_job_lifecycle_persists_only_safe_artifact_metadata(tmp_path):
     assert item["artifact_name"] == f"radmon-{created['job_id']}.pdf"
     assert path.parent == (tmp_path / "reports" / "web").resolve()
     assert path.read_bytes().startswith(b"%PDF")
+    jobs.shutdown()
+
+
+def test_report_creation_is_durable_and_idempotent_under_concurrent_retries(tmp_path):
+    security = SecurityStore(tmp_path / "security.db")
+    identity = security.create_user("operator", "Operator", Role.OPERATOR, "Password123!", "2468")
+    jobs = WebReportJobs(security, AuditTrail(security), ReportRepository(), Settings(report_dir=tmp_path / "reports"))
+    start = datetime(2026, 9, 1, 0, 0)
+
+    def submit():
+        return jobs.create(
+            identity,
+            serid=5201,
+            start=start,
+            end=start + timedelta(hours=1),
+            idempotency_key="attempt-20260901-0000",
+        )
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        results = list(executor.map(lambda _index: submit(), range(5)))
+
+    assert {item["job_id"] for item in results} == {results[0]["job_id"]}
+    assert len(jobs.list(username="operator")) == 1
+    with pytest.raises(ValueError, match="pilihan lain"):
+        jobs.create(
+            identity,
+            serid=5201,
+            start=start,
+            end=start + timedelta(hours=2),
+            idempotency_key="attempt-20260901-0000",
+        )
+    for _ in range(100):
+        item = jobs.get(results[0]["job_id"])
+        if item and item["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.02)
+    assert item is not None and item["status"] == "completed", item
+    assert len(list((tmp_path / "reports" / "web").glob("*.pdf"))) == 1
+    retry = jobs.create(identity, serid=5201, start=start, end=start + timedelta(hours=1), idempotency_key="attempt-20260901-0000")
+    assert retry["job_id"] == results[0]["job_id"] and retry["status"] == "completed"
     jobs.shutdown()
 
 
@@ -211,11 +252,16 @@ def test_report_control_api_validates_rbac_status_download_and_audit(tmp_path):
     assert web.post("/auth/login", json={"username": "admin", "password": "Password123!"}).status_code == 200
     download = web.get(f"/api/v1/control/reports/{jobs.owner_job_id}/download")
     preview = web.get(f"/api/v1/control/reports/{jobs.owner_job_id}/preview")
+    preview_head = web.head(f"/api/v1/control/reports/{jobs.owner_job_id}/preview")
     assert download.status_code == 200
     assert download.content == b"%PDF-test"
     assert preview.status_code == 200
+    assert preview_head.status_code == 200
+    assert preview_head.headers["content-type"] == "application/pdf"
     assert preview.headers["content-type"] == "application/pdf"
     assert preview.headers["content-disposition"] == f'inline; filename="radmon-report-{jobs.owner_job_id}.pdf"'
+    assert "object-src 'self'" in preview.headers["content-security-policy"]
+    assert "frame-ancestors 'self'" in preview.headers["content-security-policy"]
     assert preview.content == download.content == jobs.path.read_bytes()
     assert {event["action"] for event in audit.list_events()} >= {"REPORT_DOWNLOAD", "REPORT_PREVIEW"}
 
@@ -237,6 +283,9 @@ def test_draft_preview_is_authorized_and_matches_generated_job_pdf(tmp_path):
     assert web.get(f"/api/v1/control/reports/draft-preview?{query}").status_code == 403
     web.post("/auth/logout")
     web.post("/auth/login", json={"username": "operator", "password": "Password123!"})
+    draft_head = web.head(f"/api/v1/control/reports/draft-preview?{query}")
+    assert draft_head.status_code == 200
+    assert "object-src 'self'" in draft_head.headers["content-security-policy"]
     preview = web.get(f"/api/v1/control/reports/draft-preview?{query}")
     assert preview.status_code == 200
     assert preview.headers["content-type"] == "application/pdf"
@@ -257,6 +306,7 @@ def test_draft_preview_is_authorized_and_matches_generated_job_pdf(tmp_path):
 def test_reports_frontend_contract_uses_native_controls_and_safe_download_url():
     root = Path(__file__).resolve().parents[1]
     page = (root / "web/src/pages/ReportsPage.tsx").read_text(encoding="utf-8")
+    viewer = (root / "web/src/components/PdfPreview.tsx").read_text(encoding="utf-8")
     api = (root / "web/src/api.ts").read_text(encoding="utf-8")
     navigation = (root / "web/src/navigation.ts").read_text(encoding="utf-8")
     navigation_icon = (root / "web/src/layout/NavigationIcon.tsx").read_text(encoding="utf-8")
@@ -280,6 +330,9 @@ def test_reports_frontend_contract_uses_native_controls_and_safe_download_url():
     assert page.index('className="report-preview-pane"') < page.index('className="action-card report-form-card"')
     assert '<section className="report-preview"' not in page
     assert "report-preview-pane iframe" in styles
+    assert "method: \"HEAD\"" in viewer
+    assert "URL.createObjectURL" not in page and "URL.createObjectURL" not in viewer
+    assert "reportDraftPreviewUrl" in page
     assert 'const currentDraftUrl = draftPreview?.key === selectedKey ? draftPreview.url : null' in page
     assert 'Pratinjau sebelumnya — pilihan terbaru gagal' in page
     assert 'const backendDetail = payload.detail' in page

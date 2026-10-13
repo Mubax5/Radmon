@@ -165,8 +165,7 @@ def test_alarm_history_merges_source_and_policy_rows_with_pagination_without_mut
         class Store:
             def list_suppressions(self, *, limit):
                 return [
-                    # Keep this fixture active independently of the wall clock;
-                    # the endpoint's expiry projection is tested separately below.
+                     # Keep this fixture active independently of the wall clock.
                     {"suppression_id": "active-1", "serid": 5702, "started_at": "2026-10-08T10:00:00",
                      "expires_at": "2026-12-09T13:00:00", "ended_at": None, "ended_reason": None,
                      "reason": "Pemeliharaan detector"},
@@ -196,7 +195,9 @@ def test_alarm_history_merges_source_and_policy_rows_with_pagination_without_mut
 
     assert response.status_code == 200
     body = response.json()
-    assert body["total"] == 8
+    # An unprocessed expired row has no persisted ended_at. The read model
+    # must not invent a historical end event from the current clock.
+    assert body["total"] == 7
     source_rows = [item for item in body["items"] if item["event_type"] == "source_alarm"]
     assert {item["source_id"] for item in source_rows} == {"gd50", "gd52", "gd38"}
     merged_source = next((item for item in source_rows if item.get("policy_event", {}).get("event_id") == "p1"), None)
@@ -211,7 +212,9 @@ def test_alarm_history_merges_source_and_policy_rows_with_pagination_without_mut
         ("SUPPRESSION_START", "SUPPRESSED"), ("SUPPRESSION_END", "ENDED"),
     }
     assert {item["suppression_id"] for item in suppression_events} == {"active-1", "ended-1", "expired-unprocessed"}
-    assert next(item for item in suppression_events if item["suppression_id"] == "expired-unprocessed" and item["kind"] == "SUPPRESSION_END")["action"] == "EXPIRED"
+    expired_rows = [item for item in suppression_events if item["suppression_id"] == "expired-unprocessed"]
+    assert [item["kind"] for item in expired_rows] == ["SUPPRESSION_START"]
+    assert "ended_at" not in expired_rows[0]
     assert mirror.calls == 1
 
     policy.include_event = False
@@ -255,3 +258,46 @@ def test_viewer_station_read_model_includes_read_only_active_policy_projection(t
     assert items[5203]["last_event_status"] == "RESOLVED"
     assert items[5203]["active_event_id"] is None
     assert viewer.get("/api/v1/web/stations/5202").json()["active_event_lifecycle"] == "ACTIVE"
+
+
+def test_alarm_history_uses_exact_source_binding_and_role_gated_response_fields(tmp_path):
+    security = SecurityStore(tmp_path / "detail.db")
+    security.create_user("viewer", "Viewer", Role.VIEWER, "Password123!", "2468")
+    security.create_user("operator", "Operator", Role.OPERATOR, "Password123!", "2468")
+    security.resolve_station("gd52", 5201)
+    source_time = datetime(2026, 10, 1, 12, 0, 0)
+    observed_at = datetime(2026, 10, 1, 12, 0, 5)
+
+    class Mirror:
+        def list_alarms(self, *, limit):
+            return [{
+                "source_id": "gd52", "serid": 5201, "remote_serid": 5201,
+                "event_time": source_time, "source_observed_at": observed_at,
+                "level": "ALARM", "measured_value": 26.25, "threshold": 25.0,
+                "hit_count": 2, "is_active": False, "source_i_flag": 1,
+                "acknowledged_at": source_time,
+                "pic": "Operator asli", "action": "Konfirmasi",
+                "note": "Catatan internal", "operator_id": "user-17",
+            }]
+
+    app = FastAPI()
+    attach_web_api_routes(app, security=security, repository=FakeRepository(), alarm_mirror=Mirror())
+    viewer = TestClient(app)
+    viewer.cookies.set(SESSION_COOKIE, security.create_session("viewer", 3600))
+    operator = TestClient(app)
+    operator.cookies.set(SESSION_COOKIE, security.create_session("operator", 3600))
+
+    viewer_row = viewer.get("/api/v1/web/alarm-history").json()["items"][0]
+    assert viewer_row["station_name"] == "IS-1"
+    assert viewer_row["location"] == "Gd.52"
+    assert viewer_row["unit"] == "uSv/h"
+    assert viewer_row["source_observed_at"] == observed_at.isoformat()
+    assert viewer_row["measured_value"] == 26.25
+    assert not {"response_actor", "response_action", "response_note", "acknowledged_at", "pic", "note", "action", "operator_id"} & viewer_row.keys()
+
+    operator_row = operator.get("/api/v1/web/alarm-history").json()["items"][0]
+    assert operator_row["response_actor"] == "Operator asli"
+    assert operator_row["response_action"] == "Konfirmasi"
+    assert operator_row["response_note"] == "Catatan internal"
+    assert operator_row["acknowledged_at"] == source_time.isoformat()
+    assert not {"pic", "note", "action", "operator_id"} & operator_row.keys()

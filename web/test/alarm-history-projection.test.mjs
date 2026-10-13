@@ -54,3 +54,25 @@ test("a policy-only event remains a central event", () => {
   assert.equal(normalized.status, "AUTO_RESOLVED_NORMAL");
   assert.equal(normalized.source_id, "gd52");
 });
+
+test("the physical source latch stays active when the policy row is already normal", () => {
+  const [normalized] = history.normalizeHistory([{
+    event_type: "source_alarm",
+    source_id: "gd52",
+    serid: 5702,
+    remote_serid: 5702,
+    event_time: "2026-10-07T11:27:10",
+    measured_value: 76.82,
+    threshold: 25,
+    status: "NORMAL",
+    kind: "SOURCE_ALARM",
+    is_active: false,
+    source_i_flag: 0,
+    policy_event: { status: "AUTO_RESOLVED_NORMAL", surfaced_at: "2026-10-07T11:26:22" },
+  }]);
+  assert.equal(normalized.status, "ACTIVE");
+  assert.equal(normalized.is_active, true);
+  assert.equal(normalized.source_i_flag, 0);
+  assert.equal(normalized.measured_value, 76.82);
+  assert.equal(normalized.policy_event.status, "AUTO_RESOLVED_NORMAL");
+});

@@ -106,6 +106,7 @@ class ReportCreateRequest(BaseModel):
     serid: int = Field(gt=0)
     start_at: datetime
     end_at: datetime
+    idempotency_key: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9._~-]+$")
 
     @model_validator(mode="after")
     def validate_range(self):
@@ -113,8 +114,8 @@ class ReportCreateRequest(BaseModel):
         end = self.end_at if self.end_at.tzinfo else self.end_at.replace(tzinfo=timezone.utc)
         if end <= start:
             raise ValueError("report end must be after start")
-        if end - start > timedelta(days=366):
-            raise ValueError("rentang report terlalu panjang")
+        if end - start > timedelta(hours=24):
+            raise ValueError("rentang report terlalu panjang; maksimal 24 jam")
         return self
 
 
@@ -298,9 +299,33 @@ def _report_response(item: dict[str, Any]) -> dict[str, Any]:
     """Return only browser-safe persisted job metadata, never owner internals."""
     fields = (
         "job_id", "serid", "start_at", "end_at", "status", "artifact_name",
-        "error", "created_at", "completed_at",
+        "error", "created_at", "completed_at", "report_timezone", "report_format",
+        "generator_version",
     )
     return {field: item.get(field) for field in fields}
+
+
+_REPORT_PDF_CSP = (
+    "default-src 'none'; base-uri 'none'; frame-ancestors 'self'; "
+    "frame-src 'self'; object-src 'self'; script-src 'none'; style-src 'none'; "
+    "img-src 'none'; connect-src 'none'; form-action 'none'"
+)
+
+
+def _report_pdf_headers(filename: str) -> dict[str, str]:
+    """Headers for the authenticated native PDF viewer only.
+
+    The application shell intentionally keeps ``object-src 'none'``.  A PDF
+    response is a separate, authenticated resource and needs the browser's
+    built-in viewer to be allowed to instantiate its same-origin plugin.
+    """
+    return {
+        "Content-Disposition": f'inline; filename="{filename}"',
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "SAMEORIGIN",
+        "Content-Security-Policy": _REPORT_PDF_CSP,
+    }
 
 
 def attach_secure_routes(
@@ -673,11 +698,21 @@ def attach_secure_routes(
         return [_report_response(item) for item in report_jobs.list(username=username)]
 
     @app.post("/api/v1/control/reports")
-    def create_report(payload: ReportCreateRequest, identity: UserIdentity = Depends(require_operator)):
+    def create_report(request: Request, payload: ReportCreateRequest, identity: UserIdentity = Depends(require_operator)):
         if report_jobs is None:
             raise HTTPException(status_code=404, detail="report service unavailable")
         try:
-            return _report_response(report_jobs.create(identity, serid=payload.serid, start=payload.start_at, end=payload.end_at))
+            kwargs = {
+                "serid": payload.serid,
+                "start": payload.start_at,
+                "end": payload.end_at,
+            }
+            # Keep compatibility with small test/demonstration job adapters
+            # while production WebReportJobs receives the durable request key.
+            idempotency_key = payload.idempotency_key or request.headers.get("Idempotency-Key")
+            if idempotency_key is not None:
+                kwargs["idempotency_key"] = idempotency_key
+            return _report_response(report_jobs.create(identity, **kwargs))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
@@ -700,7 +735,35 @@ def attach_secure_routes(
         except Exception as exc:
             raise HTTPException(status_code=409, detail="pratinjau report gagal dibuat") from exc
         audit.record("REPORT_PREVIEW", identity, "report", f"draft-{serid}", after={"start_at": start_at, "end_at": end_at})
-        return Response(content=content, media_type="application/pdf", headers={"Content-Disposition": 'inline; filename="radmon-report-preview.pdf"', "Cache-Control": "private, no-store"})
+        return Response(content=content, media_type="application/pdf", headers=_report_pdf_headers("radmon-report-preview.pdf"))
+
+    @app.head("/api/v1/control/reports/draft-preview")
+    def draft_report_preview_head(
+        serid: int,
+        start_at: datetime,
+        end_at: datetime,
+        identity: UserIdentity = Depends(require_operator),
+    ):
+        if report_jobs is None:
+            raise HTTPException(status_code=404, detail="report service unavailable")
+        try:
+            payload = ReportCreateRequest(serid=serid, start_at=start_at, end_at=end_at)
+            validator = getattr(report_jobs, "validate_preview", None)
+            if callable(validator):
+                validator(serid=payload.serid, start=payload.start_at, end=payload.end_at)
+            else:
+                # Compatibility adapters do not expose a separate validator;
+                # their normal preview path remains authoritative on GET.
+                pass
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=409, detail="pratinjau report gagal dibuat") from exc
+        return Response(
+            status_code=200,
+            media_type="application/pdf",
+            headers=_report_pdf_headers("radmon-report-preview.pdf"),
+        )
 
     def authorised_report(job_id: str, identity: UserIdentity) -> dict[str, Any]:
         item = report_jobs.get(job_id)
@@ -748,8 +811,23 @@ def attach_secure_routes(
         return FileResponse(
             path,
             media_type="application/pdf",
-            headers={"Content-Disposition": f'inline; filename="radmon-report-{job_id}.pdf"'},
+            headers=_report_pdf_headers(f"radmon-report-{job_id}.pdf"),
         )
+
+    @app.head("/api/v1/control/reports/{job_id}/preview")
+    def preview_report_head(job_id: str, identity: UserIdentity = Depends(require_operator)):
+        if report_jobs is None:
+            raise HTTPException(status_code=404, detail="report service unavailable")
+        authorised_report(job_id, identity)
+        try:
+            _item, path = report_jobs.artifact(job_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (ValueError, FileNotFoundError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        headers = _report_pdf_headers(f"radmon-report-{job_id}.pdf")
+        headers["Content-Length"] = str(path.stat().st_size)
+        return Response(status_code=200, media_type="application/pdf", headers=headers)
 
     @app.get("/api/v1/control/audit")
     def audit_events(identity: UserIdentity = Depends(require_admin)):

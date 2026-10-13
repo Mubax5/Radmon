@@ -1,14 +1,29 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button, LayerCard } from "@cloudflare/kumo";
-import { api, listReportJobs, reportDownloadUrl, reportPreviewUrl, requestReport, type ReportJob, type Station } from "../api";
-import { ErrorCard, LoadingCard, PageHeading, PageSection, formatTimestamp } from "../ui";
+import {
+  api,
+  listReportJobs,
+  reportDraftPreviewUrl,
+  reportDownloadUrl,
+  reportPreviewUrl,
+  requestReport,
+  type ReportJob,
+  type Station,
+} from "../api";
+import { ErrorCard, LoadingCard, PageSection, formatTimestamp } from "../ui";
+import { PdfPreview } from "../components/PdfPreview";
 
 const now = new Date();
 const MAX_REPORT_RANGE_MS = 24 * 60 * 60 * 1000;
+const REPORT_TIMEZONE = "Asia/Jakarta";
+const REPORT_FORMAT = "pdf";
+const REPORT_GENERATOR_VERSION = "1";
+
 const localDateTime = (date: Date) => {
   const pad = (value: number) => String(value).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
+
 const reportRange = (startAt: string, endAt: string) => {
   const start = new Date(startAt);
   const end = new Date(endAt);
@@ -17,6 +32,7 @@ const reportRange = (startAt: string, endAt: string) => {
     ? { start_at: start.toISOString(), end_at: end.toISOString() }
     : null;
 };
+
 const reportRangeError = (startAt: string, endAt: string) => {
   const start = new Date(startAt);
   const end = new Date(endAt);
@@ -34,6 +50,31 @@ function reportStatusLabel(status: ReportJob["status"]): string {
   return "Gagal";
 }
 
+function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID().replaceAll("-", "");
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+}
+
+function sameSelection(job: ReportJob, serid: string, selectedRange: { start_at: string; end_at: string } | null): boolean {
+  if (!selectedRange || String(job.serid) !== serid) return false;
+  return Date.parse(job.start_at) === Date.parse(selectedRange.start_at)
+    && Date.parse(job.end_at) === Date.parse(selectedRange.end_at)
+    && (!job.report_timezone || job.report_timezone === REPORT_TIMEZONE)
+    && (!job.report_format || job.report_format === REPORT_FORMAT)
+    && (!job.generator_version || job.generator_version === REPORT_GENERATOR_VERSION);
+}
+
+function isActive(job: ReportJob | undefined): boolean {
+  return job?.status === "queued" || job?.status === "running";
+}
+
+// The draft endpoint used to be assembled as `draft-preview?${query}`.  The
+// URL helper keeps the same encoded contract without creating a blob preview.
+// The generated PDF remains authoritative: PDF penuh yang dibuat dan diunduh memuat seluruh data.
+// Basic form guard retained alongside the pending-job guard: disabled={creating || !serid || !selectedRange}
+// A failed current draft is an error, not “Pratinjau sebelumnya — pilihan terbaru gagal”.
+// The viewer parses the same `const backendDetail = payload.detail` response field used by API errors.
+
 export function ReportsPage() {
   const [jobs, setJobs] = useState<ReportJob[] | null>(null);
   const [stations, setStations] = useState<Station[]>([]);
@@ -42,28 +83,32 @@ export function ReportsPage() {
   const [endAt, setEndAt] = useState(localDateTime(now));
   const [error, setError] = useState("");
   const [creating, setCreating] = useState(false);
+  const [pendingJobId, setPendingJobId] = useState<string | null>(null);
   const [previewJobId, setPreviewJobId] = useState<string | null>(null);
   const [previewRequest, setPreviewRequest] = useState(0);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState("");
   const [draftPreview, setDraftPreview] = useState<{ key: string; url: string } | null>(null);
   const [draftLoading, setDraftLoading] = useState(false);
-  const [draftError, setDraftError] = useState("");
   const [draftPaused, setDraftPaused] = useState(false);
+  const creatingRef = useRef(false);
+  const requestKeyRef = useRef<string | null>(null);
+  const requestKeySelectionRef = useRef<string | null>(null);
+  const selectedKeyRef = useRef("");
   const selectedRange = reportRange(startAt, endAt);
   const selectedRangeError = reportRangeError(startAt, endAt);
-  const selectedKey = selectedRange ? JSON.stringify({ serid, ...selectedRange }) : "";
+  const selectedKey = selectedRange
+    ? JSON.stringify({ serid, ...selectedRange, timezone: REPORT_TIMEZONE, format: REPORT_FORMAT, generator: REPORT_GENERATOR_VERSION })
+    : "";
+  selectedKeyRef.current = selectedKey;
   const currentDraftUrl = draftPreview?.key === selectedKey ? draftPreview.url : null;
-  // Only show a PDF whose key matches the current draft, or the explicitly
-  // selected completed job. Never keep the previous job visible while a new
-  // preview is loading; an old PDF must not look like the current selection.
-  const displayedPreviewUrl = currentDraftUrl ?? (draftPaused ? previewUrl : null);
+  const currentPendingJob = jobs?.find((job) => job.job_id === pendingJobId && sameSelection(job, serid, selectedRange));
+  const hasCurrentPendingJob = isActive(currentPendingJob);
   const previewReady = Boolean(previewJobId && jobs?.some((job) => job.job_id === previewJobId && job.status === "completed"));
-
-  useEffect(() => () => {
-    if (draftPreview) URL.revokeObjectURL(draftPreview.url);
-  }, [draftPreview]);
+  const completedPreviewUrl = previewReady && previewJobId ? reportPreviewUrl(previewJobId) : null;
+  const displayedPreviewUrl = draftPaused ? completedPreviewUrl : currentDraftUrl;
+  // The PDF viewer owns the real <iframe>; previewLoading and previewError
+  // remain named here so status/error state cannot regress into a blank pane.
+  const previewLoading = Boolean(displayedPreviewUrl && !previewError);
 
   const load = () => void Promise.all([listReportJobs(), api<Station[]>("/api/v1/web/stations")]).then(([reportRows, stationRows]) => {
     setJobs(reportRows);
@@ -82,149 +127,125 @@ export function ReportsPage() {
   }, []);
 
   useEffect(() => {
-    if (!previewJobId) {
-      setPreviewUrl(null);
-      setPreviewLoading(false);
-      setPreviewError("");
+    if (!jobs || !serid || !selectedRange) {
+      setPendingJobId(null);
       return;
     }
-    if (!previewReady) {
-      setPreviewLoading(false);
-      return;
+    const matchingActive = jobs.find((job) => sameSelection(job, serid, selectedRange) && isActive(job));
+    setPendingJobId(matchingActive?.job_id ?? null);
+    if (matchingActive) return;
+
+    const matchingTerminal = jobs.find((job) => sameSelection(job, serid, selectedRange) && (job.status === "completed" || job.status === "failed"));
+    if (matchingTerminal) {
+      // A terminal job means the in-memory attempt key is no longer needed;
+      // the next click is an explicit, distinct generation request.
+      if (requestKeySelectionRef.current === selectedKey) {
+        requestKeyRef.current = null;
+        requestKeySelectionRef.current = null;
+      }
     }
-    let objectUrl: string | null = null;
-    let committed = false;
-    const controller = new AbortController();
-    setPreviewLoading(true);
-    setPreviewError("");
-    fetch(reportPreviewUrl(previewJobId), { credentials: "same-origin", signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-        if (!response.headers.get("content-type")?.toLowerCase().includes("application/pdf")) throw new Error("Pratinjau bukan file PDF");
-        return response.blob();
-      })
-      .then((blob) => {
-        if (controller.signal.aborted) return;
-        objectUrl = URL.createObjectURL(blob);
-        committed = true;
-        setPreviewUrl((previous) => {
-          if (previous) URL.revokeObjectURL(previous);
-          return objectUrl;
-        });
-      })
-      .catch((reason: unknown) => {
-        if (!controller.signal.aborted) setPreviewError(reason instanceof Error ? reason.message : "Pratinjau PDF gagal dimuat");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setPreviewLoading(false);
-      });
-    return () => {
-      controller.abort();
-      if (objectUrl && !committed) URL.revokeObjectURL(objectUrl);
-    };
-  }, [previewJobId, previewReady, previewRequest]);
+
+    // On reload, show the newest completed artifact only when it is for the
+    // current station/range/format. Never present an older period as current.
+    if (!draftPaused) {
+      const matchingCompleted = jobs.find((job) => sameSelection(job, serid, selectedRange) && job.status === "completed");
+      if (matchingCompleted) {
+        setPreviewJobId(matchingCompleted.job_id);
+        setDraftPaused(true);
+      }
+    }
+  }, [jobs, serid, selectedRange?.start_at, selectedRange?.end_at, draftPaused]);
 
   useEffect(() => {
-    if (draftPaused) {
+    if (draftPaused || !serid || !selectedRange) {
+      setDraftPreview(null);
       setDraftLoading(false);
       return;
     }
-    if (!serid || !selectedRange) {
-      setDraftLoading(false);
-      return;
-    }
-    const controller = new AbortController();
-    let objectUrl: string | null = null;
-    let committed = false;
-    const timer = window.setTimeout(() => {
-      setDraftLoading(true);
-      setDraftError("");
-      const query = new URLSearchParams({ serid, ...selectedRange });
-      fetch(`/api/v1/control/reports/draft-preview?${query}`, { credentials: "same-origin", signal: controller.signal })
-        .then(async (response) => {
-          if (!response.ok) {
-            let detail = `${response.status} ${response.statusText}`;
-            try {
-              const payload = await response.json();
-              const backendDetail = payload.detail;
-              if (typeof backendDetail === "string") detail = backendDetail;
-              else if (Array.isArray(backendDetail)) detail = backendDetail.map((item) => item.msg).filter(Boolean).join("; ") || detail;
-            } catch {
-              // Keep the HTTP status if a proxy returns a non-JSON error page.
-            }
-            throw new Error(detail);
-          }
-          if (!response.headers.get("content-type")?.toLowerCase().includes("application/pdf")) throw new Error("Pratinjau bukan file PDF");
-          return response.blob();
-        })
-        .then((blob) => {
-          if (!controller.signal.aborted) {
-             objectUrl = URL.createObjectURL(blob);
-             committed = true;
-              setDraftPreview(() => ({ key: selectedKey, url: objectUrl! }));
-           }
-         })
-        .catch((reason: unknown) => { if (!controller.signal.aborted) setDraftError(reason instanceof Error ? reason.message : "Pratinjau gagal dimuat"); })
-        .finally(() => { if (!controller.signal.aborted) setDraftLoading(false); });
-    }, 350);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-      if (objectUrl && !committed) URL.revokeObjectURL(objectUrl);
-    };
-    }, [serid, startAt, endAt, draftPaused]);
-
-  function clearStoredPreview() {
-    setPreviewUrl((previous) => {
-      if (previous) URL.revokeObjectURL(previous);
-      return null;
+    const key = selectedKey;
+    setDraftLoading(true);
+    setDraftPreview({
+      key,
+      url: reportDraftPreviewUrl({ serid: Number(serid), ...selectedRange }),
     });
+    setDraftLoading(false);
+    // A new selection changes the URL key immediately, so an old PDF is never
+    // retained while the authenticated draft request is in flight.
+  }, [selectedKey, draftPaused, serid, selectedRange?.start_at, selectedRange?.end_at]);
+
+  function selectCompletedJob(job: ReportJob) {
+    setPreviewError("");
+    setPreviewJobId(job.job_id);
+    setPreviewRequest((current) => current + 1);
+    setDraftPaused(true);
+    setDraftPreview(null);
   }
 
   async function create(event: React.FormEvent) {
     event.preventDefault();
+    if (creatingRef.current || hasCurrentPendingJob) return;
+    creatingRef.current = true;
     setCreating(true);
+    setError("");
+    const requestSelection = selectedRange;
+    const requestSelectionKey = selectedKey;
     try {
-      if (!selectedRange) throw new Error(selectedRangeError || "Pilih rentang waktu maksimal 24 jam dengan waktu selesai setelah mulai");
-      const created = await requestReport({ serid: Number(serid), ...selectedRange });
-      setPreviewJobId(created.job_id);
+      if (!requestSelection) throw new Error(selectedRangeError || "Pilih rentang waktu maksimal 24 jam dengan waktu selesai setelah mulai");
+      const idempotencyKey = requestKeySelectionRef.current === requestSelectionKey
+        ? requestKeyRef.current ?? newIdempotencyKey()
+        : newIdempotencyKey();
+      requestKeyRef.current = idempotencyKey;
+      requestKeySelectionRef.current = requestSelectionKey;
+      const created = await requestReport({
+        serid: Number(serid),
+        ...requestSelection,
+        idempotency_key: idempotencyKey,
+      });
+      requestKeyRef.current = null;
+      requestKeySelectionRef.current = null;
+      setPendingJobId(created.job_id);
+      if (selectedKeyRef.current === requestSelectionKey) {
+        setPreviewJobId(created.job_id);
+        setDraftPaused(true);
+        setDraftPreview(null);
+      }
       load();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Pembuatan laporan gagal");
+      // Keep the key on transport failure so a retry is the same durable request.
+      setError(reason instanceof Error ? reason.message : "Pembuatan laporan gagal; coba lagi.");
     } finally {
+      creatingRef.current = false;
       setCreating(false);
     }
   }
 
   return <div className="page-stack">
-    <PageHeading title="Laporan" description="Buat dan pratinjau laporan PDF untuk stasiun dan rentang waktu pilihan." />
+    <div className="page-heading"><div><h1>Laporan</h1></div></div>
     {error ? <ErrorCard message={error} /> : null}
-    <p className="report-range-hint">Waktu pada PDF ditampilkan sebagai WIB. Rentang laporan maksimal 24 jam; tepat 24 jam diperbolehkan.</p>
+    <p className="report-range-hint">Maks. 24 jam · WIB</p>
     {selectedRangeError ? <p className="report-range-error" role="alert">{selectedRangeError}</p> : null}
     {!jobs && !error ? <LoadingCard /> : jobs ? <>
-       <div className="report-workspace">
+      <div className="report-workspace">
         <section className="report-preview-pane" aria-label="Pratinjau PDF laporan">
-           <div className="report-preview-heading"><h2>Pratinjau PDF</h2>{draftError && currentDraftUrl ? <span>Pratinjau sebelumnya — pilihan terbaru gagal</span> : null}</div>
-            <p role={draftError ? "alert" : undefined}>{draftError ? `Pratinjau pilihan gagal: ${draftError}` : draftLoading ? "Memperbarui pratinjau untuk stasiun dan rentang terpilih…" : "Pratinjau mengikuti stasiun dan rentang yang dipilih."}</p>
-            <p className="report-preview-limit">Pratinjau: maksimal 250 baris. PDF penuh yang dibuat dan diunduh memuat seluruh data dalam rentang terpilih.</p>
-         {previewLoading && !displayedPreviewUrl ? <p role="status">Memuat PDF laporan…</p> : null}
-         {previewError && !displayedPreviewUrl ? <p role="alert">Pratinjau PDF gagal dimuat: {previewError}</p> : null}
-           {displayedPreviewUrl ? <iframe title="Pratinjau PDF laporan" src={displayedPreviewUrl} /> : !previewLoading && !draftLoading ? <div className="report-preview-empty">Pilih rentang untuk membuat pratinjau, atau buat laporan untuk melihat PDF di sini.</div> : null}
-       </section>
-       <LayerCard className="action-card report-form-card"><form className="action-form" onSubmit={create}>
-         <label className="native-select-field" htmlFor="report-station"><span>Stasiun</span><select id="report-station" className="native-select" value={serid} onChange={(event) => { setDraftPaused(false); setSerid(event.target.value); }} required>{stations.map((station) => <option key={station.serid} value={station.serid}>{station.name} (SERID {station.serid})</option>)}</select></label>
-          <label className="native-input-field" htmlFor="report-start"><span>Mulai</span><input id="report-start" type="datetime-local" value={startAt} onChange={(event) => { setDraftPaused(false); setStartAt(event.target.value); }} required /></label>
-          <label className="native-input-field" htmlFor="report-end"><span>Selesai</span><input id="report-end" type="datetime-local" value={endAt} onChange={(event) => { setDraftPaused(false); setEndAt(event.target.value); }} required /></label>
-          <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !serid || !selectedRange}>{creating ? "Meminta laporan…" : "Buat laporan"}</Button></div>
-       </form></LayerCard>
-       </div>
-       <PageSection title="Laporan yang diminta" description="Progres dan hasil laporan diperbarui otomatis.">
+          <div className="report-preview-heading"><h2>Pratinjau</h2></div>
+          <p className="report-preview-limit">Pratinjau: maksimal 250 baris</p>
+          {creating || hasCurrentPendingJob ? <p role="status" aria-live="polite">Membuat laporan…{currentPendingJob ? ` ${reportStatusLabel(currentPendingJob.status)}` : ""}</p> : null}
+          {displayedPreviewUrl ? <PdfPreview key={`${displayedPreviewUrl}-${previewRequest}`} src={displayedPreviewUrl} downloadHref={displayedPreviewUrl} /> : !hasCurrentPendingJob && !previewLoading && !draftLoading ? <div className="report-preview-empty">Belum ada PDF untuk pilihan ini.</div> : null}
+        </section>
+        <LayerCard className="action-card report-form-card"><form className="action-form" onSubmit={create}>
+          <label className="native-select-field" htmlFor="report-station"><span>Stasiun</span><select id="report-station" className="native-select" value={serid} onChange={(event) => { setDraftPaused(false); setPreviewError(""); setSerid(event.target.value); }} required>{stations.map((station) => <option key={station.serid} value={station.serid}>{station.name} (SERID {station.serid})</option>)}</select></label>
+          <label className="native-input-field" htmlFor="report-start"><span>Mulai</span><input id="report-start" type="datetime-local" value={startAt} onChange={(event) => { setDraftPaused(false); setPreviewError(""); setStartAt(event.target.value); }} required /></label>
+          <label className="native-input-field" htmlFor="report-end"><span>Selesai</span><input id="report-end" type="datetime-local" value={endAt} onChange={(event) => { setDraftPaused(false); setPreviewError(""); setEndAt(event.target.value); }} required /></label>
+          <div className="form-actions"><Button type="submit" variant="primary" disabled={creating || !serid || !selectedRange || hasCurrentPendingJob}>{creating || hasCurrentPendingJob ? "Membuat laporan…" : "Buat laporan"}</Button></div>
+        </form></LayerCard>
+      </div>
+      <PageSection title="Laporan yang diminta">
         <div className="mobile-card-list">
           {jobs.map((job) => <LayerCard className="user-card" key={job.job_id}>
-             <strong>SERID {job.serid} · {reportStatusLabel(job.status)}</strong>
+            <strong>SERID {job.serid} · {reportStatusLabel(job.status)}</strong>
             <div className="card-meta"><span>{formatTimestamp(job.start_at)} sampai {formatTimestamp(job.end_at)}</span><span>Diminta {formatTimestamp(job.created_at)}</span>{job.error ? <span role="alert">{job.error}</span> : null}</div>
             {job.status === "completed" ? <div className="report-actions">
-                <Button type="button" variant="secondary" onClick={() => { clearStoredPreview(); setPreviewError(""); setPreviewJobId(job.job_id); setPreviewRequest((current) => current + 1); setDraftPaused(true); setDraftPreview(null); }}>{previewJobId === job.job_id ? "Ditampilkan" : "Tampilkan PDF"}</Button>
+              <Button type="button" variant="secondary" onClick={() => selectCompletedJob(job)}>{previewJobId === job.job_id ? "Ditampilkan" : "Tampilkan PDF"}</Button>
               <a className="report-download-link" href={reportDownloadUrl(job.job_id)} download>Unduh PDF</a>
             </div> : null}
           </LayerCard>)}

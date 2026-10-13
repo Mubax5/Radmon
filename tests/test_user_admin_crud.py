@@ -103,6 +103,47 @@ def test_final_admin_and_self_lockout_are_conflicts_and_delete_is_permanent(tmp_
     assert "password" not in str(event).lower() and "pin" not in str(event).lower()
 
 
+def test_admin_profile_and_status_mutations_are_rejected_without_state_change(tmp_path):
+    client, store, _audit = make_client(tmp_path)
+    before = store.get_user("admin")
+
+    profile = client.patch("/api/v1/control/users/admin", json={
+        "pin": "2468", "display_name": "Changed", "role": "Viewer",
+    })
+    assert profile.status_code == 409
+    assert "administrator" in profile.json()["detail"].lower()
+    noop = client.patch("/api/v1/control/users/admin", json={"pin": "2468"})
+    assert noop.status_code == 409
+    assert "administrator" in noop.json()["detail"].lower()
+    status = client.post("/api/v1/control/users/admin/enabled", json={
+        "pin": "2468", "enabled": False,
+    })
+    assert status.status_code == 409
+    assert store.get_user("admin") == before
+
+    # The dedicated credential route remains available and is not routed
+    # through the immutable profile mutation.
+    assert client.post("/api/v1/control/users/admin/password", json={
+        "pin": "2468", "password": "RotatedPass123!",
+    }).status_code == 200
+
+
+def test_one_administrator_cannot_edit_another_administrator(tmp_path):
+    client, store, _audit = make_client(tmp_path)
+    with store._connection() as connection:
+        # Build a two-administrator fixture without exercising the production
+        # uniqueness policy; the test targets immutable-account behavior.
+        connection.execute("UPDATE users SET role = 'Administrator' WHERE username = 'operator'")
+    before = store.get_user("operator")
+
+    response = client.patch("/api/v1/control/users/operator", json={
+        "pin": "2468", "display_name": "Changed", "role": "Viewer",
+    })
+    assert response.status_code == 409
+    assert "administrator" in response.json()["detail"].lower()
+    assert store.get_user("operator") == before
+
+
 def test_hard_delete_rejects_wrong_pin_operator_and_self_delete(tmp_path):
     client, _store, _audit = make_client(tmp_path)
     assert client.request("DELETE", "/api/v1/control/users/operator", json={"pin": "0000"}).status_code == 403
@@ -177,3 +218,6 @@ def test_user_management_ui_uses_native_dialog_forms_and_controls():
     assert 'data-testid="user-delete-dialog"' in users
     assert "window.confirm" not in users
     assert "<input type=\"password\"" in create_form
+    assert "Bersihkan" not in create_form
+    assert ">Tutup</Button>" in create_form
+    assert "Tidak dapat diubah" in users

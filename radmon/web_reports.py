@@ -3,9 +3,12 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timezone
+import hashlib
+import json
 import logging
 from pathlib import Path
 import re
+import sqlite3
 import threading
 import time
 import uuid
@@ -28,6 +31,10 @@ class WebReportJobs:
     MAX_RANGE = ReportService.MAX_RANGE
     MAX_PENDING_PER_USER = 4
     _JOB_ID = re.compile(r"[0-9a-f]{32}\Z")
+    _IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9._~-]{1,128}\Z")
+    REPORT_TIMEZONE = "Asia/Jakarta"
+    REPORT_FORMAT = "pdf"
+    GENERATOR_VERSION = "1"
 
     def __init__(self, security, audit: AuditTrail, repository: Any, settings, *, summary_reader=None) -> None:
         self.security = security
@@ -59,8 +66,39 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
   artifact_name TEXT,
   error TEXT,
   created_at TEXT NOT NULL,
-  completed_at TEXT
+  completed_at TEXT,
+  idempotency_key TEXT,
+  request_fingerprint TEXT,
+  report_timezone TEXT NOT NULL DEFAULT 'Asia/Jakarta',
+  report_format TEXT NOT NULL DEFAULT 'pdf',
+  generator_version TEXT NOT NULL DEFAULT '1'
 )
+"""
+            )
+            # The report table predates durable request identities.  Keep this
+            # additive so an existing operator database can be upgraded in
+            # place without touching its job history or artifacts.
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(web_report_jobs)").fetchall()
+            }
+            additions = (
+                ("idempotency_key", "TEXT"),
+                ("request_fingerprint", "TEXT"),
+                ("report_timezone", "TEXT NOT NULL DEFAULT 'Asia/Jakarta'"),
+                ("report_format", "TEXT NOT NULL DEFAULT 'pdf'"),
+                ("generator_version", "TEXT NOT NULL DEFAULT '1'"),
+            )
+            for name, definition in additions:
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE web_report_jobs ADD COLUMN {name} {definition}"
+                    )
+            connection.execute(
+                """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_web_report_jobs_owner_idempotency
+ON web_report_jobs (username, idempotency_key)
+WHERE idempotency_key IS NOT NULL
 """
             )
 
@@ -99,11 +137,24 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
 
     @staticmethod
     def _item(row: tuple[Any, ...]) -> dict[str, Any]:
-        keys = ("job_id", "username", "serid", "start_at", "end_at", "status", "artifact_name", "error", "created_at", "completed_at")
+        keys = (
+            "job_id", "username", "serid", "start_at", "end_at", "status",
+            "artifact_name", "error", "created_at", "completed_at",
+            "idempotency_key", "request_fingerprint", "report_timezone",
+            "report_format", "generator_version",
+        )
         return dict(zip(keys, row))
 
+    @classmethod
+    def _select_columns(cls) -> str:
+        return (
+            "job_id, username, serid, start_at, end_at, status, artifact_name, "
+            "error, created_at, completed_at, idempotency_key, request_fingerprint, "
+            "report_timezone, report_format, generator_version"
+        )
+
     def list(self, *, username: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
-        query = "SELECT job_id, username, serid, start_at, end_at, status, artifact_name, error, created_at, completed_at FROM web_report_jobs"
+        query = f"SELECT {self._select_columns()} FROM web_report_jobs"
         params: tuple[Any, ...] = ()
         if username is not None:
             query += " WHERE username = ?"
@@ -118,31 +169,124 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
             return None
         with self.security._connection() as connection:
             row = connection.execute(
-                "SELECT job_id, username, serid, start_at, end_at, status, artifact_name, error, created_at, completed_at FROM web_report_jobs WHERE job_id = ?",
+                f"SELECT {self._select_columns()} FROM web_report_jobs WHERE job_id = ?",
                 (job_id,),
             ).fetchone()
         return self._item(row) if row else None
 
-    def create(self, identity, *, serid: int, start: datetime, end: datetime) -> dict[str, Any]:
+    @classmethod
+    def _normalise_idempotency_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        key = str(value).strip()
+        if not cls._IDEMPOTENCY_KEY.fullmatch(key):
+            raise ValueError("idempotency key report tidak valid")
+        return key
+
+    @classmethod
+    def _request_fingerprint(cls, *, serid: int, start: datetime, end: datetime) -> str:
+        canonical = {
+            "serid": int(serid),
+            "start_at": start.isoformat(timespec="microseconds"),
+            "end_at": end.isoformat(timespec="microseconds"),
+            "timezone": cls.REPORT_TIMEZONE,
+            "format": cls.REPORT_FORMAT,
+            "generator_version": cls.GENERATOR_VERSION,
+        }
+        return hashlib.sha256(
+            json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+    def create(
+        self,
+        identity,
+        *,
+        serid: int,
+        start: datetime,
+        end: datetime,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
         start = self._as_utc(start)
         end = self._as_utc(end)
         ReportService.validate_range(start, end)
         if not self._station_exists(int(serid)):
             raise ValueError("station tidak ditemukan")
-        ReportService(self.repository, replace(self.settings, serid=int(serid)), summary_reader=self.summary_reader).preflight(start, end)
+        idempotency_key = self._normalise_idempotency_key(idempotency_key)
+        fingerprint = self._request_fingerprint(serid=int(serid), start=start, end=end)
+        username = identity.username.strip().lower()
         job_id = uuid.uuid4().hex
         created_at = datetime.now(timezone.utc).isoformat()
+        # A known idempotent retry must return its durable terminal result even
+        # if the source count has changed since the original request.  New
+        # keys still preflight before any job row or artifact is created.
+        if idempotency_key is not None:
+            with self.security._connection() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                existing = connection.execute(
+                    f"SELECT {self._select_columns()} FROM web_report_jobs "
+                    "WHERE username = ? AND idempotency_key = ?",
+                    (username, idempotency_key),
+                ).fetchone()
+                if existing is not None:
+                    item = self._item(existing)
+                    if item.get("request_fingerprint") != fingerprint:
+                        raise ValueError("idempotency key report sudah dipakai untuk pilihan lain")
+                    return item
+        ReportService(self.repository, replace(self.settings, serid=int(serid)), summary_reader=self.summary_reader).preflight(start, end)
         with self.security._connection() as connection:
+            # BEGIN IMMEDIATE makes the pending-count guard and the unique
+            # idempotency lookup one durable transaction.  Without it, two
+            # browser tabs can both pass the count and enqueue duplicate PDFs.
+            connection.execute("BEGIN IMMEDIATE")
+            if idempotency_key is not None:
+                existing = connection.execute(
+                    f"SELECT {self._select_columns()} FROM web_report_jobs "
+                    "WHERE username = ? AND idempotency_key = ?",
+                    (username, idempotency_key),
+                ).fetchone()
+                if existing is not None:
+                    item = self._item(existing)
+                    if item.get("request_fingerprint") != fingerprint:
+                        raise ValueError("idempotency key report sudah dipakai untuk pilihan lain")
+                    return item
             pending = int(connection.execute(
                 "SELECT COUNT(*) FROM web_report_jobs WHERE username = ? AND status IN ('queued', 'running')",
-                (identity.username.strip().lower(),),
+                (username,),
             ).fetchone()[0])
             if pending >= self.MAX_PENDING_PER_USER:
                 raise ValueError("terlalu banyak report yang masih berjalan")
-            connection.execute(
-                "INSERT INTO web_report_jobs (job_id, username, serid, start_at, end_at, status, created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
-                (job_id, identity.username, int(serid), start.isoformat(), end.isoformat(), created_at),
-            )
+            try:
+                connection.execute(
+                    """
+INSERT INTO web_report_jobs
+  (job_id, username, serid, start_at, end_at, status, created_at,
+   idempotency_key, request_fingerprint, report_timezone, report_format,
+   generator_version)
+VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)
+""",
+                    (
+                        job_id, username, int(serid), start.isoformat(), end.isoformat(),
+                        created_at, idempotency_key, fingerprint, self.REPORT_TIMEZONE,
+                        self.REPORT_FORMAT, self.GENERATOR_VERSION,
+                    ),
+                )
+            except sqlite3.IntegrityError:
+                # The partial unique index is the final race guard for older
+                # SQLite builds or callers that entered between the lookup and
+                # insert.  Return the already committed, matching request.
+                if idempotency_key is None:
+                    raise
+                existing = connection.execute(
+                    f"SELECT {self._select_columns()} FROM web_report_jobs "
+                    "WHERE username = ? AND idempotency_key = ?",
+                    (username, idempotency_key),
+                ).fetchone()
+                if existing is None:
+                    raise
+                item = self._item(existing)
+                if item.get("request_fingerprint") != fingerprint:
+                    raise ValueError("idempotency key report sudah dipakai untuk pilihan lain")
+                return item
         item = self.get(job_id)
         if item is None:
             raise RuntimeError("report job tidak tersimpan")
@@ -165,6 +309,19 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
             replace(self.settings, serid=int(serid)),
             summary_reader=self.summary_reader,
         ).pdf_bytes(start, end, preview=True)
+
+    def validate_preview(self, *, serid: int, start: datetime, end: datetime) -> None:
+        """Validate a draft preview request without generating a PDF body."""
+        start = self._as_utc(start)
+        end = self._as_utc(end)
+        if not self._station_exists(int(serid)):
+            raise ValueError("station tidak ditemukan")
+        service = ReportService(
+            self.repository,
+            replace(self.settings, serid=int(serid)),
+            summary_reader=self.summary_reader,
+        )
+        service.preflight(start, end)
 
     @staticmethod
     def _as_utc(value: datetime) -> datetime:
@@ -198,7 +355,13 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
         return directory
 
     def _generate(self, job_id: str, serid: int, start: datetime, end: datetime) -> None:
-        self._set_status(job_id, "running")
+        # Multiple service instances can recover the same queued row after a
+        # restart.  Claiming in SQLite makes generation a one-worker action,
+        # so only the claimant can publish the one canonical artifact.
+        if not self._claim_job(job_id):
+            with self._futures_lock:
+                self._futures.pop(job_id, None)
+            return
         temp: Path | None = None
         try:
             if self._shutdown_event.is_set():
@@ -231,6 +394,10 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
         except _ReportJobCancelled:
             self._set_status(job_id, "failed", error="pembuatan report dibatalkan saat shutdown")
             return
+        except ValueError as exc:
+            LOG.exception("web report generation failed job_id=%s", job_id)
+            self._set_status(job_id, "failed", error=str(exc)[:500] or "pembuatan report gagal")
+            return
         except Exception as exc:
             LOG.exception("web report generation failed job_id=%s", job_id)
             self._set_status(job_id, "failed", error="pembuatan report gagal")
@@ -241,6 +408,14 @@ CREATE TABLE IF NOT EXISTS web_report_jobs (
             with self._futures_lock:
                 self._futures.pop(job_id, None)
         self._set_status(job_id, "completed", artifact_name=name)
+
+    def _claim_job(self, job_id: str) -> bool:
+        with self.security._connection() as connection:
+            result = connection.execute(
+                "UPDATE web_report_jobs SET status = 'running', error = NULL WHERE job_id = ? AND status = 'queued'",
+                (job_id,),
+            )
+            return result.rowcount == 1
 
     def _set_status(self, job_id: str, status: str, *, artifact_name: str | None = None, error: str | None = None) -> None:
         completed_at = datetime.now(timezone.utc).isoformat() if status in {"completed", "failed"} else None

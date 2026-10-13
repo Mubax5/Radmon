@@ -28,6 +28,14 @@ class UserAdminService:
             reason=self._failure_reason(exc),
         )
 
+    @staticmethod
+    def _stored_role(value: object) -> Role:
+        text = str(value).strip()
+        for role in Role:
+            if text.casefold() == role.value.casefold():
+                return role
+        return Role(text)
+
     def create_user(
         self,
         identity: UserIdentity,
@@ -61,7 +69,7 @@ class UserAdminService:
                     raise ValueError("user tidak ditemukan")
                 if identity.username == target and not enabled:
                     raise ValueError("Administrator tidak dapat menonaktifkan akun yang sedang dipakai")
-                self._ensure_not_final_admin(before, role=Role(str(before["role"])), enabled=enabled)
+                self._ensure_not_final_admin(before, role=self._stored_role(before["role"]), enabled=enabled)
                 self.security.set_user_enabled(username, enabled)
                 after = self.security.get_user(target)
             except Exception as exc:
@@ -105,11 +113,17 @@ class UserAdminService:
             try:
                 self.security.require_sensitive(identity, "manage_users", pin)
                 before = self.security.get_user(target)
-                selected_role = Role(role) if role is not None and not isinstance(role, Role) else role
-                if identity.username == target and selected_role is not None and selected_role is not Role.ADMINISTRATOR:
-                    raise ValueError("Administrator tidak dapat menurunkan role akun yang sedang dipakai")
-                self._ensure_not_final_admin(before, role=selected_role or Role(str(before["role"])), enabled=bool(before["enabled"]))
-                after = self.security.update_user(username, display_name=display_name, role=selected_role)
+                target_is_admin = str(before["role"]).strip().casefold() == Role.ADMINISTRATOR.value.casefold()
+                if target_is_admin:
+                    # Let SecurityStore reread the target role inside its
+                    # atomic update transaction before parsing any client role.
+                    after = self.security.update_user(username, display_name=display_name, role=role)
+                else:
+                    selected_role = Role(role) if role is not None and not isinstance(role, Role) else role
+                    if identity.username == target and selected_role is not None and selected_role is not Role.ADMINISTRATOR:
+                        raise ValueError("Administrator tidak dapat menurunkan role akun yang sedang dipakai")
+                    self._ensure_not_final_admin(before, role=selected_role or self._stored_role(before["role"]), enabled=bool(before["enabled"]))
+                    after = self.security.update_user(username, display_name=display_name, role=selected_role)
             except Exception as exc:
                 self._record_failure("USER_UPDATE", identity, target, exc)
                 raise

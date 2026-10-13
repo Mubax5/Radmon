@@ -53,12 +53,16 @@ export type ReportJob = {
   error: string | null;
   created_at: string;
   completed_at: string | null;
+  report_timezone?: string;
+  report_format?: string;
+  generator_version?: string;
 };
 
 export type ReportRequest = {
   serid: number;
   start_at: string;
   end_at: string;
+  idempotency_key?: string;
 };
 
 export type ArchiveExportJob = {
@@ -167,6 +171,15 @@ export function reportDownloadUrl(jobId: string): string {
 
 export function reportPreviewUrl(jobId: string): string {
   return `/api/v1/control/reports/${encodeURIComponent(jobId)}/preview`;
+}
+
+export function reportDraftPreviewUrl(request: Pick<ReportRequest, "serid" | "start_at" | "end_at">): string {
+  const query = new URLSearchParams({
+    serid: String(request.serid),
+    start_at: request.start_at,
+    end_at: request.end_at,
+  });
+  return `/api/v1/control/reports/draft-preview?${query}`;
 }
 
 export function requestArchiveExport(selection: "single" | "year" | "all", value: string | null): Promise<ArchiveExportJob> {

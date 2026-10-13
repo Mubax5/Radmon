@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Badge, Button, LayerCard, Table } from "@cloudflare/kumo";
 import { api } from "../api";
 import { AlarmOperations, type Suppression } from "../Actions";
+import { useSession } from "../auth";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
 import { formatDoseValue, formatPolicyMeasurement } from "../format";
-import { describeLifecycle, kindLabel, statusLabel } from "./alarmLifecycle";
+import { describeLifecycle, kindLabel, lifecycleReasonLabel, statusLabel } from "./alarmLifecycle";
 import { normalizeHistory, type PolicyEvent } from "./alarmHistory";
 import { useWebRefresh } from "../live";
 import { isSourceAlarmActionable, type ActiveAlarm } from "../activeAlarms";
@@ -12,9 +13,9 @@ import {
   ErrorCard,
   LoadingCard,
   MetricCard,
+  Modal,
   PageHeading,
   PageSection,
-  formatTimestamp,
 } from "../ui";
 
 type AlarmHistoryResponse = { items: PolicyEvent[]; total: number; limit: number; offset: number; has_more: boolean };
@@ -24,27 +25,10 @@ function PolicyOutcome({ event }: { event: PolicyEvent }) {
   return <span className="cell-subtle">Aturan pusat: {statusLabel(event.policy_event.status, event.policy_event.kind)}</span>;
 }
 
-function LifecycleDescription({ event }: { event: PolicyEvent }) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const lifecycle = describeLifecycle(event);
-  if (!lifecycle) return <>—</>;
-  return (
-    <span className="alarm-lifecycle">
-      <span>{lifecycle.label}</span>
-      <Button type="button" variant="secondary" onClick={() => dialog.current?.showModal()}>Rincian</Button>
-      <dialog ref={dialog} className="native-user-dialog" aria-label={`Rincian SERID ${event.serid}`} data-testid="alarm-lifecycle-dialog">
-        <div className="native-user-dialog-content"><h2>Rincian</h2><p>SERID {event.serid} · {eventLabel(event)} · {statusLabel(event.status, event.kind)}</p>
-          <ul>{lifecycle.raw.map((detail) => <li key={detail}><code>{detail}</code></li>)}</ul>
-          <div className="form-actions"><Button type="button" variant="secondary" onClick={() => dialog.current?.close()}>Tutup</Button></div>
-        </div>
-      </dialog>
-    </span>
-  );
-}
-
 function EventOrigin({ event }: { event: PolicyEvent }) {
   const sourceOwned = event.event_type === "source_alarm" || Boolean(event.source_alarm) || Boolean(event.source_reconciliation) || event.status === "SOURCE_HANDLED";
-  return <Badge variant={sourceOwned ? "secondary" : "success"}>{sourceOwned ? (event.source_id || "Sumber") : "Pusat"}</Badge>;
+  const sourceLabel = textValue(event.source_id);
+  return <Badge variant={sourceOwned ? "secondary" : "success"}>{sourceOwned ? (sourceLabel === "Tidak tersedia" ? "Alat sumber" : sourceLabel) : "Pusat"}</Badge>;
 }
 
 function eventVariant(event: PolicyEvent): "success" | "warning" | "error" | "secondary" {
@@ -62,12 +46,181 @@ function eventLabel(event: PolicyEvent): string {
   return kindLabel(event.kind);
 }
 
-function SourceActionButton({ event, onAction }: { event: PolicyEvent; onAction?: (eventId: string) => void }) {
-  if (!onAction || !event.event_id || !isSourceAlarmActionable(event as ActiveAlarm)) return null;
-  return <Button type="button" variant="secondary" onClick={() => onAction(event.event_id!)}>Tindak lanjuti sumber</Button>;
+function textValue(value: unknown): string {
+  if (value == null) return "Tidak tersedia";
+  if (typeof value === "string") {
+    const cleaned = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 512);
+    return cleaned || "Tidak tersedia";
+  }
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "Tidak tersedia";
 }
 
-function EventCards({ events, onAction }: { events: PolicyEvent[]; onAction?: (eventId: string) => void }) {
+function firstValue(event: PolicyEvent, keys: string[]): unknown {
+  for (const key of keys) {
+    const value = event[key];
+    if (value !== null && value !== undefined && value !== "") return value;
+  }
+  return null;
+}
+
+function formatAlarmTime(value: unknown): string {
+  if (value == null || value === "") return "Tidak tersedia";
+  const raw = String(value).trim();
+  if (!raw) return "Tidak tersedia";
+  // Source timestamps without an offset are already emitted in WIB. Keep
+  // that original clock value instead of silently applying the browser zone.
+  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)) return `${raw.replace("T", " ")} WIB`;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return `${raw} WIB`;
+  return `${new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Jakarta",
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(parsed)} WIB`;
+}
+
+function formatDuration(value: unknown): string {
+  const seconds = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return textValue(value);
+  if (seconds < 60) return `${Math.round(seconds)} detik`;
+  const minutes = Math.floor(seconds / 60);
+  const remainder = Math.round(seconds % 60);
+  if (minutes < 60) return `${minutes} menit${remainder ? ` ${remainder} detik` : ""}`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} jam${minutes % 60 ? ` ${minutes % 60} menit` : ""}`;
+}
+
+function formatAlarmNumber(value: unknown): string {
+  if (value !== null && value !== undefined && typeof value !== "number" && typeof value !== "string") return "Tidak tersedia";
+  const formatted = formatDoseValue(value as number | string | null | undefined);
+  return formatted === "—" ? "Tidak tersedia" : formatted;
+}
+
+function sourceFlag(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return parsed === 0 || parsed === 1 ? parsed : null;
+}
+
+function sourceStatusLabel(event: PolicyEvent): string {
+  const flag = sourceFlag(event.source_i_flag);
+  if (flag === 0 || (flag == null && event.is_active === true)) return "Alarm masih berbunyi";
+  if (flag === 1 || event.is_active === false) return "Alarm tidak lagi berbunyi dari alat";
+  return statusLabel(event.status, event.kind);
+}
+
+function severityLabel(event: PolicyEvent): string {
+  if (event.level === "ALERT" || event.reason === "HIGH_THRESHOLD") return "Alarm";
+  if (event.level === "WARNING" || event.reason === "LOW_THRESHOLD") return "Peringatan";
+  return eventLabel(event);
+}
+
+function DetailField({ label, value }: { label: string; value: React.ReactNode }) {
+  return <div className="alarm-detail-field"><dt>{label}</dt><dd>{value}</dd></div>;
+}
+
+function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="alarm-detail-section"><h3>{title}</h3><dl className="alarm-detail-grid">{children}</dl></section>;
+}
+
+function AlarmDetailContent({ event, canViewResponse }: { event: PolicyEvent; canViewResponse: boolean }) {
+  const policyEvent = event.policy_event;
+  const lifecycle = describeLifecycle(event);
+  // Lifecycle values are used only to retain the existing domain contract;
+  // their internal keys are never rendered as a technical dump.
+  const lifecycleDetailCount = lifecycle ? lifecycle.raw.map(() => 1).length : 0;
+  const stationName = firstValue(event, ["station_name", "name"]);
+  const stationLocation = firstValue(event, ["location"]);
+  const unit = firstValue(event, ["unit"]);
+  const isSource = event.event_type === "source_alarm";
+  const responseActor = firstValue(event, ["response_actor"]);
+  const responseNote = firstValue(event, ["response_note"]);
+  const responseAction = firstValue(event, ["response_action"]);
+  const hasHandling = isSource || responseActor !== null || responseAction !== null || responseNote !== null || event.acknowledged_at != null;
+  const isSuppression = event.kind === "SUPPRESSION_START" || event.kind === "SUPPRESSION_END" || event.suppression_id != null
+    || firstValue(event, ["suppression_started_at", "suppression_expires_at", "suppression_ended_at"]) !== null;
+  const sourceTime = firstValue(event, ["event_time", "surfaced_at"]);
+  const centralTime = policyEvent ? firstValue(policyEvent, ["surfaced_at", "event_time"]) : !isSource ? firstValue(event, ["surfaced_at", "event_time"]) : null;
+  const endedTime = firstValue(event, ["ended_at", "resolved_at"]);
+  const suppressionReason = lifecycleReasonLabel(firstValue(event, ["response_note", "resolution_reason"]) as string | null);
+  const reconciliation = event.source_reconciliation;
+
+  return (
+    <div className="alarm-detail-body" data-lifecycle-details={lifecycleDetailCount || undefined}>
+      <DetailSection title="Alarm">
+        <DetailField label="Nama stasiun" value={textValue(stationName)} />
+        <DetailField label="Lokasi" value={textValue(stationLocation)} />
+        <DetailField label="SERID" value={textValue(event.serid)} />
+        <DetailField label="Sumber" value={event.event_type === "source_alarm" ? textValue(event.source_id || "Alat sumber") : "Pusat"} />
+        <DetailField label="Jenis" value={eventLabel(event)} />
+        <DetailField label="Keparahan" value={severityLabel(event)} />
+        <DetailField label="Bacaan" value={formatAlarmNumber(event.measured_value)} />
+        <DetailField label="Satuan" value={textValue(unit)} />
+        <DetailField label="Ambang" value={formatAlarmNumber(event.threshold)} />
+        <DetailField label="Jumlah pemicu" value={textValue(event.hit_count)} />
+        {isSource ? <DetailField label="Status alarm sumber" value={sourceStatusLabel(event)} /> : <DetailField label="Status" value={statusLabel(event.status, event.kind)} />}
+        {policyEvent ? <DetailField label="Status aturan pusat" value={statusLabel(policyEvent.status, policyEvent.kind)} /> : null}
+        {reconciliation ? <DetailField label="Keterangan aturan pusat" value={lifecycleReasonLabel(reconciliation.reason) ?? statusLabel(reconciliation.status, "PENDING")} /> : null}
+      </DetailSection>
+
+      {hasHandling ? (
+        <DetailSection title="Penanganan">
+          {canViewResponse ? <DetailField label="PIC" value={textValue(responseActor)} /> : null}
+          <DetailField label="Tindakan operator" value={canViewResponse ? textValue(responseAction) : "Tidak tersedia"} />
+          <DetailField label="Waktu ditangani" value={formatAlarmTime(event.acknowledged_at)} />
+          <DetailField label="Catatan operator" value={canViewResponse ? textValue(responseNote) : "Tidak tersedia"} />
+        </DetailSection>
+      ) : null}
+
+      <DetailSection title="Waktu">
+        {isSource ? <DetailField label="Waktu alarm sumber" value={formatAlarmTime(sourceTime)} /> : null}
+        {policyEvent ? <DetailField label="Waktu aturan pusat" value={formatAlarmTime(centralTime)} /> : null}
+        {!isSource && !policyEvent ? <DetailField label="Waktu peristiwa" value={formatAlarmTime(sourceTime)} /> : null}
+        <DetailField label="Waktu pemantauan sumber" value={formatAlarmTime(event.source_observed_at)} />
+        {event.started_at != null ? <DetailField label="Waktu mulai" value={formatAlarmTime(event.started_at)} /> : null}
+        {endedTime != null ? <DetailField label="Waktu berakhir" value={formatAlarmTime(endedTime)} /> : null}
+        {event.duration_seconds != null ? <DetailField label="Durasi" value={formatDuration(event.duration_seconds)} /> : null}
+      </DetailSection>
+
+      {isSuppression ? (
+        <DetailSection title="Supresi">
+          <DetailField label="Mulai" value={formatAlarmTime(firstValue(event, ["suppression_started_at", "started_at", "surfaced_at"]))} />
+          <DetailField label="Berakhir direncanakan" value={formatAlarmTime(firstValue(event, ["suppression_expires_at", "expires_at"]))} />
+          <DetailField label="Berakhir aktual" value={formatAlarmTime(firstValue(event, ["suppression_ended_at", "ended_at"]))} />
+          {canViewResponse ? <DetailField label="PIC" value={textValue(event.response_actor)} /> : null}
+          <DetailField label="Alasan" value={textValue(suppressionReason)} />
+          {event.suppression_id ? <DetailField label="Referensi" value={textValue(event.suppression_id)} /> : null}
+        </DetailSection>
+      ) : null}
+    </div>
+  );
+}
+
+function AlarmDetailsModal({ event, onClose }: { event: PolicyEvent | null; onClose: () => void }) {
+  const { user } = useSession();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  return (
+    // Modal opens the native dialog with showModal() and restores focus.
+    <Modal
+      open={event !== null}
+      onOpenChange={(open) => { if (!open) onClose(); }}
+      title="Rincian"
+      dialogRef={dialogRef}
+      className="alarm-detail-modal"
+      data-testid="alarm-lifecycle-dialog"
+    >
+      {event ? <AlarmDetailContent event={event} canViewResponse={user?.role !== "Viewer"} /> : null}
+      <div className="form-actions"><Button type="button" variant="secondary" onClick={onClose}>Tutup</Button></div>
+    </Modal>
+  );
+}
+
+function DetailButton({ event, onDetails }: { event: PolicyEvent; onDetails: (event: PolicyEvent) => void }) {
+  return <Button type="button" variant="secondary" onClick={() => onDetails(event)}>Rincian</Button>;
+}
+
+function EventCards({ events, onDetails }: { events: PolicyEvent[]; onDetails: (event: PolicyEvent) => void }) {
   if (!events.length) return <LayerCard className="empty-card">Tidak ada peristiwa alarm.</LayerCard>;
   return (
     <div className="mobile-card-list">
@@ -83,10 +236,9 @@ function EventCards({ events, onAction }: { events: PolicyEvent[]; onAction?: (e
           <div className="card-meta">
             <span>Pengukuran: {formatPolicyMeasurement(event)}</span>
             <span>Ambang: {formatDoseValue(event.threshold)}</span>
-            <span>Muncul: {formatTimestamp(event.surfaced_at)}</span>
+            <span>Muncul: {formatAlarmTime(event.surfaced_at)}</span>
             <PolicyOutcome event={event} />
-            {describeLifecycle(event) ? <span>Aksi: <LifecycleDescription event={event} /></span> : null}
-            <SourceActionButton event={event} onAction={onAction} />
+            <DetailButton event={event} onDetails={onDetails} />
           </div>
         </LayerCard>
       ))}
@@ -94,7 +246,7 @@ function EventCards({ events, onAction }: { events: PolicyEvent[]; onAction?: (e
   );
 }
 
-function EventTable({ events, onAction }: { events: PolicyEvent[]; onAction?: (eventId: string) => void }) {
+function EventTable({ events, onDetails }: { events: PolicyEvent[]; onDetails: (event: PolicyEvent) => void }) {
   if (!events.length) return <LayerCard className="empty-card">Tidak ada peristiwa alarm.</LayerCard>;
   return (
     <LayerCard className="table-card">
@@ -118,8 +270,8 @@ function EventTable({ events, onAction }: { events: PolicyEvent[]; onAction?: (e
               <Table.Cell><Badge variant={eventVariant(event)}>{statusLabel(event.status, event.kind)}</Badge><PolicyOutcome event={event} /></Table.Cell>
               <Table.Cell>{formatPolicyMeasurement(event)}</Table.Cell>
               <Table.Cell>{formatDoseValue(event.threshold)}</Table.Cell>
-              <Table.Cell>{formatTimestamp(event.surfaced_at)}</Table.Cell>
-              <Table.Cell><LifecycleDescription event={event} /> <SourceActionButton event={event} onAction={onAction} /></Table.Cell>
+              <Table.Cell>{formatAlarmTime(event.surfaced_at)}</Table.Cell>
+              <Table.Cell><DetailButton event={event} onDetails={onDetails} /></Table.Cell>
             </Table.Row>
           ))}
         </Table.Body>
@@ -130,7 +282,8 @@ function EventTable({ events, onAction }: { events: PolicyEvent[]; onAction?: (e
 
 export function AlarmsPage() {
   const requestedEventId = new URLSearchParams(window.location.search).get("event");
-  const [actionEventId, setActionEventId] = useState<string | null>(requestedEventId);
+  const [actionEventId] = useState<string | null>(requestedEventId);
+  const [detailEvent, setDetailEvent] = useState<PolicyEvent | null>(null);
   const [soundOn, setSoundOn] = useState(false);
   const [items, setItems] = useState<PolicyEvent[] | null>(null);
   const [activeItems, setActiveItems] = useState<ActiveAlarm[]>([]);
@@ -211,6 +364,7 @@ export function AlarmsPage() {
 
   const isInitialLoading = items === null && !activeLoaded && !historyLoaded && !error;
   const eventsFailedOnFirstLoad = items === null && Boolean(error);
+  const openDetails = (event: PolicyEvent) => setDetailEvent(event);
   const enableAlarmAlerts = async () => {
     // Explicit click grants autoplay eligibility before later alarm beeps.
     if (window.AudioContext) {
@@ -227,7 +381,7 @@ export function AlarmsPage() {
     <div className="page-stack">
       <PageHeading
         title="Alarm"
-        description="Tinjau alarm aktif, catat tindak lanjut, dan lihat riwayat perubahan alarm."
+        description="Status dan riwayat alarm."
         action={<div className="form-actions">
           <Button variant="secondary" onClick={() => void load()}>Muat ulang</Button>
           <Button variant={soundOn ? "secondary" : "primary"} onClick={() => {
@@ -257,13 +411,13 @@ export function AlarmsPage() {
         <>
           <PageSection
             title="Alarm aktif"
-            description="Alarm yang masih berbunyi pada alat sumber dipisahkan dari peristiwa aturan. Hanya alarm sumber yang dapat ditangani di panel tindakan."
+            description="Alarm yang masih berbunyi."
             className="active-alarm-section"
           >
             <div className="active-alarm-list" aria-live="polite">
-              {!activeLoaded ? <LoadingCard label="Memuat status alarm sumber…" /> : activeError ? <><ErrorCard message={`Status alarm sumber tidak tersedia: ${activeError}. Status terakhir belum terverifikasi; alarm tidak dianggap sunyi.`} />{summary.sourceActive.length ? <><p className="cell-subtle">Snapshot alarm sumber terakhir (belum terverifikasi):</p><EventCards events={summary.sourceActive as PolicyEvent[]} /></> : null}</> : <EventCards events={summary.sourceActive as PolicyEvent[]} />}
+              {!activeLoaded ? <LoadingCard label="Memuat status alarm sumber…" /> : activeError ? <><ErrorCard message={`Status alarm sumber tidak tersedia: ${activeError}. Status terakhir belum terverifikasi; alarm tidak dianggap sunyi.`} />{summary.sourceActive.length ? <><p className="cell-subtle">Snapshot alarm sumber terakhir (belum terverifikasi):</p><EventCards events={summary.sourceActive as PolicyEvent[]} onDetails={openDetails} /></> : null}</> : <EventCards events={summary.sourceActive as PolicyEvent[]} onDetails={openDetails} />}
             </div>
-            {!activeError && summary.policyActive.length ? <div className="active-alarm-list" aria-label="Aturan aktif informasional"><p className="cell-subtle">Aturan aktif (informasi; tidak membuka respons sumber):</p><EventCards events={summary.policyActive as PolicyEvent[]} /></div> : null}
+            {!activeError && summary.policyActive.length ? <div className="active-alarm-list" aria-label="Aturan aktif informasional"><p className="cell-subtle">Aturan aktif (informasi; tidak membuka respons sumber):</p><EventCards events={summary.policyActive as PolicyEvent[]} onDetails={openDetails} /></div> : null}
           </PageSection>
 
           <div className="metric-grid alarm-summary">
@@ -274,7 +428,7 @@ export function AlarmsPage() {
             <MetricCard label="Catatan terbaru" value={items === null ? "—" : summary.total} badge={<span className="cell-subtle">{items === null ? "Riwayat tidak tersedia" : "Riwayat alarm"}</span>} />
           </div>
 
-          <PageSection title="Tindakan operator" description="Catat respons dan penanggung jawab alarm, atau redam alarm stasiun untuk waktu tertentu. Perubahan memerlukan PIN operator.">
+          <PageSection title="Tindakan operator" description="Respons alarm dan peredaman. Memerlukan PIN.">
             {suppressionError ? (
               <div className="alarm-suppression-error">
                 <ErrorCard message={`Daftar peredaman tidak tersedia: ${suppressionError}`} />
@@ -284,11 +438,11 @@ export function AlarmsPage() {
             <AlarmOperations events={activeItems} sourceEvents={sourceItems} sourceStatus={!activeLoaded ? "loading" : activeError ? "error" : "ready"} activeError={activeError} suppressions={suppressions} suppressionsStatus={!suppressionLoaded ? "loading" : suppressionError ? "error" : "ready"} onChanged={() => void load()} initialEventId={actionEventId} />
           </PageSection>
 
-          <PageSection title="Riwayat alarm" description="Lihat alarm alat dan perubahan pengaturan alarm berdasarkan waktu.">
+          <PageSection title="Riwayat alarm" description="Riwayat alarm dan perubahan status.">
             {items === null ? historyLoaded ? <p className="cell-subtle" role="status">Riwayat alarm belum tersedia.</p> : <LoadingCard label="Memuat riwayat alarm…" /> : <>
               <ResponsiveDataView
-                desktop={<EventTable events={items} onAction={setActionEventId} />}
-                mobile={<EventCards events={items} onAction={setActionEventId} />}
+                desktop={<EventTable events={items} onDetails={openDetails} />}
+                mobile={<EventCards events={items} onDetails={openDetails} />}
               />
               <div className="form-actions" aria-label="Navigasi riwayat peristiwa">
                 <span className="cell-subtle">{historyTotal === 0 ? "0 peristiwa" : `${historyOffset + 1}–${Math.min(historyOffset + items.length, historyTotal)} dari ${historyTotal}`}</span>
@@ -299,6 +453,7 @@ export function AlarmsPage() {
           </PageSection>
         </>
       ) : null}
+      <AlarmDetailsModal event={detailEvent} onClose={() => setDetailEvent(null)} />
     </div>
   );
 }
