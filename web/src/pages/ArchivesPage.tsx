@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, LayerCard, Select, Table } from "@cloudflare/kumo";
+import { useSession } from "../auth";
 import { api, archiveExportDownloadUrl, requestArchiveExport, retryArchiveExport, type ArchiveExportJob } from "../api";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
 import { useWebRefresh } from "../live";
@@ -21,6 +22,10 @@ type ArchiveRecord = Record<string, unknown> & {
   updated_at?: string | null;
   last_error?: string | null;
   export_available?: boolean;
+  integrity_status?: "VERIFIED" | "UNVERIFIED" | "STALE" | string;
+  integrity_reason?: string | null;
+  integrity_verified_at?: string | null;
+  integrity_evidence_source?: string | null;
 };
 
 function quarterYear(value: unknown): string | null {
@@ -64,7 +69,16 @@ function archiveStateLabel(state: unknown): string {
   }
 }
 
+function archiveIntegrityLabel(item: ArchiveRecord): string {
+  switch (String(item.integrity_status ?? "UNVERIFIED").toUpperCase()) {
+    case "VERIFIED": return "Terverifikasi";
+    case "STALE": return "Bukti kedaluwarsa";
+    default: return "Belum terverifikasi";
+  }
+}
+
 export function ArchivesPage() {
+  const { user } = useSession();
   const [items, setItems] = useState<ArchiveRecord[] | null>(null);
   const [year, setYear] = useState("all");
   const [error, setError] = useState("");
@@ -72,6 +86,7 @@ export function ArchivesPage() {
   const [creating, setCreating] = useState(false);
 
   const canAttemptExport = (item: ArchiveRecord) => {
+    if (!user || user.role === "Viewer") return false;
     if (typeof item.export_available === "boolean") return item.export_available;
     return ["COMPLETE", "SEALED", "PURGING", "PENDING_DRAIN"].includes(String(item.state ?? "").toUpperCase());
   };
@@ -198,6 +213,8 @@ export function ArchivesPage() {
                           <Table.Cell>
                             {archiveStateLabel(item.state)}
                             {item.last_error ? <div className="cell-subtle">{String(item.last_error)}</div> : null}
+                            <div className="cell-subtle">Payload: {archiveIntegrityLabel(item)}</div>
+                            {item.integrity_reason ? <div className="cell-subtle">{String(item.integrity_reason)}</div> : null}
                           </Table.Cell>
                           <Table.Cell>{formatTimestamp(item.start_at)}</Table.Cell>
                           <Table.Cell>{formatTimestamp(item.end_at)}</Table.Cell>
@@ -223,6 +240,8 @@ export function ArchivesPage() {
                           <h3>{String(item.quarter_id ?? "Arsip")}</h3>
                           <div className="cell-subtle">{archiveStateLabel(item.state)}</div>
                           {item.last_error ? <div className="cell-subtle">{String(item.last_error)}</div> : null}
+                          <div className="cell-subtle">Payload: {archiveIntegrityLabel(item)}</div>
+                          {item.integrity_reason ? <div className="cell-subtle">{String(item.integrity_reason)}</div> : null}
                         </div>
                       </div>
                       <div className="card-meta">

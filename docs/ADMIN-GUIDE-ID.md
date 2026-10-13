@@ -93,8 +93,12 @@ selesai.
   range adalah 24 jam; full report memuat semua data sampai batas 50.000
   measurement dan 10.000 alarm. Preview paling banyak 250 baris dan harus
   diberi label partial.
-- Archive hanya boleh diekspor dari bundle `COMPLETE` yang sudah diverifikasi.
-  Jangan mengedit ZIP, `manifest.json`, atau SQL bundle manual.
+- Inventory memisahkan state lifecycle dari integritas payload. `Terverifikasi`
+  tidak mengubah `PENDING_DRAIN` atau `DAMAGED`, dan tidak membuktikan
+  kelengkapan drain sumber. Export melakukan preflight streaming baru dari
+  awal; selection gagal tertutup bila ada bundle yang hilang, berubah, rusak,
+  atau SQL-nya tidak aman. Jangan mengedit ZIP, `manifest.json`, atau SQL
+  bundle manual.
 - Retry archive memerlukan Administrator PIN dan hanya mengulang lifecycle
   archive; ia bukan perintah untuk mempurge source.
 - Backup harus mencakup security DB, central measurement DB, archive, report,

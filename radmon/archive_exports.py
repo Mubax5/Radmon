@@ -31,6 +31,7 @@ MAX_EXPORT_PARTITIONS = 100
 MAX_EXPORT_ROWS = 100_000_000
 MAX_EXPORT_BYTES = 16 * 1024 * 1024 * 1024
 MAX_SQL_LINE_BYTES = 1024 * 1024
+PAYLOAD_VERIFIER_VERSION = "streaming-archive-v2"
 
 _EXPORTABLE_STATES = frozenset({"COMPLETE", "SEALED", "PURGING", "PENDING_DRAIN"})
 _LEGACY_SIZE_VALIDATION_ERRORS = frozenset({
@@ -164,11 +165,22 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
             quarter = str(item.get("quarter_id") or "")
             if _QUARTER.fullmatch(quarter):
                 counts[quarter[:4]] = counts.get(quarter[:4], 0) + 1
+                integrity = (
+                    self.catalog.payload_integrity(item)
+                    if hasattr(self.catalog, "payload_integrity")
+                    else {
+                        "integrity_status": "UNVERIFIED",
+                        "integrity_reason": "Bundle perlu verifikasi streaming sebelum ekspor.",
+                        "integrity_verified_at": None,
+                        "integrity_evidence_source": None,
+                    }
+                )
                 visible.append({
                     **{key: item.get(key) for key in (
                         "quarter_id", "state", "start_at", "end_at", "created_at",
                         "updated_at", "row_counts", "last_error",
                     )},
+                    **integrity,
                     # This only says that an explicit streaming preflight may
                     # be attempted; it does not claim a DAMAGED payload is
                     # valid.
@@ -248,6 +260,7 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
                 if int(info.file_size) > MAX_ARCHIVE_MEMBER_BYTES:
                     raise ValueError(f"archive {quarter} terlalu besar")
                 total_sql_bytes += int(info.file_size)
+            self._record_verified_payload(item, manifest, source, "streaming preflight")
         if total_rows > MAX_EXPORT_ROWS:
             raise ValueError(f"export archive melebihi batas {MAX_EXPORT_ROWS:,} row")
         if total_sql_bytes + 1024 * 1024 > MAX_EXPORT_BYTES:
@@ -259,6 +272,30 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
             raise ValueError(
                 f"ruang disk export tidak cukup: tersedia {free:,} byte, diperlukan sekitar {required:,} byte"
             )
+
+    def _record_verified_payload(
+        self,
+        item: dict[str, Any],
+        manifest: dict[str, Any],
+        source: Path,
+        evidence_source: str,
+    ) -> None:
+        recorder = getattr(self.catalog, "record_payload_verification", None)
+        if not callable(recorder):
+            return
+        from .archive import _archive_manifest_identity
+
+        identity = _archive_manifest_identity(source)
+        recorder(
+            str(item.get("quarter_id") or ""),
+            archive_sha256=str(manifest.get("archive_sha256") or ""),
+            row_counts=dict(manifest.get("row_counts") or {}),
+            manifest_sha256=str(identity["manifest_sha256"]),
+            member_crc=dict(identity["member_crc"]),
+            verifier_version=PAYLOAD_VERIFIER_VERSION,
+            evidence_source=evidence_source,
+            verified_at=self._now(),
+        )
 
     def create(self, identity, *, selection: str, value: str | None) -> dict[str, Any]:
         archives = self.select_archives(selection, value)
@@ -382,6 +419,7 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
                     recorded_hash = str(item.get("archive_sha256") or "").strip().lower()
                     if recorded_hash and recorded_hash != str(verified.get("archive_sha256") or "").lower():
                         raise ValueError(f"archive {quarter} checksum katalog berbeda")
+                    self._record_verified_payload(item, verified, source, "streaming export worker")
                     expected_counts = {
                         str(table): int(value)
                         for table, value in dict(verified.get("row_counts") or {}).items()

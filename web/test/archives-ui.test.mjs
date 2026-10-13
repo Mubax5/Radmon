@@ -19,6 +19,9 @@ test("archive year and quarter exports remain unboxed, responsive, and show asyn
   assert.match(page, /role="status"/);
   assert.match(page, /<progress[\s\S]*?aria-label="Progres bundle"/);
   assert.match(page, /archiveExportDownloadUrl\(job\.job_id\)/);
+  assert.match(page, /integrity_status/);
+  assert.match(page, /case "VERIFIED": return "Terverifikasi"/);
+  assert.match(page, /if \(!user \|\| user\.role === "Viewer"\) return false/);
   assert.match(css, /\.archive-filter\s*\{[^}]*display:\s*grid/);
   assert.match(css, /\.archive-export-inline\s*\{[^}]*flex-wrap:\s*wrap/);
   assert.match(css, /@media \(min-width: 768px\)[\s\S]*?\.archive-filter\s*\{/);

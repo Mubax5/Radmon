@@ -120,6 +120,29 @@ class ExportJobs:
         return {"job_id": "a" * 32, "username": identity.username, "selection": selection, "status": "queued"}
 
 
+class InventoryExports:
+    def inventory(self):
+        return {
+            "years": [{"year": 2026, "archive_count": 1}],
+            "archives": [{
+                "quarter_id": "2026-Q3",
+                "state": "DAMAGED",
+                "integrity_status": "VERIFIED",
+                "integrity_reason": "Terverifikasi; status lifecycle lama tetap dipertahankan untuk pemeriksaan manual.",
+                "export_available": True,
+            }],
+        }
+
+
+def test_archive_inventory_exposes_integrity_separately_from_lifecycle(tmp_path):
+    client, _, _ = make_client(tmp_path, InventoryExports())
+    login(client, "view")
+    archive = client.get("/api/v1/control/archives").json()["archives"][0]
+    assert archive["state"] == "DAMAGED"
+    assert archive["integrity_status"] == "VERIFIED"
+    assert archive["export_available"] is True
+
+
 def test_archive_export_status_and_download_are_operator_owned(tmp_path):
     exports = ExportJobs()
     client, _, _ = make_client(tmp_path, exports)

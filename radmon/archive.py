@@ -163,6 +163,34 @@ def _read_bounded_member(archive: zipfile.ZipFile, name: str, maximum: int) -> b
         raise ArchiveCorruptionError(f"archive member missing: {name}") from exc
 
 
+def _archive_manifest_identity(path: Path | str) -> dict[str, Any]:
+    """Read only bounded ZIP metadata used to validate a stored proof.
+
+    This deliberately does not stream CSV/SQL payloads.  Full payload
+    verification remains mandatory when an export is created or merged.
+    """
+    archive_path = Path(path)
+    try:
+        with zipfile.ZipFile(archive_path) as archive:
+            infos = _bounded_zip_infos(archive)
+            manifest_bytes = _read_bounded_member(archive, "manifest.json", MAX_ARCHIVE_MANIFEST_BYTES)
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
+            if not isinstance(manifest, dict):
+                raise ArchiveCorruptionError("manifest archive tidak valid")
+            return {
+                "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+                "member_crc": {
+                    name: f"{int(info.CRC) & 0xffffffff:08x}"
+                    for name, info in sorted(infos.items())
+                },
+                "manifest": manifest,
+            }
+    except ArchiveCorruptionError:
+        raise
+    except (zipfile.BadZipFile, KeyError, json.JSONDecodeError, UnicodeDecodeError, OSError, ValueError) as exc:
+        raise ArchiveCorruptionError(f"metadata archive tidak dapat dibaca: {archive_path}") from exc
+
+
 def verify_archive(path: Path | str, expected_quarter: Quarter | None = None) -> dict[str, Any]:
     archive_path = Path(path)
     if not archive_path.is_file():
@@ -321,6 +349,117 @@ class ArchiveCatalog:
                             parsed[key] = float(parsed[key]) if parsed.get(key) not in (None, "") else None
                         rows.append(parsed)
         return rows
+
+    def record_payload_verification(
+        self,
+        quarter_id: str,
+        *,
+        archive_sha256: str,
+        row_counts: dict[str, int],
+        manifest_sha256: str,
+        member_crc: dict[str, str],
+        verifier_version: str,
+        evidence_source: str,
+        verified_at: str,
+    ) -> dict[str, Any]:
+        """Persist derived proof only after the supplied proof matches identity.
+
+        The archive lifecycle row is never changed here.  This is suitable for
+        importing a prior completed streaming proof as well as recording one
+        produced by ``verify_archive``.
+        """
+        item = self.get(quarter_id)
+        if item is None or not item.get("archive_path"):
+            raise FileNotFoundError(f"archive quarter tidak ditemukan: {quarter_id}")
+        path = self.safe_archive_path(quarter_id, str(item["archive_path"]))
+        stat = path.stat()
+        identity = _archive_manifest_identity(path)
+        expected_counts = {
+            str(key): int(value)
+            for key, value in dict(row_counts).items()
+        }
+        catalog_counts = {
+            str(key): int(value)
+            for key, value in dict(item.get("row_counts") or {}).items()
+        }
+        if expected_counts != catalog_counts:
+            raise ArchiveCorruptionError("bukti row count berbeda dari katalog")
+        if str(item.get("archive_sha256") or "").lower() != str(archive_sha256).lower():
+            raise ArchiveCorruptionError("bukti archive SHA berbeda dari katalog")
+        if identity["manifest_sha256"] != str(manifest_sha256).lower():
+            raise ArchiveCorruptionError("bukti manifest SHA berbeda dari file")
+        if identity["member_crc"] != {str(key): str(value).lower() for key, value in member_crc.items()}:
+            raise ArchiveCorruptionError("bukti CRC member berbeda dari file")
+        return self.store.upsert_archive_payload_verification(
+            quarter_id=quarter_id,
+            archive_path=str(path),
+            archive_size=int(stat.st_size),
+            archive_mtime_ns=int(stat.st_mtime_ns),
+            archive_sha256=str(archive_sha256).lower(),
+            manifest_sha256=str(manifest_sha256).lower(),
+            member_crc=identity["member_crc"],
+            row_counts=expected_counts,
+            verifier_version=str(verifier_version),
+            evidence_source=str(evidence_source),
+            verified_at=str(verified_at),
+        )
+
+    def payload_integrity(self, item: dict[str, Any]) -> dict[str, Any]:
+        """Project payload proof separately from lifecycle and purge state."""
+        quarter_id = str(item.get("quarter_id") or "")
+        base = {
+            "integrity_status": "UNVERIFIED",
+            "integrity_reason": "Bundle perlu verifikasi streaming sebelum ekspor.",
+            "integrity_verified_at": None,
+            "integrity_evidence_source": None,
+        }
+        try:
+            proof = self.store.get_archive_payload_verification(quarter_id)
+        except (TypeError, ValueError, KeyError):
+            # A malformed derived row must never make the inventory endpoint
+            # claim the bundle is healthy.  Treat it as absent and require a
+            # fresh explicit streaming verification.
+            proof = None
+        if proof is None:
+            return base
+        try:
+            path = self.safe_archive_path(quarter_id, str(item.get("archive_path") or ""))
+            stat = path.stat()
+            if (
+                str(proof.get("archive_path")) != str(path)
+                or int(proof.get("archive_size")) != int(stat.st_size)
+                or int(proof.get("archive_mtime_ns")) != int(stat.st_mtime_ns)
+                or str(proof.get("archive_sha256") or "").lower() != str(item.get("archive_sha256") or "").lower()
+                or dict(proof.get("row_counts") or {}) != dict(item.get("row_counts") or {})
+            ):
+                raise ArchiveCorruptionError("identitas file archive berubah")
+            identity = _archive_manifest_identity(path)
+            if (
+                identity["manifest_sha256"] != str(proof.get("manifest_sha256") or "").lower()
+                or identity["member_crc"] != dict(proof.get("member_crc") or {})
+            ):
+                raise ArchiveCorruptionError("metadata ZIP archive berubah")
+        except (ArchiveCorruptionError, FileNotFoundError, OSError, TypeError, ValueError, KeyError) as exc:
+            return {
+                **base,
+                "integrity_status": "STALE",
+                "integrity_reason": "Bukti verifikasi lama; identitas bundle berubah dan perlu pemeriksaan baru.",
+                "integrity_verified_at": proof.get("verified_at"),
+                "integrity_evidence_source": proof.get("evidence_source"),
+            }
+        state = str(item.get("state") or "").upper()
+        if state == "PENDING_DRAIN":
+            reason = "Terverifikasi; penyelesaian menunggu pembuktian drain sumber."
+        elif state == "DAMAGED":
+            reason = "Terverifikasi; status lifecycle lama tetap dipertahankan untuk pemeriksaan manual."
+        else:
+            reason = "Payload terverifikasi; status lifecycle tidak diubah oleh verifikasi ini."
+        return {
+            "integrity_status": "VERIFIED",
+            "integrity_reason": reason,
+            "integrity_verified_at": proof.get("verified_at"),
+            "integrity_evidence_source": proof.get("evidence_source"),
+        }
 
     def reconcile(self) -> list[dict[str, Any]]:
         seen: set[str] = set()
@@ -591,6 +730,18 @@ class QuarterArchiveService:
                 sealed_at=self.now().isoformat(),
                 last_error=None,
             )
+            if hasattr(self.catalog, "record_payload_verification"):
+                identity = _archive_manifest_identity(path)
+                self.catalog.record_payload_verification(
+                    quarter.quarter_id,
+                    archive_sha256=str(verified["archive_sha256"]),
+                    row_counts=dict(verified.get("row_counts") or {}),
+                    manifest_sha256=str(identity["manifest_sha256"]),
+                    member_crc=dict(identity["member_crc"]),
+                    verifier_version="streaming-archive-v2",
+                    evidence_source="quarter rollover streaming verification",
+                    verified_at=self.now().isoformat(),
+                )
             self._audit("ARCHIVE_VERIFY_SUCCESS", quarter, after={"archive_sha256": verified["archive_sha256"]})
 
         if path is None:

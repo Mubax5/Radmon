@@ -138,11 +138,15 @@ Export CSV**. Jangan menyebut preview sebagai export penuh.
 
 ## Arsip
 
-Viewer dapat membaca inventory dan recap archive yang sudah `COMPLETE`.
-Operator/Administrator dapat meminta export SQL archive sesuai haknya. Jangan
-mengubah ZIP, `manifest.json`, atau SQL bundle secara manual. Archive export
-tidak sama dengan restore database; restore harus mengikuti prosedur
-Administrator dan diuji terlebih dahulu.
+Viewer dapat membaca inventory dan recap archive. Inventory memisahkan status
+lifecycle (`PENDING_DRAIN`/`DAMAGED`/`COMPLETE`) dari status integritas payload.
+`Terverifikasi` berarti bundle cocok dengan bukti payload tersimpan; itu bukan
+bukti drain sumber dan tidak mengubah lifecycle.
+Operator/Administrator dapat meminta export SQL archive. Setiap export tetap
+melakukan preflight streaming dan validasi SQL dari awal; bundle yang gagal
+tidak disertakan diam-diam. Jangan mengubah ZIP, `manifest.json`, atau SQL
+bundle secara manual. Archive export tidak sama dengan restore database;
+restore harus mengikuti prosedur Administrator dan diuji terlebih dahulu.
 
 ## Jika Grafana menampilkan `No data`
 

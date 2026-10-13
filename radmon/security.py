@@ -169,6 +169,19 @@ CREATE TABLE IF NOT EXISTS archive_quarters (
   retry_count INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS archive_payload_verifications (
+  quarter_id TEXT PRIMARY KEY,
+  archive_path TEXT NOT NULL,
+  archive_size INTEGER NOT NULL,
+  archive_mtime_ns INTEGER NOT NULL,
+  archive_sha256 TEXT NOT NULL,
+  manifest_sha256 TEXT NOT NULL,
+  member_crc_json TEXT NOT NULL,
+  row_counts_json TEXT NOT NULL,
+  verifier_version TEXT NOT NULL,
+  evidence_source TEXT NOT NULL,
+  verified_at TEXT NOT NULL
+ );
 """
             )
         # All additive remote-alarm migrations run once during store startup,
@@ -871,6 +884,89 @@ ON CONFLICT(quarter_id) DO UPDATE SET
         item = self.get_archive(quarter_id)
         if item is None:
             raise RuntimeError("archive state tidak ditemukan setelah update")
+        return item
+
+    @staticmethod
+    def _archive_payload_verification_row(row: tuple[Any, ...] | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        keys = (
+            "quarter_id", "archive_path", "archive_size", "archive_mtime_ns",
+            "archive_sha256", "manifest_sha256", "member_crc_json", "row_counts_json",
+            "verifier_version", "evidence_source", "verified_at",
+        )
+        item = dict(zip(keys, row))
+        item["archive_size"] = int(item["archive_size"])
+        item["archive_mtime_ns"] = int(item["archive_mtime_ns"])
+        item["member_crc"] = json.loads(item.pop("member_crc_json") or "{}")
+        item["row_counts"] = json.loads(item.pop("row_counts_json") or "{}")
+        return item
+
+    def get_archive_payload_verification(self, quarter_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+SELECT quarter_id, archive_path, archive_size, archive_mtime_ns, archive_sha256,
+       manifest_sha256, member_crc_json, row_counts_json, verifier_version,
+       evidence_source, verified_at
+FROM archive_payload_verifications WHERE quarter_id = ?
+""",
+                (quarter_id,),
+            ).fetchone()
+        return self._archive_payload_verification_row(row)
+
+    def upsert_archive_payload_verification(
+        self,
+        *,
+        quarter_id: str,
+        archive_path: str,
+        archive_size: int,
+        archive_mtime_ns: int,
+        archive_sha256: str,
+        manifest_sha256: str,
+        member_crc: dict[str, str],
+        row_counts: dict[str, int],
+        verifier_version: str,
+        evidence_source: str,
+        verified_at: str,
+    ) -> dict[str, Any]:
+        with self._connection() as connection:
+            connection.execute(
+                """
+INSERT INTO archive_payload_verifications
+  (quarter_id, archive_path, archive_size, archive_mtime_ns, archive_sha256,
+   manifest_sha256, member_crc_json, row_counts_json, verifier_version,
+   evidence_source, verified_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(quarter_id) DO UPDATE SET
+  archive_path = excluded.archive_path,
+  archive_size = excluded.archive_size,
+  archive_mtime_ns = excluded.archive_mtime_ns,
+  archive_sha256 = excluded.archive_sha256,
+  manifest_sha256 = excluded.manifest_sha256,
+  member_crc_json = excluded.member_crc_json,
+  row_counts_json = excluded.row_counts_json,
+  verifier_version = excluded.verifier_version,
+  evidence_source = excluded.evidence_source,
+  verified_at = excluded.verified_at
+""",
+                (
+                    quarter_id,
+                    archive_path,
+                    int(archive_size),
+                    int(archive_mtime_ns),
+                    str(archive_sha256).lower(),
+                    str(manifest_sha256).lower(),
+                    json.dumps(member_crc, sort_keys=True),
+                    json.dumps(row_counts, sort_keys=True),
+                    verifier_version,
+                    evidence_source,
+                    verified_at,
+                ),
+            )
+        item = self.get_archive_payload_verification(quarter_id)
+        if item is None:
+            raise RuntimeError("bukti verifikasi archive tidak tersimpan")
         return item
 
     def _init_base(self, path: Path | str, *, now: Callable[[], datetime] | None=None) -> None:

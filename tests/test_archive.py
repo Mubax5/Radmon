@@ -1,11 +1,12 @@
 from datetime import datetime
 import json
+import os
 import zipfile
 from zoneinfo import ZoneInfo
 
 import pytest
 
-from radmon.archive import ArchiveCatalog, QuarterArchiveService, verify_archive
+from radmon.archive import ArchiveCatalog, QuarterArchiveService, _archive_manifest_identity, verify_archive
 from radmon.archive_store import CentralArchiveStore
 from radmon.quarters import quarter_for
 from radmon.security import SecurityStore
@@ -211,6 +212,44 @@ def test_verify_failure_never_purges(tmp_path):
         service.run_rollover(q, drain_info={}, active_quarter=q4)
     assert store.purge_calls == []
     assert catalog.get("2026-Q3")["state"] == "VERIFYING"
+
+
+def test_payload_proof_is_separate_from_damaged_lifecycle_and_invalidates_on_identity_change(tmp_path):
+    service, store, catalog, audit = make_archive_service(tmp_path)
+    q = quarter_for(datetime(2026, 9, 8, tzinfo=WIB))
+    path = service.export_quarter(q, {"gd52:5201": "2026-09-30T23:59:58+07:00"})
+    verified = verify_archive(path, expected_quarter=q)
+    catalog.store.upsert_archive(
+        quarter_id=q.quarter_id,
+        start_at=q.start.isoformat(),
+        end_at=q.end.isoformat(),
+        state="DAMAGED",
+        archive_path=str(path),
+        archive_sha256=verified["archive_sha256"],
+        row_counts=verified["row_counts"],
+        last_error="member archive terlalu besar",
+    )
+    identity = _archive_manifest_identity(path)
+    catalog.record_payload_verification(
+        q.quarter_id,
+        archive_sha256=verified["archive_sha256"],
+        row_counts=verified["row_counts"],
+        manifest_sha256=identity["manifest_sha256"],
+        member_crc=identity["member_crc"],
+        verifier_version="test-streaming-proof",
+        evidence_source="stored full streaming proof",
+        verified_at="2026-10-08T02:22:57+00:00",
+    )
+
+    projection = catalog.payload_integrity(catalog.get(q.quarter_id))
+    assert projection["integrity_status"] == "VERIFIED"
+    assert catalog.get(q.quarter_id)["state"] == "DAMAGED"
+
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    stale = catalog.payload_integrity(catalog.get(q.quarter_id))
+    assert stale["integrity_status"] == "STALE"
+    assert catalog.get(q.quarter_id)["state"] == "DAMAGED"
 
 
 def test_verified_archive_purges_once_rebuilds_recent_and_is_idempotent(tmp_path):

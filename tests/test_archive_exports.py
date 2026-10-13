@@ -105,6 +105,26 @@ def test_archive_selection_rejects_traversal_and_only_complete_archives(tmp_path
         jobs.select_archives("single", "2024-Q2")
 
 
+def test_legacy_size_damaged_archive_can_be_explicitly_preflighted(tmp_path):
+    import pytest
+
+    archive = dict(
+        make_archive(tmp_path / "archives", "2024-Q1", [1]),
+        state="DAMAGED",
+        last_error="member archive terlalu besar",
+    )
+    jobs = make_jobs(tmp_path, [archive])
+    assert jobs.select_archives("single", "2024-Q1") == [archive]
+    job = jobs.create(type("User", (), {"username": "operator"})(), selection="single", value="2024-Q1")
+    assert job["status"] == "queued"
+
+    # A differently classified damaged bundle remains fail-closed even when
+    # it has a retained path.
+    archive["last_error"] = "checksum mismatch"
+    with pytest.raises(ValueError):
+        jobs.select_archives("single", "2024-Q1")
+
+
 def test_merge_errors_are_persisted(tmp_path):
     archive = make_archive(tmp_path / "archives", "2024-Q1", [1])
     jobs = make_jobs(tmp_path, [archive])

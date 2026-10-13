@@ -58,7 +58,7 @@ All routes below require the web session.
 | `GET /api/v1/web/alarm-history?limit=100&offset=0` | Viewer | Paginated, sanitized source/policy lifecycle view. Source rows keep raw `event_time`, measurement, and physical `i_flag` status; any correlated policy outcome is separate. |
 | `GET /api/v1/control/alarms` | Viewer | Sanitized source alarm compatibility view. |
 | `GET /api/v1/control/sources/health` | Viewer | Per-source health state and timestamps. |
-| `GET /api/v1/control/archives` | Viewer | Verified archive inventory. |
+| `GET /api/v1/control/archives` | Viewer | Archive inventory with separate `state` (lifecycle) and `integrity_status` (`VERIFIED`, `UNVERIFIED`, or `STALE`). Integrity proof never promotes a lifecycle state. |
 | `GET /api/v1/control/archives/{quarter_id}/recap` | Viewer | Archive recap without SQL restore. |
 | `GET /api/v1/web/system` | Administrator | System and source details. |
 
@@ -86,7 +86,7 @@ Operator and Administrator sessions may use:
 | `GET /api/v1/control/reports/draft-preview?...` | Generate a PDF preview for the selected range. |
 | `GET /api/v1/control/reports/{job_id}/preview` | View a completed PDF job. |
 | `GET /api/v1/control/reports/{job_id}/download` | Download a completed PDF owned by the caller or by an Administrator. |
-| `POST /api/v1/control/archive-exports` | Queue a verified archive SQL export for one quarter, one year, or all complete archives. |
+| `POST /api/v1/control/archive-exports` | Queue a fresh-streaming-verified SQL export for one quarter, one year, or all selected archives. The selection fails closed if any bundle is missing, stale, corrupt, or unsafe. |
 
 ## Administrator routes
 

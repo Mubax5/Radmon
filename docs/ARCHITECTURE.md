@@ -88,9 +88,12 @@ through a temporary-file-and-rename flow, retain job status, and recover queued
 work after a clean restart. A report preview is intentionally partial; a full
 report must pass the range and row limits before it is generated.
 
-Quarter archives are exported only from verified `COMPLETE` bundles. Archive
-purge is gated by source drain and bundle verification. The source production
-database is not purged by the archive service.
+Quarter archive lifecycle and payload integrity are separate. Inventory may
+reuse an exact, identity-bound payload proof, but an export still performs a
+fresh bounded streaming verification and SQL allowlist/count validation from
+the beginning. A verified payload never promotes `PENDING_DRAIN` or `DAMAGED`.
+Archive purge is gated by source drain and bundle verification. The source
+production database is not purged by the archive service.
 
 ## Verification boundary
 
