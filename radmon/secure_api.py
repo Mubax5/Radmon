@@ -880,6 +880,20 @@ def attach_secure_routes(
         item = authorised_archive_export(job_id, identity)
         return _safe_archive_export(item)
 
+    @app.post("/api/v1/control/archive-exports/{job_id}/retry")
+    def retry_archive_export(job_id: str, identity: UserIdentity = Depends(require_operator)):
+        if archive_exports is None:
+            raise HTTPException(status_code=404, detail="archive export service unavailable")
+        authorised_archive_export(job_id, identity)
+        try:
+            # A retry gets a fresh job id and starts from verified source
+            # bundles; no partial SQL file is ever resumed or published.
+            return _safe_archive_export(archive_exports.retry(job_id, identity))
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.get("/api/v1/control/archive-exports/{job_id}/download")
     def download_archive_export(job_id: str, identity: UserIdentity = Depends(require_operator)):
         if archive_exports is None:

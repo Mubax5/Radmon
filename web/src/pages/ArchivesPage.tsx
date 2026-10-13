@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, LayerCard, Select, Table } from "@cloudflare/kumo";
-import { api, archiveExportDownloadUrl, requestArchiveExport, type ArchiveExportJob } from "../api";
+import { api, archiveExportDownloadUrl, requestArchiveExport, retryArchiveExport, type ArchiveExportJob } from "../api";
 import { ResponsiveDataView } from "../components/ResponsiveDataView";
 import { useWebRefresh } from "../live";
 import {
@@ -19,6 +19,8 @@ type ArchiveRecord = Record<string, unknown> & {
   end_at?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  last_error?: string | null;
+  export_available?: boolean;
 };
 
 function quarterYear(value: unknown): string | null {
@@ -26,7 +28,7 @@ function quarterYear(value: unknown): string | null {
   return match?.[1] ?? null;
 }
 
-function exportStatus(job: ArchiveExportJob) {
+function exportStatusWithRetry(job: ArchiveExportJob, onRetry: (jobId: string) => void) {
   const status = job.status === "queued" ? "Menunggu" : job.status === "running"
     ? (job.phase?.startsWith("verifying:") ? `Memverifikasi ${job.phase.slice("verifying:".length)}` : job.phase?.startsWith("merging:") ? `Menggabungkan ${job.phase.slice("merging:".length)}` : "Menggabungkan")
     : job.status === "completed" ? "Selesai" : "Gagal";
@@ -35,15 +37,26 @@ function exportStatus(job: ArchiveExportJob) {
       <span>{status}</span>
       {job.status === "queued" || job.status === "running" ? <progress max={Math.max(job.partitions_total, 1)} value={job.partitions_read} aria-label="Progres bundle" /> : null}
       <small>{job.partitions_read}/{job.partitions_total} bundle · {job.rows_read.toLocaleString()} baris · {job.bytes_written.toLocaleString()} byte</small>
-      {job.error ? <span role="alert">{job.error}</span> : null}
+      {job.error ? <span role="alert">Rincian: {job.error}</span> : null}
+      {job.status === "failed" ? <Button onClick={() => onRetry(job.job_id)}>Coba lagi</Button> : null}
       {job.status === "completed" ? <a href={archiveExportDownloadUrl(job.job_id)}>Unduh file database SQL</a> : null}
     </span>
   );
 }
 
+// Keep the small status renderer usable by existing embeds/tests that do not
+// provide a retry action.
+function exportStatus(job: ArchiveExportJob) {
+  return exportStatusWithRetry(job, () => undefined);
+}
+
 function archiveStateLabel(state: unknown): string {
   switch (String(state ?? "").toUpperCase()) {
     case "COMPLETE": return "Selesai";
+    case "SEALED": return "Tersegel";
+    case "PURGING": return "Menunggu pengamanan";
+    case "PENDING_DRAIN": return "Menunggu drain sumber";
+    case "DAMAGED": return "Perlu diperiksa";
     case "RUNNING": return "Berjalan";
     case "FAILED": return "Gagal";
     case "QUEUED": return "Menunggu";
@@ -57,6 +70,11 @@ export function ArchivesPage() {
   const [error, setError] = useState("");
   const [jobs, setJobs] = useState<ArchiveExportJob[]>([]);
   const [creating, setCreating] = useState(false);
+
+  const canAttemptExport = (item: ArchiveRecord) => {
+    if (typeof item.export_available === "boolean") return item.export_available;
+    return ["COMPLETE", "SEALED", "PURGING", "PENDING_DRAIN"].includes(String(item.state ?? "").toUpperCase());
+  };
 
   const load = () => api<ArchiveRecord[] | { archives: ArchiveRecord[] }>("/api/v1/control/archives")
     .then((payload) => { setItems(Array.isArray(payload) ? payload : payload.archives); setError(""); })
@@ -92,6 +110,19 @@ export function ArchivesPage() {
     }
   };
 
+  const retryExport = async (jobId: string) => {
+    setCreating(true);
+    setError("");
+    try {
+      const job = await retryArchiveExport(jobId);
+      setJobs((current) => [job, ...current]);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Export gagal diulang");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const derived = useMemo(() => {
     const records = items ?? [];
     const years = [...new Set(records.map((item) => quarterYear(item.quarter_id)).filter((value): value is string => Boolean(value)))].sort().reverse();
@@ -115,7 +146,7 @@ export function ArchivesPage() {
     <div className="page-stack">
       <PageHeading
         title="Arsip"
-        description="Temukan arsip pengukuran per kuartal dan unduh data untuk disimpan atau ditinjau."
+        description="Temukan arsip pengukuran per kuartal. Bundle diverifikasi streaming sebelum database SQL dibuat; status menunggu drain tidak menghapus data dan status perlu diperiksa tidak pernah dianggap sehat otomatis."
       />
       {error ? <ErrorCard message={error} /> : null}
       {!items && !error ? <LoadingCard /> : items ? (
@@ -135,10 +166,10 @@ export function ArchivesPage() {
               onValueChange={(value) => setYear(String(value ?? "all"))}
             />
             <div className="archive-export-control">
-              <Button disabled={creating || !derived.filtered.some((item) => String(item.state).toUpperCase() === "COMPLETE")} onClick={() => void startExport(year === "all" ? "all" : "year", year === "all" ? null : year)}>
+              <Button disabled={creating || !derived.filtered.some(canAttemptExport)} onClick={() => void startExport(year === "all" ? "all" : "year", year === "all" ? null : year)}>
                 {year === "all" ? "Ekspor semua arsip" : `Ekspor tahun ${year}`}
               </Button>
-              {selectedExport ? exportStatus(selectedExport) : null}
+              {selectedExport ? exportStatusWithRetry(selectedExport, retryExport) : null}
             </div>
           </div>
 
@@ -164,14 +195,17 @@ export function ArchivesPage() {
                       {derived.filtered.map((item, index) => (
                         <Table.Row key={`${item.quarter_id ?? "archive"}-${index}`}>
                           <Table.Cell><strong>{String(item.quarter_id ?? "—")}</strong></Table.Cell>
-                          <Table.Cell>{archiveStateLabel(item.state)}</Table.Cell>
+                          <Table.Cell>
+                            {archiveStateLabel(item.state)}
+                            {item.last_error ? <div className="cell-subtle">{String(item.last_error)}</div> : null}
+                          </Table.Cell>
                           <Table.Cell>{formatTimestamp(item.start_at)}</Table.Cell>
                           <Table.Cell>{formatTimestamp(item.end_at)}</Table.Cell>
                           <Table.Cell>{formatTimestamp(item.updated_at ?? item.created_at)}</Table.Cell>
                           <Table.Cell>
                             <div className="archive-export-control">
-                              <Button disabled={creating || String(item.state).toUpperCase() !== "COMPLETE"} onClick={() => void startExport("single", String(item.quarter_id))}>Ekspor database</Button>
-                              {jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id) ? exportStatus(jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id)!) : null}
+                              <Button disabled={creating || !canAttemptExport(item)} onClick={() => void startExport("single", String(item.quarter_id))}>Periksa & ekspor database</Button>
+                              {jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id) ? exportStatusWithRetry(jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id)!, retryExport) : null}
                             </div>
                           </Table.Cell>
                         </Table.Row>
@@ -188,6 +222,7 @@ export function ArchivesPage() {
                         <div>
                           <h3>{String(item.quarter_id ?? "Arsip")}</h3>
                           <div className="cell-subtle">{archiveStateLabel(item.state)}</div>
+                          {item.last_error ? <div className="cell-subtle">{String(item.last_error)}</div> : null}
                         </div>
                       </div>
                       <div className="card-meta">
@@ -196,8 +231,8 @@ export function ArchivesPage() {
                         {(item.updated_at || item.created_at) ? <span>Diperbarui: {formatTimestamp(item.updated_at ?? item.created_at)}</span> : null}
                       </div>
                       <div className="archive-export-control">
-                        <Button disabled={creating || String(item.state).toUpperCase() !== "COMPLETE"} onClick={() => void startExport("single", String(item.quarter_id))}>Ekspor database</Button>
-                        {jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id) ? exportStatus(jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id)!) : null}
+                        <Button disabled={creating || !canAttemptExport(item)} onClick={() => void startExport("single", String(item.quarter_id))}>Periksa & ekspor database</Button>
+                        {jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id) ? exportStatusWithRetry(jobs.find((job) => job.selection === "single" && job.selection_value === item.quarter_id)!, retryExport) : null}
                       </div>
                     </LayerCard>
                   ))}

@@ -268,8 +268,15 @@ class LanRuntime:
                         candidates[quarter.quarter_id] = quarter
         catalog = getattr(self.archive_service, "catalog", None)
         if catalog is not None:
+            damaged: set[str] = set()
             for item in catalog.list_archives(limit=1000):
-                if item.get("state") == "COMPLETE":
+                # A damaged quarter is fail-closed: the lifecycle worker must
+                # not drain/purge it while an operator is still proving the
+                # retained bundle and source provenance. It remains visible
+                # and can be exported only after an explicit preflight.
+                if item.get("state") in {"COMPLETE", "DAMAGED"}:
+                    if item.get("state") == "DAMAGED":
+                        damaged.add(str(item.get("quarter_id") or ""))
                     continue
                 quarter_id = str(item.get("quarter_id") or "")
                 try:
@@ -285,6 +292,8 @@ class LanRuntime:
                     continue
                 if quarter.end <= current.start:
                     candidates[quarter.quarter_id] = quarter
+            for quarter_id in damaged:
+                candidates.pop(quarter_id, None)
         return sorted(candidates.values(), key=lambda quarter: quarter.start)
 
     def _record_pending(self, quarter: Quarter, drain_info: dict[str, Any], reason: str) -> None:

@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -23,9 +24,56 @@ class _ArchiveExportCancelled(RuntimeError):
 _QUARTER = re.compile(r"[0-9]{4}-Q[1-4]\Z")
 _YEAR = re.compile(r"[0-9]{4}\Z")
 MAX_EXPORT_PARTITIONS = 100
-MAX_EXPORT_ROWS = 5_000_000
-MAX_EXPORT_BYTES = 512 * 1024 * 1024
+# These are bounded for a local, already-retained archive export rather than
+# an untrusted upload.  Q1-Q3 are approximately 13.6M/22.3M/37.6M rows and
+# their merged SQL is about 10 GiB; the former 5M/512 MiB limits stopped a
+# valid job after it had already written a partial file.
+MAX_EXPORT_ROWS = 100_000_000
+MAX_EXPORT_BYTES = 16 * 1024 * 1024 * 1024
 MAX_SQL_LINE_BYTES = 1024 * 1024
+
+_EXPORTABLE_STATES = frozenset({"COMPLETE", "SEALED", "PURGING", "PENDING_DRAIN"})
+_LEGACY_SIZE_VALIDATION_ERRORS = frozenset({
+    "member archive terlalu besar",
+    "payload archive terlalu besar",
+})
+
+
+def _insert_table(statement: str) -> str | None:
+    match = re.match(
+        r"INSERT\s+INTO\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+        statement,
+        re.IGNORECASE,
+    )
+    return match.group(1).lower() if match else None
+
+
+def _has_one_terminator(statement: str) -> bool:
+    """Reject a second SQL statement while allowing semicolons in strings."""
+    in_string = False
+    positions: list[int] = []
+    index = 0
+    while index < len(statement):
+        char = statement[index]
+        if in_string:
+            if char == "\\":
+                index += 2
+                continue
+            if char == "'":
+                if index + 1 < len(statement) and statement[index + 1] == "'":
+                    index += 2
+                    continue
+                in_string = False
+        elif char == "'":
+            in_string = True
+        elif char == ";":
+            positions.append(index)
+        index += 1
+    return (
+        not in_string
+        and len(positions) == 1
+        and not statement[positions[0] + 1:].strip()
+    )
 
 
 class ArchiveExportJobs:
@@ -58,7 +106,8 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
     def _recover_jobs(self) -> None:
         with self.security._connection() as connection:
             connection.execute("UPDATE archive_export_jobs SET status='failed', error=?, completed_at=? WHERE status='running'",
-                               ("proses export terhenti saat layanan dimulai ulang", self._now()))
+                               ("export terhenti saat layanan dimulai ulang; gunakan Coba lagi untuk memulai dari awal",
+                                self._now()))
             rows = connection.execute(
                 "SELECT job_id FROM archive_export_jobs WHERE status='queued' ORDER BY created_at LIMIT ?",
                 (MAX_EXPORT_PARTITIONS,),
@@ -115,30 +164,63 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
             quarter = str(item.get("quarter_id") or "")
             if _QUARTER.fullmatch(quarter):
                 counts[quarter[:4]] = counts.get(quarter[:4], 0) + 1
-                visible.append({key: item.get(key) for key in ("quarter_id", "state", "start_at", "end_at", "created_at", "updated_at", "row_counts")})
+                visible.append({
+                    **{key: item.get(key) for key in (
+                        "quarter_id", "state", "start_at", "end_at", "created_at",
+                        "updated_at", "row_counts", "last_error",
+                    )},
+                    # This only says that an explicit streaming preflight may
+                    # be attempted; it does not claim a DAMAGED payload is
+                    # valid.
+                    "export_available": self._can_attempt_export(item),
+                })
         return {"years": [{"year": int(year), "archive_count": count} for year, count in sorted(counts.items(), reverse=True)],
                 "archives": visible}
 
     def select_archives(self, selection: str, value: str | None = None) -> list[dict[str, Any]]:
         items = self.catalog.list_archives(limit=100000)
+        scoped: list[dict[str, Any]]
         if selection == "all":
-            selected = [item for item in items if str(item.get("state", "")).upper() == "COMPLETE"]
+            scoped = [item for item in items if _QUARTER.fullmatch(str(item.get("quarter_id") or ""))]
         elif selection == "year" and value and _YEAR.fullmatch(value):
-            selected = [item for item in items if str(item.get("state", "")).upper() == "COMPLETE" and str(item.get("quarter_id", "")).startswith(value + "-")]
+            scoped = [item for item in items if str(item.get("quarter_id", "")).startswith(value + "-") and _QUARTER.fullmatch(str(item.get("quarter_id") or ""))]
         elif selection == "single" and value and _QUARTER.fullmatch(value):
-            selected = [item for item in items if item.get("quarter_id") == value and str(item.get("state", "")).upper() == "COMPLETE"]
+            scoped = [item for item in items if item.get("quarter_id") == value]
         else:
             raise ValueError("pilihan arsip tidak valid")
+        blocked = sorted(
+            str(item.get("quarter_id") or "?")
+            for item in scoped
+            if not self._can_attempt_export(item)
+        )
+        if blocked:
+            detail = ", ".join(blocked[:20])
+            if len(blocked) > 20:
+                detail += f" (+{len(blocked) - 20} lainnya)"
+            raise ValueError(f"bundle terpilih belum aman untuk export: {detail}")
+        selected = [item for item in scoped if self._can_attempt_export(item)]
         selected.sort(key=lambda item: str(item.get("quarter_id")))
         if selection == "single" and not selected:
-            raise ValueError("arsip COMPLETE tidak ditemukan")
+            raise ValueError("arsip siap ekspor tidak ditemukan; bundle akan diverifikasi sebelum export")
         if not selected:
-            raise ValueError("tidak ada arsip COMPLETE untuk pilihan ini")
+            raise ValueError("tidak ada bundle yang dapat diperiksa untuk pilihan ini")
         if len(selected) > MAX_EXPORT_PARTITIONS:
             raise ValueError(
                 f"export archive melebihi batas {MAX_EXPORT_PARTITIONS} partisi; pilih tahun atau rentang lebih sempit"
             )
         return selected
+
+    @classmethod
+    def _can_attempt_export(cls, item: dict[str, Any]) -> bool:
+        state = str(item.get("state") or "").upper()
+        if not item.get("archive_path"):
+            return False
+        if state in _EXPORTABLE_STATES:
+            return True
+        # Q1-Q3 were marked DAMAGED solely by the old 512 MiB validator. A
+        # fresh preflight remains mandatory, so a tampered bundle cannot pass
+        # merely because its historical error had this wording.
+        return state == "DAMAGED" and str(item.get("last_error") or "").strip() in _LEGACY_SIZE_VALIDATION_ERRORS
 
     def _preflight_archives(self, archives: list[dict[str, Any]]) -> None:
         """Verify archive integrity and resource bounds before queueing a job."""
@@ -150,6 +232,9 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
             quarter = str(item.get("quarter_id") or "")
             if str(manifest.get("quarter_id")) != quarter:
                 raise ValueError(f"archive {quarter} tidak cocok")
+            recorded_hash = str(item.get("archive_sha256") or "").strip().lower()
+            if recorded_hash and recorded_hash != str(manifest.get("archive_sha256") or "").lower():
+                raise ValueError(f"archive {quarter} checksum katalog berbeda")
             row_counts = manifest.get("row_counts") or {}
             total_rows += sum(
                 int(value) for table, value in row_counts.items() if table in TABLE_COLUMNS
@@ -163,10 +248,17 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
                 if int(info.file_size) > MAX_ARCHIVE_MEMBER_BYTES:
                     raise ValueError(f"archive {quarter} terlalu besar")
                 total_sql_bytes += int(info.file_size)
-            if total_sql_bytes > MAX_EXPORT_BYTES:
-                raise ValueError(f"export archive melebihi batas {MAX_EXPORT_BYTES:,} byte")
         if total_rows > MAX_EXPORT_ROWS:
             raise ValueError(f"export archive melebihi batas {MAX_EXPORT_ROWS:,} row")
+        if total_sql_bytes + 1024 * 1024 > MAX_EXPORT_BYTES:
+            raise ValueError(f"export archive melebihi batas {MAX_EXPORT_BYTES:,} byte")
+        artifact_dir = self._safe_artifact_dir()
+        free = shutil.disk_usage(artifact_dir).free
+        required = total_sql_bytes + 64 * 1024 * 1024
+        if free < required:
+            raise ValueError(
+                f"ruang disk export tidak cukup: tersedia {free:,} byte, diperlukan sekitar {required:,} byte"
+            )
 
     def create(self, identity, *, selection: str, value: str | None) -> dict[str, Any]:
         archives = self.select_archives(selection, value)
@@ -196,17 +288,49 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
         rows_read = max(current["rows_read"], rows_read if rows_read is not None else current["rows_read"])
         bytes_written = max(current["bytes_written"], bytes_written if bytes_written is not None else current["bytes_written"])
         next_status = status or current["status"]
+        if current["status"] in {"completed", "failed"} and next_status != current["status"]:
+            return current
         completed = self._now() if next_status in {"completed", "failed"} else None
         with self.security._connection() as connection:
             connection.execute("UPDATE archive_export_jobs SET status=?,phase=?,partitions_read=?,rows_read=?,bytes_written=?,artifact_name=?,error=?,completed_at=? WHERE job_id=?",
                                (next_status, phase or current["phase"], partitions_read, rows_read, bytes_written, artifact_name, error, completed, job_id))
         return self.get(job_id)
 
+    def _claim(self, job_id: str) -> bool:
+        """Atomically claim one queued job so restart/retry cannot duplicate it."""
+        with self.security._connection() as connection:
+            cursor = connection.execute(
+                "UPDATE archive_export_jobs SET status='running', phase='starting', completed_at=NULL "
+                "WHERE job_id=? AND status='queued'",
+                (job_id,),
+            )
+            return cursor.rowcount == 1
+
+    def retry(self, job_id: str, identity: Any) -> dict[str, Any]:
+        """Queue a fresh job for an owned terminal failure; never resume a partial file."""
+        item = self.get(job_id)
+        if item is None:
+            raise KeyError("archive export tidak ditemukan")
+        username = str(getattr(identity, "username", "")).strip().lower()
+        role = str(getattr(getattr(identity, "role", None), "value", getattr(identity, "role", "")))
+        if item["username"] != username and role.casefold() != "administrator":
+            raise PermissionError("archive export milik pengguna lain")
+        if item["status"] != "failed":
+            raise ValueError("hanya export gagal yang dapat diulang")
+        return self.create(
+            identity,
+            selection=str(item["selection"]),
+            value=item.get("selection_value"),
+        )
+
     def _safe_source(self, item: dict[str, Any]) -> Path:
         quarter = str(item.get("quarter_id") or "")
         if not _QUARTER.fullmatch(quarter):
             raise ValueError("quarter archive tidak valid")
-        expected = (self.archive_root / quarter[:4] / f"radmon-{quarter}.zip").resolve()
+        raw_expected = self.archive_root / quarter[:4] / f"radmon-{quarter}.zip"
+        if raw_expected.is_symlink():
+            raise ValueError("archive symlink tidak diizinkan")
+        expected = raw_expected.resolve()
         try:
             expected.relative_to(self.archive_root)
         except ValueError as exc:
@@ -224,7 +348,8 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
         return resolved
 
     def _generate(self, job_id: str, progress: Callable[[dict[str, Any]], None]) -> None:
-        self._update(job_id, status="running")
+        if not self._claim(job_id):
+            return
         temp: Path | None = None
         try:
             if self._shutdown_event.is_set():
@@ -233,28 +358,40 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
             records = {str(item.get("quarter_id")): item for item in self.catalog.list_archives(limit=100000)}
             artifact_dir = self._safe_artifact_dir()
             destination = artifact_dir / f"radmon-archive-{job_id}.sql"
-            temp = destination.with_suffix(".sql.tmp")
+            # Never reuse a partial file left by another process/attempt.
+            temp = artifact_dir / f".{destination.name}.{uuid.uuid4().hex}.tmp"
             bytes_written = rows_read = partitions_read = 0
             last_progress_bytes = last_progress_rows = 0
-            with temp.open("w", encoding="utf-8", newline="\n") as output:
-                header = "-- RadMon merged archive SQL export; import into a compatible MariaDB schema.\nSTART TRANSACTION;\n"
+            with temp.open("wb") as output:
+                header = b"-- RadMon merged archive SQL export; import into a compatible MariaDB schema.\nSTART TRANSACTION;\n"
                 output.write(header)
-                bytes_written += len(header.encode("utf-8"))
+                bytes_written += len(header)
                 progress(self._update(job_id, bytes_written=bytes_written))
+                baseline_device_lines: list[str] = []
                 for quarter_index, quarter in enumerate(job["quarter_ids"]):
                     if self._shutdown_event.is_set():
                         raise _ArchiveExportCancelled()
                     item = records.get(quarter)
-                    if item is None or str(item.get("state", "")).upper() != "COMPLETE":
-                        raise ValueError(f"archive {quarter} tidak COMPLETE")
+                    if item is None or not self._can_attempt_export(item):
+                        raise ValueError(f"archive {quarter} belum siap untuk export")
                     source = self._safe_source(item)
                     self._update(job_id, phase=f"verifying:{quarter}")
                     verified = verify_archive(source)
                     if verified.get("quarter_id") != quarter:
                         raise ValueError(f"archive {quarter} tidak cocok")
+                    recorded_hash = str(item.get("archive_sha256") or "").strip().lower()
+                    if recorded_hash and recorded_hash != str(verified.get("archive_sha256") or "").lower():
+                        raise ValueError(f"archive {quarter} checksum katalog berbeda")
+                    expected_counts = {
+                        str(table): int(value)
+                        for table, value in dict(verified.get("row_counts") or {}).items()
+                        if table in TABLE_COLUMNS
+                    }
+                    sql_counts = {table: 0 for table in TABLE_COLUMNS}
+                    device_lines: list[str] = []
                     with zipfile.ZipFile(source) as bundle:
                         member = f"radmon-{quarter}.sql"
-                        if member not in bundle.namelist() or bundle.testzip():
+                        if member not in bundle.namelist():
                             raise ValueError(f"archive {quarter} rusak atau tidak cocok")
                         with bundle.open(member) as sql:
                             self._update(job_id, phase=f"merging:{quarter}")
@@ -271,39 +408,43 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
                                     or stripped.upper() in {"START TRANSACTION;", "COMMIT;"}
                                 ):
                                     continue
-                                match = re.match(
-                                    r"INSERT\s+INTO\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
-                                    stripped,
-                                    re.IGNORECASE,
-                                )
-                                if (
-                                    match is None
-                                    or match.group(1).lower() not in TABLE_COLUMNS
-                                    or not stripped.endswith(";")
-                                ):
+                                table = _insert_table(stripped)
+                                if table not in TABLE_COLUMNS or not _has_one_terminator(stripped):
                                     raise ValueError(f"archive {quarter} memiliki SQL statement tidak diizinkan")
-                                # Each quarterly dump contains the full device snapshot. Keep one copy.
-                                if quarter_index and stripped.upper().startswith("INSERT INTO DEVICE "):
-                                    continue
+                                sql_counts[table] += 1
+                                # Each quarterly dump contains a full device
+                                # snapshot. Keep one copy only if later
+                                # snapshots are byte-identical.
+                                if table == "device":
+                                    device_lines.append(stripped)
+                                    if quarter_index:
+                                        continue
                                 if bytes_written + len(raw_line) > MAX_EXPORT_BYTES:
                                     raise ValueError("hasil export archive terlalu besar")
-                                output.write(line)
+                                output.write(raw_line)
                                 encoded = len(raw_line)
                                 bytes_written += encoded
-                                if stripped.upper().startswith("INSERT INTO "):
-                                    rows_read += 1
-                                    if rows_read > MAX_EXPORT_ROWS:
-                                        raise ValueError("hasil export archive memiliki terlalu banyak row")
+                                rows_read += 1
+                                if rows_read > MAX_EXPORT_ROWS:
+                                    raise ValueError("hasil export archive memiliki terlalu banyak row")
                                 if rows_read - last_progress_rows >= 1000 or bytes_written - last_progress_bytes >= 1024 * 1024:
                                     progress(self._update(job_id, partitions_read=partitions_read, rows_read=rows_read, bytes_written=bytes_written))
                                     last_progress_bytes, last_progress_rows = bytes_written, rows_read
+                            if sql_counts != expected_counts:
+                                raise ValueError(
+                                    f"archive {quarter} SQL row count mismatch: expected {expected_counts}, found {sql_counts}"
+                                )
+                    if quarter_index:
+                        if device_lines != baseline_device_lines:
+                            raise ValueError(f"archive {quarter} memiliki snapshot device berbeda")
+                    else:
+                        baseline_device_lines = device_lines
                     partitions_read += 1
                     progress(self._update(job_id, partitions_read=partitions_read, rows_read=rows_read, bytes_written=bytes_written))
-                ending = "COMMIT;\n"
+                ending = b"COMMIT;\n"
                 output.write(ending)
-                bytes_written += len(ending.encode("utf-8"))
+                bytes_written += len(ending)
                 output.flush()
-                output.close()
             if self._shutdown_event.is_set():
                 raise _ArchiveExportCancelled()
             temp.replace(destination)
@@ -313,12 +454,13 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
             LOG.info("archive export cancelled during shutdown job_id=%s", job_id)
             if temp is not None:
                 temp.unlink(missing_ok=True)
-            self._update(job_id, status="failed", error="export dibatalkan saat shutdown", phase="failed")
-        except Exception:
+            self._update(job_id, status="failed", error="export dibatalkan saat shutdown; gunakan Coba lagi untuk memulai dari awal", phase="failed")
+        except Exception as exc:
             LOG.exception("archive export failed job_id=%s", job_id)
             if temp is not None:
                 temp.unlink(missing_ok=True)
-            self._update(job_id, status="failed", error="penggabungan archive gagal", phase="failed")
+            reason = str(exc).strip() or "penggabungan archive gagal"
+            self._update(job_id, status="failed", error=reason[:1000], phase="failed")
         finally:
             with self._futures_lock:
                 self._futures.pop(job_id, None)
@@ -346,9 +488,18 @@ CREATE TABLE IF NOT EXISTS archive_export_jobs (
         self._shutdown_event.set()
         with self._futures_lock:
             futures = list(self._futures.values())
-        for future in futures:
+        for job_id, future in list(self._futures.items()):
             if hasattr(future, "cancel"):
-                future.cancel()
+                cancelled = bool(future.cancel())
+                if cancelled:
+                    self._update(
+                        job_id,
+                        status="failed",
+                        error="export dibatalkan saat shutdown; gunakan Coba lagi untuk memulai dari awal",
+                        phase="failed",
+                    )
+                    with self._futures_lock:
+                        self._futures.pop(job_id, None)
         try:
             self._executor.shutdown(wait=False, cancel_futures=True)
         except TypeError:

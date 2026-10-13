@@ -126,7 +126,7 @@ class ArchiveReportRepository:
                 raise ArchiveCorruptionError(
                     f"archive {item.get('quarter_id')} rusak: {item.get('last_error') or 'unknown'}"
                 )
-            if item.get("state") not in {"COMPLETE", "SEALED", "PURGING"}:
+            if item.get("state") not in {"COMPLETE", "SEALED", "PURGING", "PENDING_DRAIN"}:
                 continue
             if not item.get("archive_path"):
                 raise ArchiveCorruptionError(f"archive {item.get('quarter_id')} tidak memiliki file")
@@ -191,7 +191,7 @@ class ArchiveReportRepository:
     def alarm_history(self, start: datetime | None = None, end: datetime | None = None, *, serid: int | None = None, limit: int = 1000) -> list[dict[str, Any]]:
         if start is None or end is None:
             items = self.catalog.list_archives(limit=1000)
-            complete = [item for item in items if item.get("state") in {"COMPLETE", "SEALED", "PURGING"}]
+            complete = [item for item in items if item.get("state") in {"COMPLETE", "SEALED", "PURGING", "PENDING_DRAIN"}]
             if not complete:
                 return []
             start = min(_parse_datetime(str(item["start_at"])) for item in complete)
@@ -286,7 +286,7 @@ class ArchiveReportRepository:
         station_id = int(serid) if serid is not None else None
         items = [
             item for item in self.catalog.list_archives(limit=1000)
-            if item.get("state") in {"COMPLETE", "SEALED", "PURGING"}
+            if item.get("state") in {"COMPLETE", "SEALED", "PURGING", "PENDING_DRAIN"}
         ]
         items.sort(key=lambda item: str(item.get("start_at") or ""), reverse=True)
         for item in items:

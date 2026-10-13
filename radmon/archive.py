@@ -40,9 +40,15 @@ class ArchiveCorruptionError(RuntimeError):
     pass
 
 
+# Retained quarterly bundles are generated locally from MariaDB and are not
+# upload/import inputs.  The old 512 MiB/1 GiB limits rejected the legitimate
+# Q1-Q3 bundles (their largest member is about 5.4 GiB and their total
+# uncompressed payload is below 8 GiB).  These are still hard bounds: all
+# members are streamed, compression ratios are bounded, and the canonical
+# archive path is checked by callers before this verifier is used.
 MAX_ARCHIVE_MEMBERS = 64
-MAX_ARCHIVE_MEMBER_BYTES = 512 * 1024 * 1024
-MAX_ARCHIVE_TOTAL_BYTES = 1024 * 1024 * 1024
+MAX_ARCHIVE_MEMBER_BYTES = 8 * 1024 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_BYTES = 16 * 1024 * 1024 * 1024
 MAX_ARCHIVE_MANIFEST_BYTES = 4 * 1024 * 1024
 _QUARTER_ID = re.compile(r"[0-9]{4}-Q[1-4]\Z")
 
@@ -179,14 +185,40 @@ def verify_archive(path: Path | str, expected_quarter: Quarter | None = None) ->
                 raise ArchiveCorruptionError("archive payload missing: " + ", ".join(missing))
             if expected_quarter is not None and manifest.get("quarter_id") != expected_quarter.quarter_id:
                 raise ArchiveCorruptionError("archive quarter mismatch")
+            if expected_quarter is not None:
+                if (
+                    str(manifest.get("start") or "") != expected_quarter.start.isoformat()
+                    or str(manifest.get("end") or "") != expected_quarter.end.isoformat()
+                ):
+                    raise ArchiveCorruptionError("archive date boundary mismatch")
             files = manifest.get("files")
             if not isinstance(files, dict):
                 raise ArchiveCorruptionError("manifest files tidak valid")
+            if "manifest.json" in files:
+                raise ArchiveCorruptionError("manifest tidak boleh mencantumkan dirinya sendiri")
+            for name in required - {"manifest.json"}:
+                if name not in files:
+                    raise ArchiveCorruptionError(f"manifest file missing: {name}")
+            untracked = sorted(names - required - set(files))
+            if untracked:
+                raise ArchiveCorruptionError("archive member tidak terdaftar: " + ", ".join(untracked))
             for name, metadata in files.items():
                 if not isinstance(name, str) or name not in names:
                     raise ArchiveCorruptionError(f"manifest file missing: {name}")
                 if not isinstance(metadata, dict):
                     raise ArchiveCorruptionError(f"manifest metadata tidak valid: {name}")
+                info = infos.get(name)
+                if info is None:
+                    raise ArchiveCorruptionError(f"manifest file missing: {name}")
+                declared_bytes = metadata.get("bytes")
+                if declared_bytes is not None:
+                    if (
+                        isinstance(declared_bytes, bool)
+                        or not isinstance(declared_bytes, int)
+                        or declared_bytes < 0
+                        or declared_bytes != int(info.file_size)
+                    ):
+                        raise ArchiveCorruptionError(f"ukuran manifest tidak cocok: {name}")
                 digest = hashlib.sha256()
                 with archive.open(name) as handle:
                     for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -196,6 +228,9 @@ def verify_archive(path: Path | str, expected_quarter: Quarter | None = None) ->
             row_counts = manifest.get("row_counts")
             if not isinstance(row_counts, dict):
                 raise ArchiveCorruptionError("manifest row_counts tidak valid")
+            missing_counts = sorted(set(TABLE_COLUMNS) - set(row_counts))
+            if missing_counts:
+                raise ArchiveCorruptionError("manifest row_counts missing: " + ", ".join(missing_counts))
             for table, expected in row_counts.items():
                 if table not in TABLE_COLUMNS or not isinstance(expected, int) or isinstance(expected, bool) or expected < 0:
                     raise ArchiveCorruptionError(f"row-count table tidak valid: {table}")
@@ -235,12 +270,27 @@ class ArchiveCatalog:
     def list_archives(self, limit: int = 100) -> list[dict[str, Any]]:
         return self.store.list_archives(limit)
 
+    def _has_symlink_component(self, path: Path) -> bool:
+        if self.archive_dir.is_symlink():
+            return True
+        root = self.archive_dir.resolve()
+        try:
+            parts = path.relative_to(root).parts
+        except ValueError:
+            return True
+        current = root
+        for part in parts:
+            current = current / part
+            if current.is_symlink():
+                return True
+        return False
+
     def safe_archive_path(self, quarter_id: str, recorded_path: str | None = None) -> Path:
         """Resolve only the canonical retained archive for a quarter."""
         if not _QUARTER_ID.fullmatch(str(quarter_id)):
             raise ArchiveCorruptionError("archive quarter id tidak valid")
         canonical = self.archive_dir.resolve() / str(quarter_id)[:4] / f"radmon-{quarter_id}.zip"
-        if canonical.is_symlink():
+        if self._has_symlink_component(canonical):
             raise ArchiveCorruptionError("archive symlink tidak diizinkan")
         expected = canonical.resolve()
         try:
@@ -278,6 +328,8 @@ class ArchiveCatalog:
             quarter_id = path.stem.removeprefix("radmon-")
             seen.add(quarter_id)
             try:
+                if self._has_symlink_component(path):
+                    raise ArchiveCorruptionError("archive symlink tidak diizinkan")
                 manifest = verify_archive(path, expected_quarter=_quarter_from_id(quarter_id, self.timezone_name))
             except Exception as exc:
                 existing = self.get(quarter_id)
@@ -287,7 +339,17 @@ class ArchiveCatalog:
                     )
                 continue
             existing = self.get(quarter_id)
-            state = "COMPLETE" if existing and existing.get("state") == "COMPLETE" else "SEALED"
+            # Verification and lifecycle are separate facts.  In particular,
+            # a valid PENDING_DRAIN bundle must remain pending until the source
+            # watermark/read-back is proven, and a DAMAGED row must not be
+            # silently promoted by a startup scan.  Export clients may still
+            # perform an explicit streaming preflight against this verified
+            # path; purge is gated by run_rollover below.
+            state = str(existing.get("state") or "SEALED") if existing else "SEALED"
+            if state in {"OPEN", "EXPORTING", "VERIFYING"}:
+                state = "SEALED"
+            existing_drain = dict(existing.get("drain") or {}) if existing else {}
+            drain = existing_drain if state == "PENDING_DRAIN" else dict(manifest.get("drain") or {})
             self.store.upsert_archive(
                 quarter_id=quarter_id,
                 start_at=str(manifest["start"]),
@@ -296,10 +358,14 @@ class ArchiveCatalog:
                 archive_path=str(path),
                 archive_sha256=str(manifest["archive_sha256"]),
                 row_counts=dict(manifest.get("row_counts") or {}),
-                drain=dict(manifest.get("drain") or {}),
-                created_at=str(manifest.get("created_at") or "") or None,
-                sealed_at=str(manifest.get("created_at") or "") or None,
-                last_error=None,
+                drain=drain,
+                created_at=str((existing or {}).get("created_at") or manifest.get("created_at") or "") or None,
+                sealed_at=str((existing or {}).get("sealed_at") or manifest.get("created_at") or "") or None,
+                # Keep a DAMAGED lifecycle state and its forensic reason even
+                # when the payload itself now verifies.  A human/repair job
+                # must decide whether source-drain history is sufficient to
+                # recover the lifecycle state.
+                last_error=(existing or {}).get("last_error") if state == "DAMAGED" else None,
             )
         for item in self.list_archives(limit=1000):
             quarter_id = str(item["quarter_id"])
@@ -437,7 +503,13 @@ class QuarterArchiveService:
                     info = zipfile.ZipInfo(path.name, date_time=(1980, 1, 1, 0, 0, 0))
                     info.compress_type = zipfile.ZIP_DEFLATED
                     info.external_attr = 0o600 << 16
-                    archive.writestr(info, path.read_bytes())
+                    # Never materialize a quarterly SQL/CSV member in memory.
+                    # Q3's SQL member is several GiB uncompressed.
+                    if path is manifest_path:
+                        archive.writestr(info, manifest_path.read_bytes())
+                    else:
+                        with path.open("rb") as source, archive.open(info, "w") as target:
+                            shutil.copyfileobj(source, target, length=1024 * 1024)
             temp_zip.replace(final_path)
         return final_path
 
@@ -451,6 +523,14 @@ class QuarterArchiveService:
         existing = self.catalog.get(quarter.quarter_id)
         if existing is not None and existing.get("state") == "COMPLETE":
             return existing
+        if existing is not None and existing.get("state") == "DAMAGED":
+            # A background lifecycle pass must never turn a damaged quarter
+            # into a purge attempt.  An administrator can inspect/recover it
+            # explicitly after a forensic snapshot; the original bundle is
+            # never replaced in place.
+            raise ArchiveCorruptionError(
+                f"archive {quarter.quarter_id} masih DAMAGED; verifikasi dan pemulihan manual diperlukan"
+            )
         if existing is None:
             existing = self.catalog.store.upsert_archive(
                 quarter_id=quarter.quarter_id,
@@ -462,7 +542,7 @@ class QuarterArchiveService:
             )
 
         path: Path | None = None
-        sealed = existing.get("state") in {"SEALED", "PURGING"}
+        sealed = existing.get("state") in {"SEALED", "PURGING", "PENDING_DRAIN"}
         if sealed and existing.get("archive_path"):
             path = Path(str(existing["archive_path"]))
             try:
@@ -512,6 +592,32 @@ class QuarterArchiveService:
                 last_error=None,
             )
             self._audit("ARCHIVE_VERIFY_SUCCESS", quarter, after={"archive_sha256": verified["archive_sha256"]})
+
+        if path is None:
+            raise ArchiveCorruptionError(f"archive {quarter.quarter_id} belum terverifikasi")
+
+        # PENDING_DRAIN is an operational state, not a reason to discard the
+        # retained bundle.  Only continue to purge when the current drain
+        # read-back covers every watermark recorded in the verified manifest.
+        if existing.get("state") == "PENDING_DRAIN":
+            manifest = self.verifier(path, quarter)
+            required_drain = dict(manifest.get("drain") or {})
+            observed_drain = dict(drain_info or {})
+            missing_drain = sorted(
+                key for key in required_drain
+                if key not in observed_drain or observed_drain.get(key) is None
+            )
+            if missing_drain:
+                reason = "drain source belum terbukti untuk: " + ", ".join(missing_drain[:20])
+                if len(missing_drain) > 20:
+                    reason += f" (+{len(missing_drain) - 20} lainnya)"
+                self.catalog.store.update_archive_state(
+                    quarter.quarter_id,
+                    "PENDING_DRAIN",
+                    last_error=reason,
+                    increment_retry=False,
+                )
+                raise RuntimeError(reason)
 
         self.catalog.store.update_archive_state(
             quarter.quarter_id, "PURGING", last_error=None

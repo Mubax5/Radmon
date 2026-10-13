@@ -189,6 +189,12 @@ export function requestArchiveExport(selection: "single" | "year" | "all", value
   });
 }
 
+export function retryArchiveExport(jobId: string): Promise<ArchiveExportJob> {
+  return api<ArchiveExportJob>(`/api/v1/control/archive-exports/${encodeURIComponent(jobId)}/retry`, {
+    method: "POST",
+  });
+}
+
 export function archiveExportDownloadUrl(jobId: string): string {
   return `/api/v1/control/archive-exports/${encodeURIComponent(jobId)}/download`;
 }
