@@ -338,3 +338,19 @@ def test_runtime_starts_separate_live_and_backfill_workers(monkeypatch, tmp_path
     assert runtime.backfill_batch_size == 500
     assert runtime.backfill_interval == 2.0
     assert names == ["radmon-lan-live-gd50", "radmon-lan-backfill-gd50"]
+
+
+def test_runtime_does_not_start_archive_drain_or_purge_without_explicit_maintenance(tmp_path):
+    services = SimpleNamespace(
+        security=SecurityStore(tmp_path / "security.db"),
+        sources={},
+        source_health=SimpleNamespace(),
+    )
+    runtime = LanRuntime(object(), services, archive_service=object())
+    names = []
+    runtime._thread = lambda name, target: names.append(name)
+
+    runtime.start()
+
+    assert runtime.archive_maintenance_enabled is False
+    assert names == []

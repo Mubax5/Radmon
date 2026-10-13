@@ -64,6 +64,9 @@ class LanRuntime:
             ),
         )
         self.archive_timezone = str(getattr(settings, "archive_timezone", "Asia/Jakarta"))
+        self.archive_maintenance_enabled = bool(
+            getattr(settings, "archive_maintenance_enabled", _enabled("RADMON_ARCHIVE_MAINTENANCE_ENABLED"))
+        )
         self.central = BatchedMariaCentralStore(settings)
         self.checkpoints = LanCheckpointStore(services.security)
 
@@ -394,8 +397,12 @@ class LanRuntime:
                 )
         if self.whatsapp_dispatcher is not None:
             self._thread("radmon-whatsapp", self._run_whatsapp)
-        if self.archive_service is not None:
+        if self.archive_service is not None and self.archive_maintenance_enabled:
             self._thread("radmon-quarter-archive", self._run_archive_lifecycle)
+        elif self.archive_service is not None:
+            LOGGER.info(
+                "quarter archive maintenance disabled; no automatic drain or purge will run"
+            )
         LOGGER.info(
             "LAN runtime started sources=%s live_interval=%ss backfill=%s backfill_batch=%s backfill_interval=%ss",
             len(self.services.sources),

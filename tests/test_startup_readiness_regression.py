@@ -38,7 +38,7 @@ def test_slow_archive_reconciliation_does_not_block_api_readiness():
         lan_runtime=None,
     )
     service = CentralService(
-        Settings(lan_enabled=False),
+        Settings(lan_enabled=False, archive_maintenance_enabled=True),
         runtime_factory=lambda settings: runtime,
         api_factory=lambda app, host, port: ReadyApi(),
     )

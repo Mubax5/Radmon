@@ -17,6 +17,7 @@ def test_env_uses_verified_production_endpoints_and_archive_settings():
         "RADMON_ARCHIVE_TIMEZONE=Asia/Jakarta",
         "RADMON_ARCHIVE_MIN_RETENTION_YEARS=5",
         "RADMON_ARCHIVE_CHECK_INTERVAL=60",
+        "RADMON_ARCHIVE_MAINTENANCE_ENABLED=0",
     ):
         assert name in text
 

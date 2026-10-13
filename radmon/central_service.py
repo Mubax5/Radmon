@@ -499,8 +499,13 @@ class CentralService:
             api.start()
             # Do not make the first 8090 readiness response wait for large
             # archive verification. The catalog remains wired to all routes;
-            # reconciliation continues safely in the background.
-            self._start_archive_reconciliation(runtime.archive_catalog)
+            # reconciliation is opt-in maintenance, not an upgrade side
+            # effect. Export preflight remains independently available and
+            # always verifies the selected immutable bundle before writing.
+            if bool(getattr(self.settings, "archive_maintenance_enabled", False)):
+                self._start_archive_reconciliation(runtime.archive_catalog)
+            else:
+                LOG.info("archive startup reconciliation disabled; export preflight remains available")
         except Exception:
             self._api = None
             if lan_started:

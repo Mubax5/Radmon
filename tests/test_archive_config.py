@@ -14,6 +14,7 @@ def test_archive_defaults_match_pc3_calendar_lifecycle():
     assert settings.archive_timezone == "Asia/Jakarta"
     assert settings.archive_min_retention_years == 5
     assert settings.archive_check_interval == 60.0
+    assert settings.archive_maintenance_enabled is False
     ZoneInfo(settings.archive_timezone)
 
 
@@ -24,11 +25,13 @@ def test_archive_settings_load_from_environment(monkeypatch):
     monkeypatch.setenv("RADMON_ARCHIVE_TIMEZONE", "Asia/Jakarta")
     monkeypatch.setenv("RADMON_ARCHIVE_MIN_RETENTION_YEARS", "7")
     monkeypatch.setenv("RADMON_ARCHIVE_CHECK_INTERVAL", "90")
+    monkeypatch.setenv("RADMON_ARCHIVE_MAINTENANCE_ENABLED", "1")
     settings = Settings.from_env(env_file=None)
     assert settings.archive_enabled is False
     assert settings.archive_dir == Path("D:/radmon-archive")
     assert settings.archive_min_retention_years == 7
     assert settings.archive_check_interval == 90.0
+    assert settings.archive_maintenance_enabled is True
 
 
 def test_archive_retention_cannot_be_configured_below_five_years(monkeypatch):

@@ -127,6 +127,10 @@ class Settings:
     archive_timezone: str = "Asia/Jakarta"
     archive_min_retention_years: int = 5
     archive_check_interval: float = 60.0
+    # Archive export/report reads stay available independently.  Drain, purge,
+    # and startup catalog reconciliation require an explicit operator opt-in;
+    # this prevents an application upgrade from mutating production history.
+    archive_maintenance_enabled: bool = False
     # Empty by default: forwarded client identity is never trusted unless an
     # operator explicitly names the reverse-proxy networks.
     trusted_proxy_nets: tuple[str, ...] = ()
@@ -205,6 +209,7 @@ class Settings:
             archive_timezone=archive_timezone,
             archive_min_retention_years=archive_retention,
             archive_check_interval=archive_check_interval,
+            archive_maintenance_enabled=_as_bool(get("RADMON_ARCHIVE_MAINTENANCE_ENABLED"), False),
             trusted_proxy_nets=trusted_proxy_nets,
             web_allowed_origins=web_allowed_origins,
         )
