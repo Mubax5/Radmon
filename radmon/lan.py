@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import importlib
 import logging
 import os
+import threading
 from typing import Any, Callable, Iterable
 
 from .datetime_utils import parse_database_datetime
@@ -192,6 +193,7 @@ class BackfillPullResult:
     inserted_measurements: int = 0
     checkpoint: datetime | None = None
     error: str | None = None
+    caught_up: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -253,6 +255,8 @@ def _shared_serids() -> set[int]:
 
 
 class LanCheckpointStore:
+    _save_lock = threading.RLock()
+
     def __init__(self, security_store: SecurityStore) -> None:
         self.store = security_store
 
@@ -265,15 +269,41 @@ class LanCheckpointStore:
         return datetime.fromisoformat(str(row[0])) if row else None
 
     def save(self, source_id: str, serid: int, value: datetime) -> None:
-        with self.store._connection() as connection:
-            connection.execute(
-                """
+        """Persist a source cursor without ever moving it backwards.
+
+        The central measurement write and this sidecar write are deliberately
+        separate transactions.  A crash between them is therefore recovered by
+        replaying an idempotent central INSERT, but a concurrent/restarted worker
+        must not replace a newer cursor with an older one.
+        """
+        with self._save_lock:
+            with self.store._connection() as connection:
+                current = connection.execute(
+                    "SELECT last_dtom FROM lan_checkpoints WHERE source_id = ? AND serid = ?",
+                    (source_id, int(serid)),
+                ).fetchone()
+                if current:
+                    current_value = datetime.fromisoformat(str(current[0]))
+                    try:
+                        if value <= current_value:
+                            return
+                    except TypeError:
+                        # Installed cursors are naive MariaDB DATETIME values.
+                        # If a legacy row carries a timezone, compare both in UTC
+                        # while preserving the original value written below.
+                        current_utc = current_value.astimezone(timezone.utc) if current_value.tzinfo else current_value.replace(tzinfo=timezone.utc)
+                        value_utc = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+                        if value_utc <= current_utc:
+                            return
+                connection.execute(
+                    """
 INSERT INTO lan_checkpoints (source_id, serid, last_dtom)
 VALUES (?, ?, ?)
 ON CONFLICT(source_id, serid) DO UPDATE SET last_dtom = excluded.last_dtom
+WHERE excluded.last_dtom > lan_checkpoints.last_dtom
 """,
-                (source_id, int(serid), value.isoformat()),
-            )
+                    (source_id, int(serid), value.isoformat()),
+                )
 
     def _ensure_alarm_checkpoint_table(self) -> None:
         with self.store._connection() as connection:
@@ -355,21 +385,33 @@ FROM device ORDER BY serid"""
         finally:
             connection.close()
 
-    def measurements_after(self, serid: int, after: datetime | None, limit: int) -> list[dict[str, Any]]:
+    def measurements_after(
+        self,
+        serid: int,
+        after: datetime | None,
+        limit: int,
+        *,
+        before: datetime | None = None,
+    ) -> list[dict[str, Any]]:
         connection = self._connection()
         try:
             with connection.cursor() as cursor:
+                upper_clause = ""
+                upper_params: tuple[Any, ...] = ()
+                if before is not None:
+                    upper_clause = " AND dtom <= ?"
+                    upper_params = (before,)
                 if after is None:
                     cursor.execute(
                         """SELECT serid, dtom, doserate, dose, previnterval, stat
-FROM measurement WHERE serid = ? ORDER BY dtom ASC LIMIT ?""",
-                        (int(serid), max(1, int(limit))),
+FROM measurement WHERE serid = ?""" + upper_clause + " ORDER BY dtom ASC, serid ASC LIMIT ?",
+                        (int(serid), *upper_params, max(1, int(limit))),
                     )
                 else:
                     cursor.execute(
                         """SELECT serid, dtom, doserate, dose, previnterval, stat
-FROM measurement WHERE serid = ? AND dtom > ? ORDER BY dtom ASC LIMIT ?""",
-                        (int(serid), after, max(1, int(limit))),
+FROM measurement WHERE serid = ? AND dtom > ?""" + upper_clause + " ORDER BY dtom ASC, serid ASC LIMIT ?",
+                        (int(serid), after, *upper_params, max(1, int(limit))),
                     )
                 rows = cursor.fetchall()
             return self._dict_rows(rows, ("serid", "dtom", "doserate", "dose", "previnterval", "stat"))
@@ -933,12 +975,70 @@ class LanAggregator:
         remote_factory: Callable[[LanSource], Any] | None = None,
         alarm_mirror: Any | None = None,
         batch_size: int = 1000,
+        initial_lookback: timedelta | None = None,
+        cursor_overlap: timedelta = timedelta(0),
+        max_source_future_seconds: int = _MAX_SOURCE_CLOCK_SKEW_SECONDS,
     ) -> None:
         self.central = central_store
         self.checkpoints = checkpoints
         self.remote_factory = remote_factory or (lambda source: RemoteMariaDBSource(source))
         self.alarm_mirror = alarm_mirror
         self.batch_size = max(1, int(batch_size))
+        self.initial_lookback = (
+            max(timedelta(0), initial_lookback) if initial_lookback is not None else None
+        )
+        self.cursor_overlap = max(timedelta(0), cursor_overlap)
+        self.max_source_future_seconds = max(0, int(max_source_future_seconds))
+
+    @staticmethod
+    def _row_time(row: dict[str, Any]) -> datetime | None:
+        return parse_database_datetime(row.get("dtom"))
+
+    def _backfill_rows(
+        self,
+        remote: Any,
+        remote_serid: int,
+        after: datetime | None,
+        *,
+        before: datetime | None,
+    ) -> list[dict[str, Any]]:
+        # RemoteMariaDBSource supports an indexed upper bound.  Test doubles and
+        # older integrations may still expose the historical three-argument API;
+        # retain that public compatibility while applying validation below.
+        if before is not None and isinstance(remote, RemoteMariaDBSource):
+            rows = remote.measurements_after(
+                remote_serid, after, self.batch_size, before=before
+            )
+        else:
+            rows = remote.measurements_after(remote_serid, after, self.batch_size)
+
+        accepted: list[dict[str, Any]] = []
+        for row in rows:
+            if int(row.get("serid", remote_serid)) != int(remote_serid):
+                _LOG.warning(
+                    "discarding cross-station source row source_serid=%s row_serid=%s",
+                    remote_serid,
+                    row.get("serid"),
+                )
+                continue
+            measured_at = self._row_time(row)
+            if measured_at is None:
+                _LOG.warning("discarding source row with invalid dtom serid=%s", remote_serid)
+                continue
+            if before is not None:
+                try:
+                    if measured_at > before:
+                        continue
+                except TypeError:
+                    # A timezone-bearing driver value is compared against the
+                    # local naive MariaDB clock only after converting both to UTC.
+                    measured_utc = measured_at.astimezone(timezone.utc) if measured_at.tzinfo else measured_at.replace(tzinfo=timezone.utc)
+                    before_utc = before.astimezone(timezone.utc) if before.tzinfo else before.replace(tzinfo=timezone.utc)
+                    if measured_utc > before_utc:
+                        continue
+            accepted.append(row)
+        accepted.sort(key=lambda item: self._row_time(item) or datetime.min)
+        return accepted
 
     def _mapped_alarm_rows(self, source_id: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         mapped: list[dict[str, Any]] = []
@@ -1191,19 +1291,37 @@ class LanAggregator:
             selected = devices[int(station_index) % len(devices)]
             remote_serid, central_serid = self._ensure_device(source, selected)
             result.backfill_serid = remote_serid
-            after = self.checkpoints.load(source.source_id, remote_serid)
-            result.checkpoint = after
-            remote_rows = remote.measurements_after(remote_serid, after, self.batch_size)
+            persisted_after = self.checkpoints.load(source.source_id, remote_serid)
+            result.checkpoint = persisted_after
+            after = persisted_after
+            if after is not None and self.cursor_overlap:
+                after = after - self.cursor_overlap
+            elif after is None and self.initial_lookback is not None:
+                # A new deployment must not begin a multi-million-row source
+                # scan. Existing durable cursors still provide full outage
+                # catch-up; the horizon only bounds first discovery.
+                after = datetime.now() - self.initial_lookback
+
+            # A broken source clock must not move a cursor into the future. The
+            # upper bound is indexed and deliberately leaves the raw source
+            # timestamp untouched in the central row.
+            before = datetime.now() + timedelta(seconds=self.max_source_future_seconds)
+            remote_rows = self._backfill_rows(
+                remote, remote_serid, after, before=before
+            )
             if not remote_rows:
+                result.caught_up = True
                 return result
             central_rows = [dict(row, serid=central_serid) for row in remote_rows]
             result.inserted_measurements = int(self.central.import_measurements(source.source_id, central_rows))
-            last_time_raw = remote_rows[-1].get('dtom')
-            last_time = parse_database_datetime(last_time_raw) or last_time_raw
-            if not isinstance(last_time, datetime):
+            last_time = self._row_time(remote_rows[-1])
+            if last_time is None:
                 raise ValueError('remote measurement time tidak valid')
+            # Advance only after central import committed. save() is monotonic,
+            # so overlap replay can never regress a durable cursor.
             self.checkpoints.save(source.source_id, remote_serid, last_time)
-            result.checkpoint = last_time
+            result.checkpoint = self.checkpoints.load(source.source_id, remote_serid)
+            result.caught_up = len(remote_rows) < self.batch_size
         except Exception as exc:
             result.error = str(exc)
         return result

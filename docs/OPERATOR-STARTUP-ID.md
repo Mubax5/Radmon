@@ -32,6 +32,30 @@ Control Plane terbuka tanpa proses server kedua. Jika API belum aktif, launcher
 lebih dahulu mencoba Scheduled Task **RadMon Server**, kemudian fallback proses
 yang dikelola bila task tidak tersedia.
 
+## Pemulihan unattended dan catch-up historis
+
+Pada instalasi resmi, task **RadMon Server** berjalan saat Windows boot sebagai
+`SYSTEM`, memiliki restart-on-failure, dan tidak berhenti ketika laptop berpindah
+baterai. Task **RadMon Updater** berjalan terpisah. Setelah instalasi awal yang
+membutuhkan satu persetujuan UAC, keduanya tidak bergantung pada user login atau
+shortcut operator. Jangan menjalankan `--server` kedua untuk “membantu” task.
+
+Collector LAN mempunyai worker live dan worker backfill terpisah untuk setiap
+source. Backfill membaca tabel source saja, menulis batch idempotent ke central,
+lalu baru menyimpan cursor durable `(source_id, remote_serid)` di security DB.
+Crash/commit gagal mengulang batch dengan aman; cursor tidak pernah mundur dan
+overlap kecil menangkap kedatangan terlambat. Source offline tidak memajukan
+cursor. Instalasi baru dibatasi horizon awal 24 jam
+(`RADMON_BACKFILL_INITIAL_LOOKBACK_HOURS`); cursor yang sudah ada tetap mengejar
+seluruh rentang outage yang masih disimpan source. Data yang tidak pernah
+direkam, sudah dihapus/retensi source, atau berada di luar horizon instalasi baru
+tidak dapat ditemukan tanpa job bulk yang disetujui.
+
+Pada **Sistem**, “DB terhubung” dan “Data sumber stale” adalah status berbeda.
+“Mengejar ketertinggalan”, cursor terakhir, dan error backfill tidak mengubah
+status konektivitas atau membuat alarm historis baru. Archive reconciliation,
+drain, dan purge tetap nonaktif kecuali maintenance window eksplisit.
+
 ## Pemulihan manual
 
 1. Baca status launcher. Jalankan shortcut **RadMon** satu kali lagi hanya

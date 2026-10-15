@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from radmon.central_api import create_central_app
 from radmon.config import Settings
-from radmon.sync import SyncAgent
+from radmon.sync import SyncAgent, SyncCheckpointStore
 
 
 class Checkpoint:
@@ -69,6 +69,14 @@ def test_sync_failure_does_not_advance_checkpoint():
     agent = SyncAgent(LocalRepo(), enabled_settings(), checkpoint=checkpoint, client=FailedClient())
     assert agent.run_once() == 0
     assert checkpoint.saved == []
+
+
+def test_file_checkpoint_never_regresses(tmp_path):
+    checkpoint = SyncCheckpointStore(tmp_path / "sync.json")
+    newest = datetime(2026, 9, 7, 10, 0, 0)
+    checkpoint.save(newest)
+    checkpoint.save(datetime(2026, 9, 7, 9, 0, 0))
+    assert checkpoint.load() == newest
 
 
 def test_sync_success_advances_checkpoint_and_serializes_user_schema_fields():

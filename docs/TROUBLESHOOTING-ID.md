@@ -141,6 +141,35 @@ Test-NetConnection 192.168.1.2 -Port 8090
 
 Jangan membuka port database, Grafana, atau single-instance ke seluruh LAN.
 
+### Backfill historis dan data yang tertinggal
+
+Backfill berjalan otomatis di worker terpisah; tidak perlu menjalankan query
+tanggal besar atau menekan tombol recovery berulang. Periksa halaman **Sistem**
+dan log `[BACKFILL]`:
+
+```powershell
+$log = "$env:LOCALAPPDATA\RadMon\runtime\logs\radmon.log"
+Get-Content -LiteralPath $log -Tail 120 |
+  Select-String '\[BACKFILL\]|\[LIVE\]'
+```
+
+Cursor disimpan per source dan detector pada security DB terpasang. Central
+measurement ditulis dan commit lebih dulu; jika proses mati atau central gagal,
+batch diulang tanpa duplikasi dan cursor tidak maju melewati row yang gagal.
+Status **DB terhubung** hanya berarti koneksi source berhasil. **Data sumber
+stale** berarti database menjawab tetapi sample terakhir melewati `maxidlemin`;
+ini bukan bukti bahwa data baru tersedia. **Mengejar ketertinggalan** berarti
+worker masih memproses cursor, sedangkan error catch-up ditampilkan terpisah
+dari error live.
+
+Backfill awal instalasi memakai horizon terbatas 24 jam dan polling berbasis
+keyset/batch. Cursor yang sudah ada mengejar outage gap yang masih tersedia pada
+source. Gap tidak bisa dipulihkan bila source tidak pernah merekamnya, sudah
+menghapusnya karena retensi, atau data datang terlambat di luar overlap kebijakan;
+eskalasi untuk job bulk yang disetujui, jangan menghapus archive atau mematikan
+guard retention. Backfill tidak menulis `i_flag`, ACK, alarm, raw source, atau
+archive.
+
 ## Report dan archive
 
 - Rentang report harus lebih dari nol dan maksimal **24 jam**; tepat 24 jam

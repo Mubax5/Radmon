@@ -38,7 +38,12 @@ CREATE TABLE IF NOT EXISTS source_health (
   policy_state TEXT NOT NULL DEFAULT 'OK',
   last_policy_error TEXT,
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  source_data_state TEXT NOT NULL DEFAULT 'UNKNOWN',
+  last_source_sample TEXT,
+  backfill_state TEXT NOT NULL DEFAULT 'UNKNOWN',
+  backfill_checkpoint TEXT,
+  last_backfill_error TEXT
 );
 """
             )
@@ -50,6 +55,16 @@ CREATE TABLE IF NOT EXISTS source_health (
                 connection.execute("ALTER TABLE source_health ADD COLUMN policy_state TEXT NOT NULL DEFAULT 'OK'")
             if "last_policy_error" not in columns:
                 connection.execute("ALTER TABLE source_health ADD COLUMN last_policy_error TEXT")
+            if "source_data_state" not in columns:
+                connection.execute("ALTER TABLE source_health ADD COLUMN source_data_state TEXT NOT NULL DEFAULT 'UNKNOWN'")
+            if "last_source_sample" not in columns:
+                connection.execute("ALTER TABLE source_health ADD COLUMN last_source_sample TEXT")
+            if "backfill_state" not in columns:
+                connection.execute("ALTER TABLE source_health ADD COLUMN backfill_state TEXT NOT NULL DEFAULT 'UNKNOWN'")
+            if "backfill_checkpoint" not in columns:
+                connection.execute("ALTER TABLE source_health ADD COLUMN backfill_checkpoint TEXT")
+            if "last_backfill_error" not in columns:
+                connection.execute("ALTER TABLE source_health ADD COLUMN last_backfill_error TEXT")
 
     @staticmethod
     def _to_dict(row) -> dict[str, Any] | None:
@@ -59,6 +74,8 @@ CREATE TABLE IF NOT EXISTS source_health (
             "source_id", "host", "state", "last_success", "last_failure",
             "last_live_poll", "last_alarm_poll", "last_history_import",
             "last_error", "policy_state", "last_policy_error", "consecutive_failures", "updated_at",
+            "source_data_state", "last_source_sample", "backfill_state",
+            "backfill_checkpoint", "last_backfill_error",
         )
         item = dict(zip(keys, row))
         item["consecutive_failures"] = int(item.get("consecutive_failures") or 0)
@@ -70,7 +87,9 @@ CREATE TABLE IF NOT EXISTS source_health (
                 """
 SELECT source_id, host, state, last_success, last_failure,
        last_live_poll, last_alarm_poll, last_history_import,
-       last_error, policy_state, last_policy_error, consecutive_failures, updated_at
+       last_error, policy_state, last_policy_error, consecutive_failures, updated_at,
+       source_data_state, last_source_sample, backfill_state,
+       backfill_checkpoint, last_backfill_error
 FROM source_health WHERE source_id = ?
 """,
                 (source_id,),
@@ -83,7 +102,9 @@ FROM source_health WHERE source_id = ?
                 """
 SELECT source_id, host, state, last_success, last_failure,
        last_live_poll, last_alarm_poll, last_history_import,
-       last_error, policy_state, last_policy_error, consecutive_failures, updated_at
+       last_error, policy_state, last_policy_error, consecutive_failures, updated_at,
+       source_data_state, last_source_sample, backfill_state,
+       backfill_checkpoint, last_backfill_error
 FROM source_health ORDER BY source_id
 """
             ).fetchall()
@@ -111,6 +132,8 @@ FROM source_health ORDER BY source_id
         alarm: bool,
         history: bool,
         policy_error: str | None = None,
+        data_state: str | None = None,
+        source_latest: datetime | None = None,
     ) -> dict[str, Any]:
         current = self.get(source.source_id)
         previous = str(current["state"]) if current else None
@@ -118,14 +141,19 @@ FROM source_health ORDER BY source_id
         state = "RECOVERED" if previous in {"DEGRADED", "OFFLINE"} else "CONNECTED"
         policy_state = "DEGRADED" if policy_error else "OK"
         policy_detail = str(policy_error)[:1000] if policy_error else None
+        source_latest_text = source_latest.isoformat() if isinstance(source_latest, datetime) else None
+        normalized_data_state = str(data_state or "UNKNOWN").upper()
+        if normalized_data_state not in {"FRESH", "PARTIAL", "STALE", "UNKNOWN"}:
+            normalized_data_state = "UNKNOWN"
         with self.store._connection() as connection:
             connection.execute(
                 """
 INSERT INTO source_health
   (source_id, host, state, last_success, last_failure, last_live_poll,
    last_alarm_poll, last_history_import, last_error, policy_state,
-   last_policy_error, consecutive_failures, updated_at)
-VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?, 0, ?)
+   last_policy_error, consecutive_failures, updated_at, source_data_state,
+   last_source_sample, backfill_state, backfill_checkpoint, last_backfill_error)
+VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?, 0, ?, ?, ?, 'UNKNOWN', NULL, NULL)
 ON CONFLICT(source_id) DO UPDATE SET
   host = excluded.host,
   state = excluded.state,
@@ -136,14 +164,18 @@ ON CONFLICT(source_id) DO UPDATE SET
   last_error = NULL,
   policy_state = excluded.policy_state,
   last_policy_error = excluded.last_policy_error,
+  source_data_state = CASE WHEN ? THEN excluded.source_data_state ELSE source_health.source_data_state END,
+  last_source_sample = CASE WHEN ? THEN excluded.last_source_sample ELSE source_health.last_source_sample END,
   consecutive_failures = 0,
   updated_at = excluded.updated_at
 """,
                 (
                     source.source_id, source.host, state, at,
                     at if live else None, at if alarm else None, at if history else None,
-                    policy_state, policy_detail, at,
+                    policy_state, policy_detail, at, normalized_data_state,
+                    source_latest_text,
                     1 if live else 0, 1 if alarm else 0, 1 if history else 0,
+                    bool(data_state is not None), bool(source_latest_text is not None),
                 ),
             )
         item = self.get(source.source_id)
@@ -164,6 +196,66 @@ SET host = ?, last_history_import = ?, updated_at = ?
 WHERE source_id = ?
 """,
                 (source.host, at, at, source.source_id),
+            )
+        item = self.get(source.source_id)
+        assert item is not None
+        item["transition_message"] = None
+        return item
+
+    def record_backfill_progress(
+        self,
+        source,
+        *,
+        checkpoint: datetime | None,
+        inserted: int,
+        caught_up: bool,
+    ) -> dict[str, Any]:
+        """Persist history progress separately from source reachability.
+
+        A source can be reachable while its detector has stopped producing
+        samples.  This marker therefore never changes ``state`` or the live
+        failure counters.
+        """
+        current = self.get(source.source_id)
+        if current is None:
+            self.record_success(source, live=False, alarm=False, history=False)
+        at = self.now().astimezone(timezone.utc).isoformat()
+        state = "CAUGHT_UP" if caught_up else "RUNNING"
+        checkpoint_text = checkpoint.isoformat() if isinstance(checkpoint, datetime) else None
+        with self.store._connection() as connection:
+            connection.execute(
+                """
+UPDATE source_health
+SET host = ?, backfill_state = ?, backfill_checkpoint = ?,
+    last_backfill_error = NULL,
+    last_history_import = CASE WHEN ? > 0 THEN ? ELSE last_history_import END,
+    updated_at = ?
+WHERE source_id = ?
+""",
+                (
+                    source.host, state, checkpoint_text, int(inserted), at, at,
+                    source.source_id,
+                ),
+            )
+        item = self.get(source.source_id)
+        assert item is not None
+        item["transition_message"] = None
+        return item
+
+    def record_backfill_failure(self, source, error: str) -> dict[str, Any]:
+        """Record a history-only error without marking a reachable source offline."""
+        current = self.get(source.source_id)
+        if current is None:
+            self.record_success(source, live=False, alarm=False, history=False)
+        at = self.now().astimezone(timezone.utc).isoformat()
+        with self.store._connection() as connection:
+            connection.execute(
+                """
+UPDATE source_health
+SET host = ?, backfill_state = 'ERROR', last_backfill_error = ?, updated_at = ?
+WHERE source_id = ?
+""",
+                (source.host, str(error)[:1000], at, source.source_id),
             )
         item = self.get(source.source_id)
         assert item is not None

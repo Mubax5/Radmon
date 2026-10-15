@@ -31,6 +31,15 @@ def test_checkpoint_is_per_source_and_station(tmp_path):
     assert checkpoints.load("server52", 5202) is None
 
 
+def test_checkpoint_never_regresses_after_replayed_or_concurrent_save(tmp_path):
+    store = SecurityStore(tmp_path / "security.db")
+    checkpoints = LanCheckpointStore(store)
+    newest = datetime(2026, 9, 8, 14, 1, 2)
+    checkpoints.save("server52", 5201, newest)
+    checkpoints.save("server52", 5201, newest - timedelta(seconds=30))
+    assert checkpoints.load("server52", 5201) == newest
+
+
 class FakeRemote:
     def __init__(self, source, rows, *, fail=False, alarms=None):
         self.source = source
@@ -313,6 +322,55 @@ def test_backfill_step_imports_only_one_selected_detector_batch(tmp_path):
     assert result.inserted_measurements == 2
     assert {serid for serid, _ in central.measurements} == {5202}
     assert checkpoints.load("gd52", 5202) == datetime(2026, 9, 8, 14, 0, 1)
+    assert checkpoints.load("gd52", 5201) is None
+
+
+def test_backfill_replays_small_overlap_but_does_not_advance_past_failed_or_future_rows(tmp_path):
+    store = SecurityStore(tmp_path / "security.db")
+    checkpoints = LanCheckpointStore(store)
+    source = LanSource("gd52", "192.168.1.52", 3306, "u", "p", "ipradmon")
+    cursor = datetime.now().replace(microsecond=0)
+    checkpoints.save("gd52", 5201, cursor)
+    rows = [
+        {"serid": 5201, "dtom": cursor - timedelta(seconds=5), "doserate": 1.1, "dose": 0.1, "previnterval": 2, "stat": 0},
+        {"serid": 5201, "dtom": cursor + timedelta(seconds=600), "doserate": 9.9, "dose": 0.9, "previnterval": 2, "stat": 0},
+    ]
+    central = FakeCentral()
+    aggregator = LanAggregator(
+        central,
+        checkpoints,
+        remote_factory=lambda value: MultiStationRemote(value, rows),
+        batch_size=10,
+        cursor_overlap=timedelta(seconds=10),
+    )
+
+    result = aggregator.run_backfill_once(source, station_index=0)
+
+    assert result.error is None
+    assert len(central.measurements) == 1
+    assert next(iter(central.measurements.values()))["dtom"] == cursor - timedelta(seconds=5)
+    assert checkpoints.load("gd52", 5201) == cursor
+
+
+def test_backfill_does_not_advance_cursor_when_central_commit_fails(tmp_path):
+    store = SecurityStore(tmp_path / "security.db")
+    checkpoints = LanCheckpointStore(store)
+    source = LanSource("gd52", "192.168.1.52", 3306, "u", "p", "ipradmon")
+    rows = [{"serid": 5201, "dtom": datetime(2026, 9, 8, 14, 0, 0), "doserate": 1.0, "dose": 0.001, "previnterval": 2, "stat": 0}]
+
+    class FailingCentral(FakeCentral):
+        def import_measurements(self, source_id, rows):
+            raise RuntimeError("central commit failed")
+
+    aggregator = LanAggregator(
+        FailingCentral(),
+        checkpoints,
+        remote_factory=lambda value: FakeRemote(value, rows),
+        batch_size=2,
+    )
+    result = aggregator.run_backfill_once(source)
+
+    assert result.error == "central commit failed"
     assert checkpoints.load("gd52", 5201) is None
 
 

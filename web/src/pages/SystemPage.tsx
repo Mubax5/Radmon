@@ -25,6 +25,11 @@ type SourceHealth = {
   last_error?: string | null;
   consecutive_failures: number;
   updated_at?: string | null;
+  source_data_state?: string | null;
+  last_source_sample?: string | null;
+  backfill_state?: string | null;
+  backfill_checkpoint?: string | null;
+  last_backfill_error?: string | null;
 };
 
 type SystemState = {
@@ -42,11 +47,32 @@ function sourceVariant(state: string): "success" | "warning" | "error" | "second
 }
 
 function sourceStateLabel(state: string): string {
-  if (state === "CONNECTED") return "Terhubung";
+  if (state === "CONNECTED") return "DB terhubung";
   if (state === "RECOVERED") return "Pulih";
   if (state === "DEGRADED") return "Menurun";
   if (state === "OFFLINE") return "Offline";
   return "Status tidak diketahui";
+}
+
+function dataVariant(state?: string | null): "success" | "warning" | "error" | "secondary" {
+  if (state === "FRESH") return "success";
+  if (state === "PARTIAL") return "warning";
+  if (state === "STALE") return "error";
+  return "secondary";
+}
+
+function dataLabel(state?: string | null): string {
+  if (state === "FRESH") return "Data segar";
+  if (state === "PARTIAL") return "Data sebagian segar";
+  if (state === "STALE") return "Data sumber stale";
+  return "Data belum diketahui";
+}
+
+function backfillLabel(state?: string | null): string {
+  if (state === "CAUGHT_UP") return "Catch-up selesai";
+  if (state === "RUNNING") return "Mengejar ketertinggalan";
+  if (state === "ERROR") return "Catch-up gagal";
+  return "Catch-up belum diketahui";
 }
 
 function SourceCards({ sources }: { sources: SourceHealth[] }) {
@@ -60,15 +86,21 @@ function SourceCards({ sources }: { sources: SourceHealth[] }) {
               <h3>{source.source_id}</h3>
               <div className="cell-subtle">{source.host}</div>
             </div>
-            <Badge variant={sourceVariant(source.state)}>{sourceStateLabel(source.state)}</Badge>
+            <div className="badge-row">
+              <Badge variant={sourceVariant(source.state)}>{sourceStateLabel(source.state)}</Badge>
+              <Badge variant={dataVariant(source.source_data_state)}>{dataLabel(source.source_data_state)}</Badge>
+            </div>
           </div>
           <div className="card-meta">
             <span>Terakhir berhasil: {formatTimestamp(source.last_success)} · {freshnessLabel(source.last_success)}</span>
              <span>Pemeriksaan live terakhir: {formatTimestamp(source.last_live_poll)}</span>
             {source.last_failure ? <span>Kegagalan terakhir: {formatTimestamp(source.last_failure)}</span> : null}
              {source.last_history_import ? <span>Pembaruan riwayat: {formatTimestamp(source.last_history_import)}</span> : null}
-            {source.consecutive_failures ? <span>Kegagalan beruntun: {source.consecutive_failures}</span> : null}
-            {source.last_error ? <span>Kesalahan terakhir: {source.last_error}</span> : null}
+             {source.last_source_sample ? <span>Sample sumber terakhir: {formatTimestamp(source.last_source_sample)}</span> : null}
+             <span>{backfillLabel(source.backfill_state)}{source.backfill_checkpoint ? ` · cursor ${formatTimestamp(source.backfill_checkpoint)}` : ""}</span>
+             {source.consecutive_failures ? <span>Kegagalan beruntun: {source.consecutive_failures}</span> : null}
+             {source.last_error ? <span>Kesalahan terakhir: {source.last_error}</span> : null}
+             {source.last_backfill_error ? <span>Kesalahan catch-up: {source.last_backfill_error}</span> : null}
           </div>
         </LayerCard>
       ))}
@@ -85,6 +117,7 @@ function SourceTable({ sources }: { sources: SourceHealth[] }) {
           <Table.Row>
              <Table.Head>Sumber</Table.Head>
             <Table.Head>Status</Table.Head>
+            <Table.Head>Data sumber</Table.Head>
             <Table.Head>Terakhir berhasil</Table.Head>
              <Table.Head>Pemeriksaan live</Table.Head>
             <Table.Head>Kegagalan</Table.Head>
@@ -95,7 +128,8 @@ function SourceTable({ sources }: { sources: SourceHealth[] }) {
           {sources.map((source) => (
             <Table.Row key={source.source_id}>
               <Table.Cell><strong>{source.source_id}</strong><div className="cell-subtle">{source.host}</div></Table.Cell>
-            <Table.Cell><Badge variant={sourceVariant(source.state)}>{sourceStateLabel(source.state)}</Badge></Table.Cell>
+             <Table.Cell><Badge variant={sourceVariant(source.state)}>{sourceStateLabel(source.state)}</Badge></Table.Cell>
+              <Table.Cell><Badge variant={dataVariant(source.source_data_state)}>{dataLabel(source.source_data_state)}</Badge><div className="cell-subtle">{formatTimestamp(source.last_source_sample)}</div></Table.Cell>
               <Table.Cell>{formatTimestamp(source.last_success)}<div className="cell-subtle">{freshnessLabel(source.last_success)}</div></Table.Cell>
               <Table.Cell>{formatTimestamp(source.last_live_poll)}</Table.Cell>
               <Table.Cell>{source.consecutive_failures}</Table.Cell>
@@ -125,9 +159,12 @@ export function SystemPage() {
   const summary = useMemo(() => {
     const sources = data?.sources ?? [];
     return {
-      healthy: sources.filter((source) => source.state === "CONNECTED" || source.state === "RECOVERED").length,
+      healthy: sources.filter((source) =>
+        (source.state === "CONNECTED" || source.state === "RECOVERED") && !["STALE", "PARTIAL"].includes(source.source_data_state || ""),
+      ).length,
       degraded: sources.filter((source) => source.state === "DEGRADED").length,
       offline: sources.filter((source) => source.state === "OFFLINE").length,
+      stale: sources.filter((source) => source.source_data_state === "STALE" || source.source_data_state === "PARTIAL").length,
     };
   }, [data]);
 
@@ -153,11 +190,12 @@ export function SystemPage() {
             <MetricCard label="Sumber sehat" value={summary.healthy} badge={<Badge variant="success">Terhubung</Badge>} />
             <MetricCard label="Menurun" value={summary.degraded} badge={<Badge variant={summary.degraded ? "warning" : "secondary"}>Sumber</Badge>} />
             <MetricCard label="Offline" value={summary.offline} badge={<Badge variant={summary.offline ? "error" : "secondary"}>Sumber</Badge>} />
+            <MetricCard label="Data stale/sebagian" value={summary.stale} badge={<Badge variant={summary.stale ? "warning" : "secondary"}>Sample</Badge>} />
           </div>
 
           <PageSection
             title="Kesehatan sumber LAN"
-            description="Status koneksi dan pembaruan terakhir untuk setiap sumber data LAN."
+            description="Koneksi DB, kesegaran sample sumber, dan catch-up historis ditampilkan terpisah agar status offline tidak disamarkan."
             className="source-health-section"
           >
             <ResponsiveDataView

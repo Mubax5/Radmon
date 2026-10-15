@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import logging
+import os
 from pathlib import Path
 import tempfile
 from typing import Any
@@ -30,6 +31,16 @@ class SyncCheckpointStore:
             return None
 
     def save(self, value: datetime) -> None:
+        current = self.load()
+        if current is not None:
+            try:
+                if value <= current:
+                    return
+            except TypeError:
+                current_utc = current.astimezone(timezone.utc) if current.tzinfo else current.replace(tzinfo=timezone.utc)
+                value_utc = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+                if value_utc <= current_utc:
+                    return
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = json.dumps({"last_synced": value.isoformat(timespec="seconds")}, ensure_ascii=False)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=self.path.parent, prefix="sync-", suffix=".tmp") as handle:
@@ -55,7 +66,8 @@ class SyncAgent:
     def _starting_point(self) -> datetime:
         saved = self.checkpoint.load()
         if saved is not None:
-            return saved
+            overlap = max(0, int(os.getenv("RADMON_SYNC_OVERLAP_SECONDS", "10")))
+            return saved - timedelta(seconds=overlap)
         return datetime.now() - timedelta(hours=max(0, self.settings.sync_initial_lookback_hours))
 
     def _payload(self, rows: list[dict[str, Any]]) -> dict[str, Any]:

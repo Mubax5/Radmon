@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import os
 import threading
@@ -11,6 +11,7 @@ from .hot_path import RealtimeRemoteMariaDBSource
 from .lan import LanAggregator, LanCheckpointStore
 from .lan_store import BatchedMariaCentralStore
 from .quarters import Quarter, quarter_for, quarters_overlapping
+from .datetime_utils import parse_database_datetime
 
 LOGGER = logging.getLogger(__name__)
 
@@ -53,6 +54,14 @@ class LanRuntime:
         self.backfill_enabled = _enabled("RADMON_BACKFILL_ENABLED", True)
         self.backfill_batch_size = max(1, int(os.getenv("RADMON_BACKFILL_BATCH_SIZE", "500")))
         self.backfill_interval = max(0.5, float(os.getenv("RADMON_BACKFILL_INTERVAL", "2")))
+        # A first install must remain bounded. Once a source/station has a
+        # durable cursor, the cursor covers the complete retained outage gap.
+        self.backfill_initial_lookback_hours = max(
+            0, int(os.getenv("RADMON_BACKFILL_INITIAL_LOOKBACK_HOURS", "24"))
+        )
+        self.backfill_overlap_seconds = max(
+            0, int(os.getenv("RADMON_BACKFILL_OVERLAP_SECONDS", "10"))
+        )
 
         configured_archive_interval = getattr(settings, "archive_check_interval", 60.0)
         self.archive_check_interval = max(
@@ -82,6 +91,12 @@ class LanRuntime:
             remote_factory=lambda item: RealtimeRemoteMariaDBSource(item),
             alarm_mirror=self.services.alarm_mirror,
             batch_size=self.batch_size if batch_size is None else max(1, int(batch_size)),
+            initial_lookback=(
+                timedelta(hours=self.backfill_initial_lookback_hours)
+                if self.backfill_initial_lookback_hours
+                else None
+            ),
+            cursor_overlap=timedelta(seconds=self.backfill_overlap_seconds),
         )
         aggregator.alarm_policy = getattr(self.services, "alarm_policy", None)
         aggregator.alarm_suppression = getattr(self.services, "alarm_suppression", None)
@@ -90,6 +105,36 @@ class LanRuntime:
     def _publish_web_event(self, event: dict[str, Any]) -> None:
         if self.web_event_broker is not None:
             self.web_event_broker.publish(event)
+
+    @staticmethod
+    def _source_data_status(rows: list[dict[str, Any]]) -> tuple[str, datetime | None]:
+        """Classify sample freshness without changing source or alarm state."""
+        observations: list[tuple[datetime, bool]] = []
+        for row in rows:
+            measured = parse_database_datetime(row.get("_policy_measured_at"))
+            raw_measured = parse_database_datetime(row.get("dtom"))
+            if measured is None:
+                measured = raw_measured
+            if measured is None:
+                continue
+            try:
+                max_idle = max(1, int(row.get("maxidlemin") or 30)) * 60
+            except (TypeError, ValueError):
+                max_idle = 30 * 60
+            now = datetime.now(measured.tzinfo) if measured.tzinfo else datetime.now()
+            age = max(0.0, (now - measured).total_seconds())
+            observations.append((raw_measured or measured, age <= max_idle))
+        if not observations:
+            return "UNKNOWN", None
+        fresh = sum(1 for _, is_fresh in observations if is_fresh)
+        if fresh == len(observations):
+            state = "FRESH"
+        elif fresh == 0:
+            state = "STALE"
+        else:
+            state = "PARTIAL"
+        latest = max((item[0] for item in observations), key=lambda value: value.isoformat())
+        return state, latest
 
     def _run_live_source(self, source) -> None:
         # Per-source resilient live mirror: transient remote/central failures
@@ -119,12 +164,15 @@ class LanRuntime:
                         if getattr(result, "remote_connected", False):
                             # The remote answered. Keep connectivity truthful and
                             # expose a separate policy/cache health state.
+                            data_state, source_latest = self._source_data_status(result.mapped_live_rows)
                             state = self.services.source_health.record_success(
                                 source,
                                 live=True,
                                 alarm=True,
                                 history=False,
                                 policy_error=getattr(result, "policy_error", None) or result.error,
+                                data_state=data_state,
+                                source_latest=source_latest,
                             )
                         else:
                             state = self.services.source_health.record_failure(source, result.error)
@@ -152,11 +200,14 @@ class LanRuntime:
                 # Success path: reset backoff.
                 consecutive_errors = 0
                 try:
+                    data_state, source_latest = self._source_data_status(result.mapped_live_rows)
                     state = self.services.source_health.record_success(
                         source,
                         live=True,
                         alarm=True,
                         history=False,
+                        data_state=data_state,
+                        source_latest=source_latest,
                     )
                 except Exception as health_exc:
                     LOGGER.warning("[LIVE] source=%s health record_success failed %s", source.source_id, health_exc)
@@ -207,6 +258,12 @@ class LanRuntime:
                 result = aggregator.run_backfill_once(source, station_index=station_index)
                 station_index += 1
                 if result.error:
+                    record_error = getattr(self.services.source_health, "record_backfill_failure", None)
+                    if callable(record_error):
+                        try:
+                            record_error(source, result.error)
+                        except Exception as health_exc:
+                            LOGGER.warning("[BACKFILL] source=%s health error failed %s", source.source_id, health_exc)
                     consecutive_errors += 1
                     LOGGER.warning(
                         "[BACKFILL] source=%s host=%s error=%s",
@@ -220,6 +277,17 @@ class LanRuntime:
                     continue
                 consecutive_errors = 0
                 if result.backfill_serid is not None:
+                    record_progress = getattr(self.services.source_health, "record_backfill_progress", None)
+                    if callable(record_progress):
+                        try:
+                            record_progress(
+                                source,
+                                checkpoint=result.checkpoint,
+                                inserted=result.inserted_measurements,
+                                caught_up=result.caught_up,
+                            )
+                        except Exception as health_exc:
+                            LOGGER.warning("[BACKFILL] source=%s health progress failed %s", source.source_id, health_exc)
                     if result.inserted_measurements > 0:
                         try:
                             self.services.source_health.record_history_import(source)
