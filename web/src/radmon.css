@@ -251,7 +251,6 @@ body:has([role="dialog"]) .page-stack { visibility: visible; }
 .alarm-status { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 12px; font-weight: 700; }
 .alarm-status-alarm { color: #b42318; }
 .alarm-status-warning { color: #9a6700; }
-.alarm-status-historical { color: #667085; }
 .alarm-status-dot { display: inline-block; flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; background: #98a2b3; }
 .alarm-status-warning .alarm-status-dot { background: #e3a008; }
 .alarm-status-alarm .alarm-status-dot,

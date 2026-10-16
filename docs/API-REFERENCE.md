@@ -66,6 +66,12 @@ The offline history route uses genuine `recent_last` samples when the station
 is offline. It returns at most 30 rows, preserves original timestamps, and
 does not fabricate values.
 
+Station current-status rows do not promote `last_event_*` into a current alarm.
+When a read-only source latch is available, `source_alarm_active` is paired
+with `source_alarm_confirmed`; a cached latch on an offline/unreachable source
+is shown as unconfirmed rather than as a quiet result. Historical alarm rows
+remain available from the alarm-history route.
+
 ## Operator routes
 
 Operator and Administrator sessions may use:

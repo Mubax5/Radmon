@@ -18,8 +18,10 @@ def test_current_alarm_requires_fresh_alarm_and_active_policy_event():
     assert current_alarm_guard in component.replace("\n    ", "")
     assert 'station.status === "warning" || (' in component
     assert 'station.policy_state === "SUPPRESSED" || station.policy_state === "RETRIGGER_LOCKED"' in component
-    assert 'station.status === "offline" && (station.active_event_id || station.last_event_id)' in component
-    assert "tidak sedang berbunyi" in component
+    assert "station.status === \"offline\" && (station.active_event_id || station.last_event_id)" not in component
+    assert "Alarm terakhir" not in component
+    assert 'station.source_alarm_active === true' in component
+    assert 'Alarm aktif — status belum terkonfirmasi' in component
     assert 'station.status === "warning" || station.status === "alarm"' in component
     assert '"Ambang rendah aktif — perlu tindakan"' in component
     assert "{isActive && onAction ? (" in component

@@ -195,6 +195,92 @@ def _station_response(station: dict[str, Any], row: dict[str, Any] | None, sourc
     }
 
 
+def _current_source_alarm_projection(
+    alarm_mirror: Any | None,
+    security: SecurityStore,
+    source_health: Any | None,
+) -> dict[int, dict[str, Any]]:
+    """Return only read-only source-latch rows that are currently active.
+
+    A policy event is not a substitute for the physical source latch: a normal
+    dose can coexist with ``source_i_flag=0``.  Conversely, no source row is
+    treated as an affirmative "not sounding" result when the source cannot be
+    read.  This projection is only an optional station-row decoration; alarm
+    response CAS and history continue to use their existing paths.
+    """
+    if alarm_mirror is None:
+        return {}
+    try:
+        rows = alarm_mirror.list_alarms(active_only=True, limit=10000)
+    except Exception:
+        # A station status read must remain available if the optional alarm
+        # mirror is unavailable.  In particular, do not synthesize quiet.
+        return {}
+
+    try:
+        source_map = security.station_source_ids_map()
+    except Exception:
+        return {}
+    health: dict[str, str] = {}
+    if source_health is not None:
+        try:
+            health = {
+                str(item.get("source_id")): str(item.get("state") or "").upper()
+                for item in source_health.list_states()
+                if item.get("source_id") is not None
+            }
+        except Exception:
+            health = {}
+
+    result: dict[int, dict[str, Any]] = {}
+    for raw in rows or []:
+        item = dict(raw)
+        source_id = item.get("source_id")
+        if source_id is None:
+            continue
+        source_text = str(source_id)
+        try:
+            source_i_flag = int(item.get("source_i_flag", item.get("i_flag")))
+        except (TypeError, ValueError):
+            continue
+        if source_i_flag != 0 or item.get("is_active") is False:
+            continue
+        try:
+            central_serid = int(item["serid"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        remote_serid = item.get("remote_serid")
+        if remote_serid is not None:
+            try:
+                bound_serid = security.station_binding(source_text, int(remote_serid))
+            except (TypeError, ValueError, sqlite3.Error):
+                continue
+            if bound_serid is None:
+                continue
+            central_serid = bound_serid
+        if source_text not in {str(value) for value in source_map.get(central_serid, ())}:
+            continue
+
+        event_time = item.get("event_time")
+        event_text = event_time.isoformat() if isinstance(event_time, datetime) else str(event_time or "")
+        source_state = health.get(source_text)
+        source_reachable = (
+            source_state in {"CONNECTED", "RECOVERED"}
+            if source_health is not None
+            else True
+        )
+        result[central_serid] = {
+            "source_alarm_active": True,
+            # An offline/stale station or an explicitly unavailable source can
+            # retain the last i_flag=0, but that is not a fresh confirmation.
+            "source_alarm_confirmed": source_reachable,
+            "source_alarm_event_id": f"source:{source_text}:{central_serid}:{event_text}",
+            "source_i_flag": 0,
+        }
+    return result
+
+
 _SOURCE_FIELDS = {
     "source_id", "serid", "remote_serid", "event_time", "level",
     "measured_value", "threshold", "hit_count", "is_active", "source_i_flag",
@@ -331,10 +417,21 @@ def attach_web_api_routes(
             "policy_threshold": policy.get("threshold"),
         }
 
+    def with_source_alarm_status(item: dict[str, Any], source_alarms: dict[int, dict[str, Any]]) -> dict[str, Any]:
+        projection = source_alarms.get(int(item["serid"]))
+        if projection is None:
+            return item
+        return {
+            **item,
+            **projection,
+            "source_alarm_confirmed": bool(projection["source_alarm_confirmed"]) and item.get("status") != "offline",
+        }
+
     @app.get("/api/v1/web/overview")
     def overview(identity: UserIdentity = Depends(viewer)):
         items: list[dict[str, Any]] = []
         counts = {"normal": 0, "warning": 0, "alarm": 0, "offline": 0}
+        source_alarms = _current_source_alarm_projection(alarm_mirror, security, source_health)
         snapshot_reader = getattr(repository, "overview_rows", None)
         if callable(snapshot_reader):
             snapshots = snapshot_reader()
@@ -365,7 +462,10 @@ def attach_web_api_routes(
         source_map = security.station_source_ids_map()
         for station, row in station_rows:
             source_ids = source_map.get(int(station["serid"]), ())
-            item = with_policy_status(_station_response(station, row, ", ".join(source_ids) or None))
+            item = with_source_alarm_status(
+                with_policy_status(_station_response(station, row, ", ".join(source_ids) or None)),
+                source_alarms,
+            )
             counts[item["status"]] += 1
             items.append(item)
         return {"counts": counts, "stations": items, "role": identity.role.value}
@@ -373,12 +473,16 @@ def attach_web_api_routes(
     @app.get("/api/v1/web/stations")
     def stations(identity: UserIdentity = Depends(viewer)):
         source_map = security.station_source_ids_map()
+        source_alarms = _current_source_alarm_projection(alarm_mirror, security, source_health)
         return [
-            with_policy_status(_station_response(
-                station,
-                _fallback_last_measurement(repository, int(station["serid"])),
-                ", ".join(source_map.get(int(station["serid"]), ())) or None,
-            ))
+            with_source_alarm_status(
+                with_policy_status(_station_response(
+                    station,
+                    _fallback_last_measurement(repository, int(station["serid"])),
+                    ", ".join(source_map.get(int(station["serid"]), ())) or None,
+                )),
+                source_alarms,
+            )
             for station in repository.stations()
         ]
 
@@ -388,11 +492,15 @@ def attach_web_api_routes(
         if station is None:
             raise HTTPException(status_code=404, detail="station tidak ditemukan")
         source_ids = security.station_source_ids_map().get(int(serid), ())
-        return with_policy_status(_station_response(
-            station,
-            _fallback_last_measurement(repository, int(serid)),
-            ", ".join(source_ids) or None,
-        ))
+        source_alarms = _current_source_alarm_projection(alarm_mirror, security, source_health)
+        return with_source_alarm_status(
+            with_policy_status(_station_response(
+                station,
+                _fallback_last_measurement(repository, int(serid)),
+                ", ".join(source_ids) or None,
+            )),
+            source_alarms,
+        )
 
     @app.get("/api/v1/web/stations/{serid}/history")
     def station_history(

@@ -27,6 +27,10 @@ export type Station = {
   offline_description?: string | null;
   source_id?: string | null;
   ownership?: "source" | "central";
+  source_alarm_active?: boolean | null;
+  source_alarm_confirmed?: boolean | null;
+  source_alarm_event_id?: string | null;
+  source_i_flag?: number | null;
   policy_state?: string | null;
   underlying_dose_status?: string | null;
   active_event_id?: string | null;

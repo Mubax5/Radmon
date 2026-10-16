@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { Station } from "../api";
 import { formatDoseValue } from "../format";
 
-export type AlarmPresentation = "alarm" | "warning" | "historical" | null;
+export type AlarmPresentation = "alarm" | "warning" | null;
 
 const notifiedAlarmEvents = new Set<string>();
 
@@ -12,11 +12,13 @@ export function alarmPresentation(station: Station): AlarmPresentation {
     station.underlying_dose_status === "ALARM" && station.active_event_id &&
     station.active_event_lifecycle === "ACTIVE"
   ) return "alarm";
+  if (station.source_alarm_active === true) {
+    return station.status === "offline" || station.source_alarm_confirmed === false ? "warning" : "alarm";
+  }
   if (station.status === "warning" || (
     station.status === "alarm" && station.policy_state !== "ALARM" &&
     (station.policy_state === "SUPPRESSED" || station.policy_state === "RETRIGGER_LOCKED")
   )) return "warning";
-  if (station.status === "offline" && (station.active_event_id || station.last_event_id)) return "historical";
   return null;
 }
 
@@ -29,11 +31,23 @@ export function hasActiveThresholdEvent(station: Station): boolean {
 export function AlarmStatus({ station, onAction }: { station: Station; onAction?: (station: Station) => void }) {
   const presentation = alarmPresentation(station);
   if (!presentation) return null;
-  const label = presentation === "alarm"
-    ? "ALARM aktif — perlu tindakan"
-    : presentation === "warning"
-      ? hasActiveThresholdEvent(station) ? "Ambang rendah aktif — perlu tindakan" : station.status === "alarm" ? `Ambang alarm — aturan ${station.policy_state === "SUPPRESSED" ? "diredam" : "terkunci"}` : "Peringatan ambang"
-      : "Alarm terakhir — data offline, tidak sedang berbunyi";
+  const sourceAlarmUnconfirmed = station.source_alarm_active === true && (
+    station.status === "offline" || station.source_alarm_confirmed === false
+  );
+  let label: string;
+  if (presentation === "alarm") {
+    label = station.source_alarm_active === true && !sourceAlarmUnconfirmed && !hasActiveThresholdEvent(station)
+      ? "Alarm aktif — sumber terkonfirmasi"
+      : "ALARM aktif — perlu tindakan";
+  } else if (sourceAlarmUnconfirmed) {
+    label = "Alarm aktif — status belum terkonfirmasi";
+  } else if (hasActiveThresholdEvent(station)) {
+    label = "Ambang rendah aktif — perlu tindakan";
+  } else if (station.status === "alarm") {
+    label = `Ambang alarm — aturan ${station.policy_state === "SUPPRESSED" ? "diredam" : "terkunci"}`;
+  } else {
+    label = "Peringatan ambang";
+  }
   const isActive = hasActiveThresholdEvent(station);
   return (
     <span className={`alarm-status alarm-status-${presentation}`}>

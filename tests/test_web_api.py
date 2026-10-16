@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -258,6 +258,68 @@ def test_viewer_station_read_model_includes_read_only_active_policy_projection(t
     assert items[5203]["last_event_status"] == "RESOLVED"
     assert items[5203]["active_event_id"] is None
     assert viewer.get("/api/v1/web/stations/5202").json()["active_event_lifecycle"] == "ACTIVE"
+
+
+def test_station_read_model_keeps_source_latch_separate_from_dose_and_freshness(tmp_path):
+    security = SecurityStore(tmp_path / "source-status.db")
+    security.create_user("viewer", "Viewer", Role.VIEWER, "Password123!", "2468")
+    security.resolve_station("gd52", 5702)
+    security.resolve_station("gd50", 5703)
+    token = security.create_session("viewer", 3600)
+    now = datetime.now(timezone.utc).isoformat()
+
+    class Repository:
+        def stations(self):
+            return [
+                {"serid": 5702, "name": "IS-2LBN", "location": "Gd.57", "description": "", "warnlevel": 0.5, "alarmlevel": 1.0, "maxidlemin": 30, "unit": "µSv/h"},
+                {"serid": 5703, "name": "IS-2LBO", "location": "Gd.50", "description": "", "warnlevel": 0.5, "alarmlevel": 1.0, "maxidlemin": 30, "unit": "µSv/h"},
+            ]
+
+        def latest(self, serid):
+            return {
+                5702: {"serid": 5702, "dtom": now, "doserate": 0.17},
+                5703: {"serid": 5703, "dtom": "2026-10-12T09:31:01", "doserate": 0.17},
+            }[serid]
+
+    class Mirror:
+        def list_alarms(self, *, active_only=False, limit=500):
+            assert active_only is True
+            return [
+                {"source_id": "gd52", "serid": 5702, "remote_serid": 5702, "event_time": "2026-10-16T08:00:00", "source_i_flag": 0, "is_active": True},
+                {"source_id": "gd50", "serid": 5703, "remote_serid": 5703, "event_time": "2026-10-12T09:31:01", "source_i_flag": 0, "is_active": True},
+            ]
+
+    class SourceHealth:
+        def list_states(self):
+            return [
+                {"source_id": "gd52", "state": "CONNECTED"},
+                {"source_id": "gd50", "state": "OFFLINE"},
+            ]
+
+    app = FastAPI()
+    attach_web_api_routes(
+        app,
+        security=security,
+        repository=Repository(),
+        source_health=SourceHealth(),
+        alarm_mirror=Mirror(),
+    )
+    client = TestClient(app)
+    client.cookies.set(SESSION_COOKIE, token)
+
+    stations = {item["serid"]: item for item in client.get("/api/v1/web/stations").json()}
+    confirmed = stations[5702]
+    assert confirmed["status"] == "normal"
+    assert confirmed["doserate"] == 0.17
+    assert confirmed["source_alarm_active"] is True
+    assert confirmed["source_alarm_confirmed"] is True
+    assert confirmed["source_i_flag"] == 0
+
+    cached = stations[5703]
+    assert cached["status"] == "offline"
+    assert cached["source_alarm_active"] is True
+    assert cached["source_alarm_confirmed"] is False
+    assert cached["dtom"] == "2026-10-12T09:31:01"
 
 
 def test_alarm_history_uses_exact_source_binding_and_role_gated_response_fields(tmp_path):
